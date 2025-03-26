@@ -1,37 +1,32 @@
 import json
 import random
 import string
-from typing import Any, Dict
+import uuid
+import os
+from typing import Any, Dict, Optional
 
 
-def extract_error(error: Exception) -> Dict[str, str]:
+def extract_error(error: Exception) -> str:
     """
-    Extract error information from an exception.
+    Extract the error message from an exception.
     
     Args:
         error: The exception to extract information from
         
     Returns:
-        A dictionary containing error message
+        A string containing the error message
     """
-    if isinstance(error, Exception):
-        return {
-            "message": str(error)
-        }
-    return {
-        "message": "Unknown error"
-    }
+    return str(error)
 
 
 def generate_id() -> str:
     """
-    Generate a unique random ID.
+    Generate a unique ID.
     
     Returns:
         A unique ID string
     """
-    chars = string.ascii_lowercase + string.digits
-    return ''.join(random.choice(chars) for _ in range(12))
+    return str(uuid.uuid4())
 
 
 def dict_to_json(data: Dict[str, Any]) -> str:
@@ -44,4 +39,4 @@ def dict_to_json(data: Dict[str, Any]) -> str:
     Returns:
         A JSON string representation of the dictionary
     """
-    return json.dumps(data, indent=2) 
+    return json.dumps(data) 

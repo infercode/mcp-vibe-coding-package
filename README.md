@@ -23,6 +23,7 @@ This project implements the [Model Context Protocol (MCP)](https://github.com/mo
 - 📝 Rich metadata support for better context organization
 - 📈 Hybrid memory architecture combining mem0ai and direct Neo4j operations
 - 🔧 Multiple embedding model support (OpenAI, Hugging Face, Ollama, Azure, LM Studio)
+- 🔀 Cross-project memory search for knowledge sharing
 
 ## Installation
 
@@ -157,6 +158,33 @@ The embedding types can be one of:
 USE_SSE=false                    # Enable SSE mode (true/false)
 PORT=8080                        # Port for SSE server (when USE_SSE=true)
 ```
+
+## Project-Based Memory
+
+The server organizes memories by project. The AI agent specifies the project name when configuring the embedding provider:
+
+```json
+{
+  "provider": "openai",
+  "model": "text-embedding-3-small",
+  "project_name": "my-awesome-project"
+}
+```
+
+This project-based approach enables:
+
+- **Compartmentalized knowledge**: Each project has its own memory space
+- **Cross-project searching**: Query information from other projects when needed
+- **Contextual relevance**: Information stays organized and relevant to specific projects
+
+### Cross-Project Memory Sharing
+
+The server enables AI agents to access and learn from memory across different projects. This is particularly useful for:
+
+- **Reusing solutions**: Find how similar problems were solved in other projects
+- **Sharing dependencies**: Discover what packages are used in related projects
+- **Learning from mistakes**: Review lessons learned and avoid repeating errors
+- **Identifying patterns**: Recognize common approaches across multiple projects
 
 ## Server Modes
 
@@ -329,3 +357,243 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 - [Model Context Protocol](https://github.com/modelcontextprotocol/python-sdk)
 - [mem0ai](https://github.com/mem0ai/mem0)
 - [Neo4j Python Driver](https://neo4j.com/docs/api/python-driver/current/)
+
+## MCP Tools
+
+The server provides the following MCP tools for interacting with the knowledge graph:
+
+### Entity Operations
+
+- **create_entities**: Create multiple entities in the knowledge graph
+  ```json
+  {
+    "entities": [
+      {
+        "name": "John",
+        "entityType": "Person",
+        "observations": ["is 30 years old", "lives in New York", "works as an engineer"]
+      }
+    ]
+  }
+  ```
+  *Under the hood*: Each entity is stored in both mem0's memory system and Neo4j with appropriate relationships.
+
+- **delete_entity**: Delete a specific entity from the knowledge graph
+  ```json
+  {
+    "entity": "John"
+  }
+  ```
+  *Under the hood*: Removes the entity and all its relationships from Neo4j directly.
+
+- **get_all_memories**: Retrieve all memories for a specific project
+  ```json
+  {
+    "user_id": "project-name"  // Optional, defaults to current project
+  }
+  ```
+  *Under the hood*: Uses mem0's `get_all()` function to retrieve all stored memories for the specified project.
+
+### Relation Operations
+
+- **create_relations**: Create relationships between entities
+  ```json
+  {
+    "relations": [
+      {
+        "from": "John",
+        "to": "Jane",
+        "relationType": "knows"
+      }
+    ]
+  }
+  ```
+  *Under the hood*: Creates relationships in both mem0 and Neo4j for comprehensive querying.
+
+- **delete_relation**: Delete a specific relationship
+  ```json
+  {
+    "from_entity": "John",
+    "to_entity": "Jane",
+    "relationType": "knows"
+  }
+  ```
+  *Under the hood*: Removes the relationship from Neo4j directly.
+
+### Observation Operations
+
+- **add_observations**: Add new observations to entities
+  ```json
+  {
+    "observations": [
+      {
+        "entity": "John",
+        "content": "enjoys playing piano"
+      }
+    ]
+  }
+  ```
+  *Under the hood*: Adds observations as memories in mem0 and as linked nodes in Neo4j.
+
+- **delete_observation**: Delete a specific observation
+  ```json
+  {
+    "entity": "John",
+    "content": "enjoys playing piano"
+  }
+  ```
+  *Under the hood*: Removes the observation from Neo4j directly.
+
+### Search Operations
+
+- **search_nodes**: Search for nodes matching a query, with cross-project capability
+  ```json
+  {
+    "query": "What packages are used for API testing?",
+    "limit": 10,  // Optional, defaults to 10
+    "user_id": "other-project"  // Optional, search in a specific project
+  }
+  ```
+  *Under the hood*: Uses mem0's semantic search with the specified project ID. When `user_id` is provided, it searches in that project's memory space instead of the current one.
+
+### Memory Management
+
+- **delete_all_memories**: Delete all memories for a project
+  ```json
+  {
+    "user_id": "project-name"  // Optional, defaults to current project
+  }
+  ```
+  *Under the hood*: Uses mem0's `delete_all()` function to clear all memories for the specified project.
+
+### Configuration
+
+- **configure_embedding**: Configure the embedding provider and set the project name
+  ```json
+  {
+    "provider": "openai",
+    "model": "text-embedding-3-small",
+    "api_key": "your-api-key",
+    "dimensions": 1536,
+    "project_name": "my-awesome-project",  // Project name for memory operations
+    "client_id": "client1",  // Optional, unique identifier for the client
+    "config": {  // Optional, provider-specific configurations
+      "api_base": "https://api.openai.com/v1"
+    }
+  }
+  ```
+  *Under the hood*: Configures the embedding provider, sets the project name for memory operations, and returns the full configuration for client-side storage.
+
+- **get_embedding_config**: Get the current embedding configuration
+  ```json
+  {}  // No parameters required
+  ```
+  *Under the hood*: Returns the current mem0 configuration.
+
+- **set_project_name**: Set the project name without reconfiguring embeddings
+  ```json
+  {
+    "project_name": "my-new-project"
+  }
+  ```
+  *Under the hood*: Updates the default user ID for memory operations without changing embedding settings. This is useful when you want to compartmentalize memory by project without needing to configure custom embeddings.
+
+## Client-Side Configuration
+
+The MCP server is designed to be stateless regarding configurations. When using the `configure_embedding` tool:
+
+1. The client sends configuration preferences
+2. The server validates and applies the configuration temporarily
+3. The complete configuration is returned to the client with instructions for saving it
+4. The AI agent should save the configuration locally as instructed
+
+This approach provides several benefits:
+- Clients maintain control over their configurations
+- Different clients can use different configurations
+- No configuration conflicts between clients
+- Easy restoration of configurations after server restarts
+
+### Response Format with AI Agent Instructions
+
+When configuration tools are called, they return specific instructions for the AI agent along with the configuration data:
+
+#### Configure Embedding Response
+
+```json
+{
+  "status": "success",
+  "message": "Successfully configured embedding provider: openai",
+  "provider": "openai",
+  "project_name": "my-awesome-project",
+  "config": {
+    "graph_store": { ... },
+    "embedder": { ... }
+  },
+  "instructions_for_agent": "IMPORTANT: Save this configuration to 'mcp_memory_config_my-awesome-project.json' in the root directory of your project. This file will be used for future memory operations with the MCP server.",
+  "file_name": "mcp_memory_config_my-awesome-project.json"
+}
+```
+
+#### Set Project Name Response
+
+```json
+{
+  "status": "success",
+  "message": "Project name set to: my-awesome-project",
+  "project_name": "my-awesome-project",
+  "config": {
+    "project_name": "my-awesome-project",
+    "timestamp": "2023-05-15T14:32:10.123456"
+  },
+  "instructions_for_agent": "IMPORTANT: Save this project configuration to 'mcp_project_config_my-awesome-project.json' in the root directory of your project. This file will help maintain project context between sessions.",
+  "file_name": "mcp_project_config_my-awesome-project.json"
+}
+```
+
+### Implementing the Configuration Storage
+
+When the AI agent receives these responses, it should:
+
+1. Extract the configuration data or project name
+2. Create a file in the project root with the provided `file_name`
+3. Store the configuration in JSON format (both for embedding configurations and project settings)
+4. Reference these files in subsequent sessions to maintain context
+
+## Using Cross-Project Memory
+
+To effectively use cross-project memory:
+
+1. **Organize projects clearly**: Use distinctive project names that reflect their purpose.
+
+2. **Search across projects**: Use the `user_id` parameter in `search_nodes` to query other projects:
+   ```python
+   # Search in a different project
+   result = await client.call_tool("search_nodes", {
+       "query": "What testing framework is used?",
+       "user_id": "authentication-service"
+   })
+   ```
+
+3. **Compare approaches**: Search multiple projects to compare how different teams solved similar problems:
+   ```python
+   # Search in current project
+   current_result = await client.call_tool("search_nodes", {
+       "query": "How is authentication implemented?"
+   })
+   
+   # Search in another project
+   other_result = await client.call_tool("search_nodes", {
+       "query": "How is authentication implemented?",
+       "user_id": "payment-service"
+   })
+   ```
+
+4. **Learn from history**: Review lessons learned or bugs fixed in previous projects:
+   ```python
+   result = await client.call_tool("search_nodes", {
+       "query": "Common JWT implementation mistakes",
+       "user_id": "security-review"
+   })
+   ```
+
+This cross-project memory capability creates a connected knowledge ecosystem where AI agents can leverage learnings across an entire organization's development efforts.

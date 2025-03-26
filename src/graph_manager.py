@@ -63,6 +63,12 @@ class GraphMemoryManager:
         self.memory = None
         self.neo4j_driver = None
         
+        # Default project name/user ID for memory operations if none is provided
+        # This will be overridden when the AI agent provides a project name
+        self.default_user_id = "default-project"
+        
+        self.logger.info(f"Using initial default user ID: {self.default_user_id}")
+        
         # Get config from environment variables
         self.neo4j_uri = os.environ.get("NEO4J_URI", "bolt://localhost:7687")
         self.neo4j_user = os.environ.get("NEO4J_USER", "neo4j")
@@ -118,8 +124,18 @@ class GraphMemoryManager:
             self.gemini_api_key = os.environ.get("GOOGLE_API_KEY", "")
             self.embedding_dims = int(os.environ.get("EMBEDDING_DIMS", "768"))
         
-        # Default user ID for MCP context where user ID isn't explicitly provided
-        self.default_user_id = "default_user"
+    def set_project_name(self, project_name: str) -> None:
+        """
+        Set the project name to use as the default user ID.
+        
+        Args:
+            project_name: The name of the project
+        """
+        if project_name and project_name.strip():
+            self.default_user_id = project_name.strip()
+            self.logger.info(f"Updated default user ID to: {self.default_user_id}")
+        else:
+            self.logger.warn("Attempted to set empty project name, keeping existing default")
 
     def initialize(self) -> None:
         """Initialize the memory manager and connect to the graph database."""
@@ -240,17 +256,6 @@ class GraphMemoryManager:
                 
             return config
             
-        elif self.embedder_provider == "lmstudio":
-            return {
-                "embedder": {
-                    "provider": "lmstudio",
-                    "config": {
-                        "lmstudio_base_url": self.lmstudio_base_url,
-                        "embedding_dims": self.embedding_dims
-                    }
-                }
-            }
-            
         elif self.embedder_provider == "vertexai":
             config = {
                 "embedder": {
@@ -287,7 +292,18 @@ class GraphMemoryManager:
                 config["embedder"]["config"]["api_key"] = self.gemini_api_key
                 
             return config
-        
+            
+        elif self.embedder_provider == "lmstudio":
+            return {
+                "embedder": {
+                    "provider": "lmstudio",
+                    "config": {
+                        "lmstudio_base_url": self.lmstudio_base_url,
+                        "embedding_dims": self.embedding_dims
+                    }
+                }
+            }
+            
         # Default to OpenAI if provider is not recognized
         self.logger.warn(f"Unknown embedder provider: {self.embedder_provider}. Falling back to OpenAI.")
         return {
@@ -742,12 +758,14 @@ class GraphMemoryManager:
             self.logger.error(f"Error deleting relation in Neo4j: {str(e)}")
             raise e
 
-    def search_nodes(self, query: str) -> str:
+    def search_nodes(self, query: str, limit: int = 10, user_id: Optional[str] = None) -> str:
         """
         Search for nodes in the knowledge graph.
         
         Args:
             query: Search query
+            limit: Maximum number of results to return
+            user_id: Optional user/project identifier (defaults to current project)
             
         Returns:
             JSON string with search results
@@ -755,12 +773,15 @@ class GraphMemoryManager:
         try:
             self._ensure_initialized()
             
+            # Use default user ID if not provided
+            user_id = user_id or self.default_user_id
+            
             # Search using mem0's search method
             if self.memory:
                 results = self.memory.search(
                     query=query, 
-                    limit=10,
-                    user_id=self.default_user_id
+                    limit=limit,
+                    user_id=user_id
                 )
             else:
                 results = {"results": []}
@@ -785,7 +806,8 @@ class GraphMemoryManager:
                 entity = {
                     "name": entity_name,
                     "entityType": entity_type or "Unknown",
-                    "observations": [memory]
+                    "observations": [memory],
+                    "project": user_id  # Include the project/user_id in the response
                 }
                 
                 formatted_result = {
@@ -796,7 +818,8 @@ class GraphMemoryManager:
                 
             search_response = {
                 "results": formatted_results,
-                "query": query
+                "query": query,
+                "project": user_id
             }
             
             return dict_to_json(search_response)
@@ -936,6 +959,81 @@ class GraphMemoryManager:
         if not self.initialized:
             self.initialize()
             
+    def get_all_memories(self, user_id: Optional[str] = None) -> str:
+        """
+        Get all memories for a user.
+        
+        Args:
+            user_id: Optional user identifier
+            
+        Returns:
+            JSON string with all memories
+        """
+        try:
+            self._ensure_initialized()
+            
+            # Use default user ID if not provided
+            user_id = user_id or self.default_user_id
+            
+            if self.memory:
+                # Get all memories from mem0
+                memories = self.memory.get_all(user_id=user_id)
+                
+                # Format the response
+                return dict_to_json({
+                    "status": "success",
+                    "memories": memories,
+                    "count": len(memories) if isinstance(memories, list) else 0
+                })
+            else:
+                return dict_to_json({
+                    "status": "error",
+                    "message": "Memory not initialized"
+                })
+                
+        except Exception as e:
+            error_msg = f"Error getting all memories: {str(e)}"
+            self.logger.error(error_msg)
+            return dict_to_json({"error": error_msg})
+            
+    def delete_all_memories(self, user_id: Optional[str] = None) -> str:
+        """
+        Delete all memories for a user.
+        
+        Args:
+            user_id: Optional user identifier
+            
+        Returns:
+            JSON string with result information
+        """
+        try:
+            self._ensure_initialized()
+            
+            # Use default user ID if not provided
+            user_id = user_id or self.default_user_id
+            
+            if self.memory:
+                # Delete all memories from mem0
+                self.memory.delete_all(user_id=user_id)
+                
+                self.logger.info(f"Deleted all memories for user {user_id}")
+                
+                # Format the response
+                return dict_to_json({
+                    "status": "success",
+                    "message": f"All memories deleted for user {user_id}"
+                })
+            else:
+                return dict_to_json({
+                    "status": "error",
+                    "message": "Memory not initialized"
+                })
+                
+        except Exception as e:
+            error_msg = f"Error deleting all memories: {str(e)}"
+            self.logger.error(error_msg)
+            return dict_to_json({"error": error_msg})
+            
     def __del__(self):
         """Destructor to ensure Neo4j driver is closed."""
         try:
@@ -943,3 +1041,300 @@ class GraphMemoryManager:
         except:
             # Ignore errors during cleanup
             pass 
+
+    def apply_client_config(self, config: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Apply client-provided configuration for embedding provider.
+        This method updates the instance variables but does not reinitialize the memory.
+        Call reinitialize() after this to apply the changes.
+        
+        Args:
+            config: A dictionary containing embedding configuration
+            
+        Returns:
+            Dictionary with status information
+        """
+        try:
+            # Extract the provider from the configuration
+            embedder_config = config.get("embedder", {})
+            provider = embedder_config.get("provider")
+            
+            if not provider:
+                return {"status": "error", "message": "Missing embedder provider in configuration"}
+                
+            # Update instance variables based on provider
+            self.embedder_provider = provider
+            provider_config = embedder_config.get("config", {})
+            
+            # Set common configurations
+            if "embedding_dims" in provider_config:
+                self.embedding_dims = provider_config["embedding_dims"]
+                
+            # Provider-specific configuration
+            if provider == "openai":
+                if "api_key" in provider_config:
+                    self.openai_api_key = provider_config["api_key"]
+                if "model" in provider_config:
+                    self.embedding_model = provider_config["model"]
+                if "api_base" in provider_config:
+                    self.openai_api_base = provider_config["api_base"]
+                    
+            elif provider == "huggingface":
+                if "model" in provider_config:
+                    self.huggingface_model = provider_config["model"]
+                if "model_kwargs" in provider_config:
+                    self.huggingface_model_kwargs = provider_config["model_kwargs"]
+                    
+            elif provider == "ollama":
+                if "model" in provider_config:
+                    self.ollama_model = provider_config["model"]
+                if "ollama_base_url" in provider_config:
+                    self.ollama_base_url = provider_config["ollama_base_url"]
+                    
+            elif provider in ["azure", "azure_openai"]:
+                if "model" in provider_config:
+                    self.azure_model = provider_config["model"]
+                
+                azure_kwargs = provider_config.get("azure_kwargs", {})
+                if "api_key" in azure_kwargs:
+                    self.azure_api_key = azure_kwargs["api_key"]
+                if "azure_deployment" in azure_kwargs:
+                    self.azure_deployment = azure_kwargs["azure_deployment"]
+                if "azure_endpoint" in azure_kwargs:
+                    self.azure_endpoint = azure_kwargs["azure_endpoint"]
+                if "api_version" in azure_kwargs:
+                    self.azure_api_version = azure_kwargs["api_version"]
+                if "default_headers" in azure_kwargs:
+                    self.azure_default_headers = azure_kwargs["default_headers"]
+                    
+            elif provider == "vertexai":
+                if "model" in provider_config:
+                    self.vertexai_model = provider_config["model"]
+                if "vertex_credentials_json" in provider_config:
+                    self.vertexai_credentials_json = provider_config["vertex_credentials_json"]
+                if "memory_add_embedding_type" in provider_config:
+                    self.memory_add_embedding_type = provider_config["memory_add_embedding_type"]
+                if "memory_update_embedding_type" in provider_config:
+                    self.memory_update_embedding_type = provider_config["memory_update_embedding_type"]
+                if "memory_search_embedding_type" in provider_config:
+                    self.memory_search_embedding_type = provider_config["memory_search_embedding_type"]
+                    
+            elif provider == "gemini":
+                if "model" in provider_config:
+                    self.gemini_model = provider_config["model"]
+                if "api_key" in provider_config:
+                    self.gemini_api_key = provider_config["api_key"]
+                    
+            elif provider == "lmstudio":
+                if "lmstudio_base_url" in provider_config:
+                    self.lmstudio_base_url = provider_config["lmstudio_base_url"]
+            
+            return {
+                "status": "success", 
+                "message": f"Applied configuration for {provider}",
+                "provider": provider
+            }
+            
+        except Exception as e:
+            self.logger.error(f"Error applying client configuration: {str(e)}")
+            return {"status": "error", "message": f"Failed to apply configuration: {str(e)}"}
+    
+    def reinitialize(self) -> Dict[str, Any]:
+        """
+        Reinitialize the memory manager with the current configuration.
+        This should be called after apply_client_config() to apply the changes.
+        
+        Returns:
+            Dictionary with status information
+        """
+        try:
+            # Close any existing connections
+            self.close()
+            
+            # Reset initialization flag
+            self.initialized = False
+            
+            # Reinitialize with new configuration
+            self.initialize()
+            
+            return {
+                "status": "success",
+                "message": f"Reinitialized memory manager with {self.embedder_provider} embedder",
+                "provider": self.embedder_provider
+            }
+            
+        except Exception as e:
+            error_msg = f"Failed to reinitialize memory manager: {str(e)}"
+            self.logger.error(error_msg)
+            return {"status": "error", "message": error_msg}
+            
+    def get_current_config(self) -> Dict[str, Any]:
+        """
+        Get the current embedding configuration.
+        
+        Returns:
+            The current embedding configuration
+        """
+        graph_store_config = {
+            "graph_store": {
+                "provider": "neo4j",
+                "config": {
+                    "url": self.neo4j_uri,
+                    "username": self.neo4j_user,
+                    "password": self.neo4j_password,
+                    "database": self.neo4j_database
+                }
+            }
+        }
+        
+        embedding_config = self._get_embedding_config()
+        
+        return {**graph_store_config, **embedding_config}
+
+    def delete_entity(self, entity: str) -> str:
+        """
+        Delete an entity from the knowledge graph.
+        
+        Args:
+            entity: Name of the entity to delete
+            
+        Returns:
+            JSON string with result information
+        """
+        try:
+            self._ensure_initialized()
+            
+            # Remove entity from the graph using direct Neo4j connection
+            if self.neo4j_driver:
+                # First delete all relationships involving this entity
+                relations_query = """
+                MATCH (e:Entity {name: $name})-[r]-()
+                DELETE r
+                """
+                self.neo4j_driver.execute_query(
+                    relations_query,
+                    name=entity,
+                    database_=self.neo4j_database
+                )
+                
+                # Then delete all associated observations
+                observations_query = """
+                MATCH (e:Entity {name: $name})-[:HAS_OBSERVATION]->(o:Observation)
+                DETACH DELETE o
+                """
+                self.neo4j_driver.execute_query(
+                    observations_query,
+                    name=entity,
+                    database_=self.neo4j_database
+                )
+                
+                # Finally delete the entity itself
+                entity_query = """
+                MATCH (e:Entity {name: $name})
+                DETACH DELETE e
+                """
+                self.neo4j_driver.execute_query(
+                    entity_query,
+                    name=entity,
+                    database_=self.neo4j_database
+                )
+                
+                self.logger.info(f"Deleted entity: {entity}")
+                
+                # Since mem0 itself doesn't have a direct delete by name function,
+                # we'll handle this through the Neo4j interface
+                return dict_to_json({
+                    "status": "success",
+                    "message": f"Entity '{entity}' deleted successfully"
+                })
+            else:
+                raise Exception("Neo4j driver not initialized")
+                
+        except Exception as e:
+            error_msg = f"Error deleting entity: {str(e)}"
+            self.logger.error(error_msg)
+            return dict_to_json({"error": error_msg})
+            
+    def delete_relation(self, from_entity: str, to_entity: str, relationType: str) -> str:
+        """
+        Delete a specific relation from the knowledge graph.
+        
+        Args:
+            from_entity: Name of the source entity
+            to_entity: Name of the target entity
+            relationType: Type of the relation
+            
+        Returns:
+            JSON string with result information
+        """
+        try:
+            self._ensure_initialized()
+            
+            # Delete relation using direct Neo4j connection
+            if self.neo4j_driver:
+                query = """
+                MATCH (a:Entity {name: $from_name})-[r:HAS_RELATION]->(rel:Relation {type: $rel_type})-[r2:RELATES_TO]->(b:Entity {name: $to_name})
+                DELETE r, rel, r2
+                """
+                self.neo4j_driver.execute_query(
+                    query,
+                    from_name=from_entity,
+                    to_name=to_entity,
+                    rel_type=relationType,
+                    database_=self.neo4j_database
+                )
+                
+                self.logger.info(f"Deleted relation: {from_entity} -{relationType}-> {to_entity}")
+                
+                return dict_to_json({
+                    "status": "success", 
+                    "message": f"Relation '{from_entity} -{relationType}-> {to_entity}' deleted successfully"
+                })
+            else:
+                raise Exception("Neo4j driver not initialized")
+                
+        except Exception as e:
+            error_msg = f"Error deleting relation: {str(e)}"
+            self.logger.error(error_msg)
+            return dict_to_json({"error": error_msg})
+            
+    def delete_observation(self, entity: str, content: str) -> str:
+        """
+        Delete a specific observation from an entity.
+        
+        Args:
+            entity: Name of the entity
+            content: Content of the observation to delete
+            
+        Returns:
+            JSON string with result information
+        """
+        try:
+            self._ensure_initialized()
+            
+            # Delete observation using direct Neo4j connection
+            if self.neo4j_driver:
+                query = """
+                MATCH (e:Entity {name: $entity_name})-[r:HAS_OBSERVATION]->(o:Observation {content: $obs_content})
+                DELETE r, o
+                """
+                self.neo4j_driver.execute_query(
+                    query,
+                    entity_name=entity,
+                    obs_content=content,
+                    database_=self.neo4j_database
+                )
+                
+                self.logger.info(f"Deleted observation: '{content}' from entity {entity}")
+                
+                return dict_to_json({
+                    "status": "success",
+                    "message": f"Observation deleted successfully from entity {entity}"
+                })
+            else:
+                raise Exception("Neo4j driver not initialized")
+                
+        except Exception as e:
+            error_msg = f"Error deleting observation: {str(e)}"
+            self.logger.error(error_msg)
+            return dict_to_json({"error": error_msg}) 
