@@ -271,17 +271,27 @@ def configure_embedding(config: Dict[str, Any]) -> str:
             
         # Create the final response with instructions for the AI agent
         file_name = f"mcp_memory_config_{project_name or 'default'}.json"
+        
+        # Determine if embeddings are enabled
+        embedding_status = "enabled" if graph_manager.embedding_enabled else "disabled"
+        
         instructions = (
             f"IMPORTANT: Save this configuration to '{file_name}' in the root directory of your project. "
             f"This file will be used for future memory operations with the MCP server. "
-            f"You should use this configuration whenever interacting with the memory graph for project '{graph_manager.default_user_id}'."
+            f"Embeddings are currently {embedding_status}. "
         )
+        
+        if not graph_manager.embedding_enabled:
+            instructions += "Note that semantic search will not work until embeddings are configured."
+        else:
+            instructions += f"You should use this configuration whenever interacting with the memory graph for project '{graph_manager.default_user_id}'."
         
         response = {
             "status": "success",
             "message": f"Successfully configured embedding provider: {provider}",
             "provider": provider,
             "project_name": graph_manager.default_user_id,
+            "embedding_enabled": graph_manager.embedding_enabled,
             "config": full_config,
             "instructions_for_agent": instructions,
             "file_name": file_name

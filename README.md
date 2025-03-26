@@ -67,21 +67,22 @@ NEO4J_DATABASE=neo4j             # Neo4j database name
 
 #### Embedding Configuration
 
-By default, the server uses OpenAI embeddings. You can configure various embedding providers using the `EMBEDDER_PROVIDER` environment variable:
-
-##### OpenAI (Default)
+By default, the server runs without embeddings enabled. You can enable and configure various embedding providers using the `EMBEDDER_PROVIDER` environment variable:
 
 ```bash
+# To enable OpenAI embeddings
 EMBEDDER_PROVIDER=openai
 OPENAI_API_KEY=your_openai_api_key     # OpenAI API key
-OPENAI_API_BASE=                       # Optional: Custom OpenAI API base URL
 EMBEDDING_MODEL=text-embedding-3-small # OpenAI embedding model
 EMBEDDING_DIMS=1536                    # Dimensions of the embedding model
+
+# To explicitly disable embeddings (default behavior)
+EMBEDDER_PROVIDER=none
 ```
 
-##### Alternative Embedding Providers
+##### Optional Embedding Providers
 
-The server supports multiple embedding providers that can be configured through environment variables:
+The server supports multiple embedding providers that can be configured through environment variables or the `configure_embedding` tool:
 
 **Hugging Face**
 
@@ -597,3 +598,163 @@ To effectively use cross-project memory:
    ```
 
 This cross-project memory capability creates a connected knowledge ecosystem where AI agents can leverage learnings across an entire organization's development efforts.
+
+### Client-Side Configuration Files
+
+The MCP server provides instructions to create two JSON configuration files that are stored locally:
+
+#### 1. Project Configuration File
+
+This file contains project identification information and is created when you call the `set_project_name` tool:
+
+```json
+{
+  "project_name": "my-awesome-project",
+  "timestamp": "2023-05-15T14:32:10.123456"
+}
+```
+
+The file is typically named `mcp_project_config_my-awesome-project.json` and is stored in the root directory of your project.
+
+#### 2. Embedding Configuration File
+
+This file contains the complete configuration for embeddings and Neo4j connection settings. It's created when you call the `configure_embedding` tool:
+
+```json
+{
+  "graph_store": {
+    "provider": "neo4j",
+    "config": {
+      "url": "bolt://localhost:7687",
+      "username": "neo4j",
+      "password": "password",
+      "database": "neo4j"
+    }
+  },
+  "embedder": {
+    "provider": "openai",
+    "config": {
+      "api_key": "sk-xxxxxxxxxxxxxxxxxxxxxxxx",
+      "model": "text-embedding-3-small",
+      "embedding_dims": 1536
+    }
+  },
+  "project_name": "my-awesome-project",
+  "client_id": "cursor-client"
+}
+```
+
+The file is typically named `mcp_memory_config_my-awesome-project.json` and is stored in the root directory of your project.
+
+These configuration files are referenced by the AI agent to maintain context between sessions and properly configure the MCP client when connecting to the server.
+
+## MCP Client Configuration
+
+To connect to the MCP Graph Memory Server from an MCP client like Cursor, you need to configure the client with the appropriate settings. Below are examples of how to set up the MCP client configuration in JSON format:
+
+### MCP Client Configuration File (mcp.json)
+
+This file is used by MCP clients to configure connections to MCP servers:
+
+#### SSE Transport Configuration (Recommended for Production)
+
+```json
+{
+  "mcpServers": {
+    "graph-memory": {
+      "url": "http://localhost:8080/sse",
+      "env": {
+        "NEO4J_URI": "neo4j://localhost:7687",
+        "NEO4J_USER": "neo4j",
+        "NEO4J_PASSWORD": "your-password",
+        "NEO4J_DATABASE": "neo4j"
+      }
+    }
+  }
+}
+```
+
+#### Stdio Transport Configuration (Useful for Development)
+
+```json
+{
+  "mcpServers": {
+    "graph-memory": {
+      "command": "python",
+      "args": [
+        "mem0_mcp_server.py"
+      ],
+      "env": {
+        "NEO4J_URI": "bolt://localhost:7687",
+        "NEO4J_USER": "neo4j",
+        "NEO4J_PASSWORD": "your-password",
+        "NEO4J_DATABASE": "neo4j",
+        "EMBEDDER_PROVIDER": "openai",
+        "OPENAI_API_KEY": "your-openai-api-key",
+        "EMBEDDING_MODEL": "text-embedding-3-small"
+      }
+    }
+  }
+}
+```
+
+### Using with Cursor
+
+For Cursor, save the MCP client configuration in `.cursor/mcp.json` in your project root. Cursor will automatically detect and use this configuration when connecting to MCP servers.
+
+### Using with Claude
+
+For Claude or other MCP clients, you'll need to provide the configuration according to the client's specific requirements. Generally, this involves:
+
+1. Specifying the server endpoint (`http://localhost:8080/sse` for SSE mode)
+2. Providing necessary environment variables for Neo4j connection
+3. Setting up embedding configuration if needed
+
+### Configuring Embeddings at Runtime
+
+While you can configure embeddings using environment variables, it's often more convenient to configure them at runtime using the `configure_embedding` tool. This is especially useful when:
+
+1. Running the server in SSE mode with no environment variable access
+2. Wanting to change embedding providers without restarting the server
+3. Working with an AI agent that should manage its own embedding configuration
+
+To configure embeddings at runtime:
+
+```json
+{
+  "provider": "openai",
+  "model": "text-embedding-3-small",
+  "api_key": "your-openai-api-key",
+  "dimensions": 1536,
+  "project_name": "my-project"
+}
+```
+
+Alternatively, you can explicitly disable embeddings:
+
+```json
+{
+  "provider": "none",
+  "project_name": "my-project"
+}
+```
+
+When embeddings are disabled, the server will still function for basic operations, but semantic search functionality will not be available.
+
+The server will return information about the embedding status:
+
+```json
+{
+  "status": "success",
+  "message": "Successfully configured embedding provider: openai",
+  "provider": "openai",
+  "project_name": "my-project",
+  "embedding_enabled": true,
+  "config": {
+    "graph_store": { ... },
+    "embedder": { ... }
+  },
+  "instructions_for_agent": "IMPORTANT: Save this configuration to 'mcp_memory_config_my-project.json' in the root directory of your project. This file will be used for future memory operations with the MCP server. Embeddings are currently enabled. You should use this configuration whenever interacting with the memory graph for project 'my-project'.",
+  "file_name": "mcp_memory_config_my-project.json"
+}
+```

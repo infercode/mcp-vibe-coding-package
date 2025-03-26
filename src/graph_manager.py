@@ -75,15 +75,27 @@ class GraphMemoryManager:
         self.neo4j_password = os.environ.get("NEO4J_PASSWORD", "password")
         self.neo4j_database = os.environ.get("NEO4J_DATABASE", "neo4j")
         
-        # Get embedder provider configuration
-        self.embedder_provider = os.environ.get("EMBEDDER_PROVIDER", "openai").lower()
+        # Check if embeddings should be enabled
+        self.embedder_provider = os.environ.get("EMBEDDER_PROVIDER", "none").lower()
         
+        # Flag to track if embeddings are enabled
+        self.embedding_enabled = self.embedder_provider != "none"
+        
+        if not self.embedding_enabled:
+            self.logger.info("Embeddings disabled - operating in basic mode without vector search")
+            return
+            
         # Initialize embedding model configuration based on provider
         if self.embedder_provider == "openai":
             self.embedding_model = os.environ.get("EMBEDDING_MODEL", "text-embedding-3-small")
             self.openai_api_key = os.environ.get("OPENAI_API_KEY", "")
             self.openai_api_base = os.environ.get("OPENAI_API_BASE", "")
             self.embedding_dims = int(os.environ.get("EMBEDDING_DIMS", "1536"))
+            
+            # Check if API key is provided
+            if not self.openai_api_key:
+                self.logger.warn("OpenAI API key not provided. Embeddings will not work until configured.")
+                self.embedding_enabled = False
         elif self.embedder_provider == "huggingface":
             self.huggingface_model = os.environ.get("HUGGINGFACE_MODEL", "sentence-transformers/all-mpnet-base-v2")
             self.huggingface_model_kwargs = json.loads(os.environ.get("HUGGINGFACE_MODEL_KWARGS", '{"device":"cpu"}'))
@@ -108,6 +120,11 @@ class GraphMemoryManager:
             except json.JSONDecodeError:
                 self.logger.warn(f"Failed to parse EMBEDDING_AZURE_DEFAULT_HEADERS as JSON: {azure_headers_env}")
             self.embedding_dims = int(os.environ.get("EMBEDDING_DIMS", "1536"))
+            
+            # Check if required Azure config is provided
+            if not (self.azure_api_key and self.azure_deployment and self.azure_endpoint):
+                self.logger.warn("Required Azure OpenAI configuration missing. Embeddings will not work until configured.")
+                self.embedding_enabled = False
         elif self.embedder_provider == "lmstudio":
             self.lmstudio_base_url = os.environ.get("LMSTUDIO_BASE_URL", "http://localhost:1234")
             self.embedding_dims = int(os.environ.get("EMBEDDING_DIMS", "4096"))
@@ -119,11 +136,25 @@ class GraphMemoryManager:
             self.memory_add_embedding_type = os.environ.get("VERTEXAI_MEMORY_ADD_EMBEDDING_TYPE", "RETRIEVAL_DOCUMENT")
             self.memory_update_embedding_type = os.environ.get("VERTEXAI_MEMORY_UPDATE_EMBEDDING_TYPE", "RETRIEVAL_DOCUMENT")
             self.memory_search_embedding_type = os.environ.get("VERTEXAI_MEMORY_SEARCH_EMBEDDING_TYPE", "RETRIEVAL_QUERY")
+            
+            # Check if credentials file is provided
+            if not self.vertexai_credentials_json:
+                self.logger.warn("Google credentials not provided. Embeddings will not work until configured.")
+                self.embedding_enabled = False
         elif self.embedder_provider == "gemini":
             self.gemini_model = os.environ.get("GEMINI_MODEL", "models/text-embedding-004")
             self.gemini_api_key = os.environ.get("GOOGLE_API_KEY", "")
             self.embedding_dims = int(os.environ.get("EMBEDDING_DIMS", "768"))
-        
+            
+            # Check if API key is provided
+            if not self.gemini_api_key:
+                self.logger.warn("Google API key not provided. Embeddings will not work until configured.")
+                self.embedding_enabled = False
+        else:
+            # Unknown provider
+            self.logger.warn(f"Unknown embedder provider: {self.embedder_provider}. Embeddings will be disabled.")
+            self.embedding_enabled = False
+
     def set_project_name(self, project_name: str) -> None:
         """
         Set the project name to use as the default user ID.
@@ -156,11 +187,17 @@ class GraphMemoryManager:
                 }
             }
             
-            # Configure embedding based on provider
-            embedding_config = self._get_embedding_config()
-            
-            # Combine configurations
-            config = {**graph_store_config, **embedding_config}
+            # Only configure embedding if enabled
+            if self.embedding_enabled:
+                # Configure embedding based on provider
+                embedding_config = self._get_embedding_config()
+                
+                # Combine configurations
+                config = {**graph_store_config, **embedding_config}
+            else:
+                # Use only graph store configuration without embeddings
+                config = graph_store_config
+                self.logger.info("Initializing memory manager without embedding support")
             
             # Initialize mem0 memory
             self.memory = Memory.from_config(config_dict=config)
@@ -175,7 +212,10 @@ class GraphMemoryManager:
             self._test_neo4j_connection()
             
             self.initialized = True
-            self.logger.info(f"Memory graph manager initialized successfully with {self.embedder_provider} embedder")
+            if self.embedding_enabled:
+                self.logger.info(f"Memory graph manager initialized successfully with {self.embedder_provider} embedder")
+            else:
+                self.logger.info("Memory graph manager initialized successfully without embeddings")
         except Exception as e:
             self.logger.error(f"Failed to initialize memory graph manager: {str(e)}")
             raise e
@@ -776,6 +816,16 @@ class GraphMemoryManager:
             # Use default user ID if not provided
             user_id = user_id or self.default_user_id
             
+            # Check if embeddings are enabled for semantic search
+            if not self.embedding_enabled:
+                self.logger.warn("Search performed without embeddings - returning empty results. Configure embeddings for semantic search.")
+                return dict_to_json({
+                    "results": [],
+                    "query": query,
+                    "project": user_id,
+                    "message": "Embeddings are disabled. Configure embeddings to enable semantic search."
+                })
+            
             # Search using mem0's search method
             if self.memory:
                 results = self.memory.search(
@@ -1064,6 +1114,10 @@ class GraphMemoryManager:
                 
             # Update instance variables based on provider
             self.embedder_provider = provider
+            
+            # Enable embeddings since a provider is explicitly configured
+            self.embedding_enabled = True
+            
             provider_config = embedder_config.get("config", {})
             
             # Set common configurations
@@ -1128,11 +1182,27 @@ class GraphMemoryManager:
             elif provider == "lmstudio":
                 if "lmstudio_base_url" in provider_config:
                     self.lmstudio_base_url = provider_config["lmstudio_base_url"]
+            elif provider == "none":
+                # Explicitly disable embeddings
+                self.embedding_enabled = False
+                self.logger.info("Embeddings explicitly disabled by client configuration")
+            
+            # Validate that requirements for the provider are met
+            if self.embedding_enabled:
+                if provider == "openai" and not self.openai_api_key:
+                    self.logger.warn("OpenAI API key missing from configuration. Embeddings may not work correctly.")
+                elif provider in ["azure", "azure_openai"] and not (self.azure_api_key and self.azure_deployment and self.azure_endpoint):
+                    self.logger.warn("Required Azure OpenAI configuration missing. Embeddings may not work correctly.")
+                elif provider == "vertexai" and not self.vertexai_credentials_json:
+                    self.logger.warn("Google credentials missing from configuration. Embeddings may not work correctly.")
+                elif provider == "gemini" and not self.gemini_api_key:
+                    self.logger.warn("Google API key missing from configuration. Embeddings may not work correctly.")
             
             return {
                 "status": "success", 
                 "message": f"Applied configuration for {provider}",
-                "provider": provider
+                "provider": provider,
+                "embedding_enabled": self.embedding_enabled
             }
             
         except Exception as e:
