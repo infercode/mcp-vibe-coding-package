@@ -86,14 +86,37 @@ class GraphMemoryManager:
             self.ollama_model = os.environ.get("OLLAMA_MODEL", "llama2")
             self.ollama_base_url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
             self.embedding_dims = int(os.environ.get("EMBEDDING_DIMS", "4096"))
-        elif self.embedder_provider == "azure":
-            self.azure_api_key = os.environ.get("AZURE_API_KEY", "")
-            self.azure_endpoint = os.environ.get("AZURE_ENDPOINT", "")
-            self.azure_deployment = os.environ.get("AZURE_DEPLOYMENT", "")
+        elif self.embedder_provider in ["azure", "azure_openai"]:
+            # Support both "azure" and "azure_openai" for backward compatibility
+            self.azure_model = os.environ.get("AZURE_MODEL", "text-embedding-3-small")
+            # Support both new and old environment variable names
+            self.azure_api_key = os.environ.get("EMBEDDING_AZURE_OPENAI_API_KEY", os.environ.get("AZURE_API_KEY", ""))
+            self.azure_deployment = os.environ.get("EMBEDDING_AZURE_DEPLOYMENT", os.environ.get("AZURE_DEPLOYMENT", ""))
+            self.azure_endpoint = os.environ.get("EMBEDDING_AZURE_ENDPOINT", os.environ.get("AZURE_ENDPOINT", ""))
+            self.azure_api_version = os.environ.get("EMBEDDING_AZURE_API_VERSION", "2023-05-15")
+            # Custom headers (optional)
+            self.azure_default_headers = {}
+            azure_headers_env = os.environ.get("EMBEDDING_AZURE_DEFAULT_HEADERS", "{}")
+            try:
+                self.azure_default_headers = json.loads(azure_headers_env)
+            except json.JSONDecodeError:
+                self.logger.warn(f"Failed to parse EMBEDDING_AZURE_DEFAULT_HEADERS as JSON: {azure_headers_env}")
             self.embedding_dims = int(os.environ.get("EMBEDDING_DIMS", "1536"))
         elif self.embedder_provider == "lmstudio":
             self.lmstudio_base_url = os.environ.get("LMSTUDIO_BASE_URL", "http://localhost:1234")
             self.embedding_dims = int(os.environ.get("EMBEDDING_DIMS", "4096"))
+        elif self.embedder_provider == "vertexai":
+            self.vertexai_model = os.environ.get("VERTEXAI_MODEL", "text-embedding-004")
+            self.vertexai_credentials_json = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "")
+            self.embedding_dims = int(os.environ.get("EMBEDDING_DIMS", "256"))
+            # Special embedding types for different operations
+            self.memory_add_embedding_type = os.environ.get("VERTEXAI_MEMORY_ADD_EMBEDDING_TYPE", "RETRIEVAL_DOCUMENT")
+            self.memory_update_embedding_type = os.environ.get("VERTEXAI_MEMORY_UPDATE_EMBEDDING_TYPE", "RETRIEVAL_DOCUMENT")
+            self.memory_search_embedding_type = os.environ.get("VERTEXAI_MEMORY_SEARCH_EMBEDDING_TYPE", "RETRIEVAL_QUERY")
+        elif self.embedder_provider == "gemini":
+            self.gemini_model = os.environ.get("GEMINI_MODEL", "models/text-embedding-004")
+            self.gemini_api_key = os.environ.get("GOOGLE_API_KEY", "")
+            self.embedding_dims = int(os.environ.get("EMBEDDING_DIMS", "768"))
         
         # Default user ID for MCP context where user ID isn't explicitly provided
         self.default_user_id = "default_user"
@@ -149,7 +172,8 @@ class GraphMemoryManager:
                     "provider": "openai",
                     "config": {
                         "api_key": self.openai_api_key,
-                        "model": self.embedding_model
+                        "model": self.embedding_model,
+                        "embedding_dims": self.embedding_dims
                     }
                 }
             }
@@ -159,52 +183,111 @@ class GraphMemoryManager:
             return config
             
         elif self.embedder_provider == "huggingface":
-            return {
+            config = {
                 "embedder": {
                     "provider": "huggingface",
                     "config": {
                         "model": self.huggingface_model,
-                        "model_kwargs": self.huggingface_model_kwargs
+                        "embedding_dims": self.embedding_dims
                     }
                 }
             }
             
+            # Only add model_kwargs if it has been explicitly set
+            if os.environ.get("HUGGINGFACE_MODEL_KWARGS"):
+                config["embedder"]["config"]["model_kwargs"] = self.huggingface_model_kwargs
+                
+            return config
+            
         elif self.embedder_provider == "ollama":
-            return {
+            config = {
                 "embedder": {
                     "provider": "ollama",
                     "config": {
                         "model": self.ollama_model,
-                        "ollama_base_url": self.ollama_base_url
+                        "embedding_dims": self.embedding_dims
                     }
                 }
             }
             
-        elif self.embedder_provider == "azure":
-            return {
+            # Only add ollama_base_url if it has been explicitly set
+            if os.environ.get("OLLAMA_BASE_URL"):
+                config["embedder"]["config"]["ollama_base_url"] = self.ollama_base_url
+                
+            return config
+            
+        elif self.embedder_provider in ["azure", "azure_openai"]:
+            # Support both "azure" and "azure_openai" for backward compatibility
+            config = {
                 "embedder": {
-                    "provider": "azure",
+                    "provider": "azure_openai",
                     "config": {
-                        "api_key": self.azure_api_key,
+                        "model": self.azure_model,
+                        "embedding_dims": self.embedding_dims,
                         "azure_kwargs": {
-                            "api_version": "2023-05-15",
+                            "api_version": self.azure_api_version,
                             "azure_deployment": self.azure_deployment,
-                            "azure_endpoint": self.azure_endpoint
+                            "azure_endpoint": self.azure_endpoint,
+                            "api_key": self.azure_api_key
                         }
                     }
                 }
             }
+            
+            # Add default headers if provided
+            if self.azure_default_headers:
+                config["embedder"]["config"]["azure_kwargs"]["default_headers"] = self.azure_default_headers
+                
+            return config
             
         elif self.embedder_provider == "lmstudio":
             return {
                 "embedder": {
                     "provider": "lmstudio",
                     "config": {
-                        "lmstudio_base_url": self.lmstudio_base_url
+                        "lmstudio_base_url": self.lmstudio_base_url,
+                        "embedding_dims": self.embedding_dims
                     }
                 }
             }
             
+        elif self.embedder_provider == "vertexai":
+            config = {
+                "embedder": {
+                    "provider": "vertexai",
+                    "config": {
+                        "model": self.vertexai_model,
+                        "embedding_dims": self.embedding_dims,
+                        "memory_add_embedding_type": self.memory_add_embedding_type,
+                        "memory_update_embedding_type": self.memory_update_embedding_type,
+                        "memory_search_embedding_type": self.memory_search_embedding_type
+                    }
+                }
+            }
+            
+            # Add credentials json path if explicitly set
+            if os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"):
+                config["embedder"]["config"]["vertex_credentials_json"] = self.vertexai_credentials_json
+                
+            return config
+            
+        elif self.embedder_provider == "gemini":
+            config = {
+                "embedder": {
+                    "provider": "gemini",
+                    "config": {
+                        "model": self.gemini_model,
+                        "embedding_dims": self.embedding_dims
+                    }
+                }
+            }
+            
+            # Add API key if provided
+            if self.gemini_api_key:
+                config["embedder"]["config"]["api_key"] = self.gemini_api_key
+                
+            return config
+        
         # Default to OpenAI if provider is not recognized
         self.logger.warn(f"Unknown embedder provider: {self.embedder_provider}. Falling back to OpenAI.")
         return {
@@ -212,7 +295,8 @@ class GraphMemoryManager:
                 "provider": "openai",
                 "config": {
                     "api_key": os.environ.get("OPENAI_API_KEY", ""),
-                    "model": "text-embedding-3-small"
+                    "model": "text-embedding-3-small",
+                    "embedding_dims": 1536
                 }
             }
         }

@@ -87,7 +87,7 @@ The server supports multiple embedding providers that can be configured through 
 ```bash
 EMBEDDER_PROVIDER=huggingface
 HUGGINGFACE_MODEL=sentence-transformers/all-mpnet-base-v2
-HUGGINGFACE_MODEL_KWARGS={"device":"cpu"}
+HUGGINGFACE_MODEL_KWARGS={"device":"cpu"}  # Optional: Custom model parameters
 EMBEDDING_DIMS=768
 ```
 
@@ -96,17 +96,20 @@ EMBEDDING_DIMS=768
 ```bash
 EMBEDDER_PROVIDER=ollama
 OLLAMA_MODEL=llama2
-OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_BASE_URL=http://localhost:11434  # Optional: Custom Ollama API URL
 EMBEDDING_DIMS=4096
 ```
 
 **Azure OpenAI**
 
 ```bash
-EMBEDDER_PROVIDER=azure
-AZURE_API_KEY=your_azure_api_key
-AZURE_ENDPOINT=https://your-resource.openai.azure.com
-AZURE_DEPLOYMENT=your-deployment-name
+EMBEDDER_PROVIDER=azure_openai
+AZURE_MODEL=text-embedding-3-small
+EMBEDDING_AZURE_OPENAI_API_KEY=your_azure_api_key
+EMBEDDING_AZURE_ENDPOINT=https://your-resource.openai.azure.com
+EMBEDDING_AZURE_DEPLOYMENT=your-deployment-name
+EMBEDDING_AZURE_API_VERSION=2023-05-15
+EMBEDDING_AZURE_DEFAULT_HEADERS={"CustomHeader":"your-custom-header"}
 EMBEDDING_DIMS=1536
 ```
 
@@ -117,6 +120,35 @@ EMBEDDER_PROVIDER=lmstudio
 LMSTUDIO_BASE_URL=http://localhost:1234
 EMBEDDING_DIMS=4096
 ```
+
+**VertexAI (Google Cloud)**
+
+```bash
+EMBEDDER_PROVIDER=vertexai
+VERTEXAI_MODEL=text-embedding-004
+GOOGLE_APPLICATION_CREDENTIALS=/path/to/your/credentials.json
+VERTEXAI_MEMORY_ADD_EMBEDDING_TYPE=RETRIEVAL_DOCUMENT
+VERTEXAI_MEMORY_UPDATE_EMBEDDING_TYPE=RETRIEVAL_DOCUMENT
+VERTEXAI_MEMORY_SEARCH_EMBEDDING_TYPE=RETRIEVAL_QUERY
+EMBEDDING_DIMS=256
+```
+
+**Gemini**
+
+```bash
+EMBEDDER_PROVIDER=gemini
+GEMINI_MODEL=models/text-embedding-004
+GOOGLE_API_KEY=your_google_api_key
+EMBEDDING_DIMS=768
+```
+
+The embedding types can be one of:
+- SEMANTIC_SIMILARITY
+- CLASSIFICATION 
+- CLUSTERING
+- RETRIEVAL_DOCUMENT, RETRIEVAL_QUERY
+- QUESTION_ANSWERING, FACT_VERIFICATION
+- CODE_RETRIEVAL_QUERY
 
 #### Server Configuration
 
