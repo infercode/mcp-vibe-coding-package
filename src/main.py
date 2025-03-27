@@ -146,6 +146,13 @@ class EmbeddingConfig(BaseModel):
     config: Optional[Dict[str, Any]] = Field({}, description="Additional provider-specific configuration")
 
 # Register tools
+# NOTE ON TOOL PARAMETERS: 
+# Some tools like get_all_memories and delete_all_memories use a dummy parameter
+# (typically random_string) as a workaround for MCP interface requirements.
+# This is because the MCP tool interface requires at least one parameter,
+# even when the actual implementation doesn't need any parameters.
+# When calling these tools, provide an empty string or any dummy value for these parameters.
+
 @server.tool()
 async def create_entities(entities: List[Dict[str, Any]]) -> str:
     """
@@ -674,25 +681,26 @@ async def get_embedding_config() -> str:
         return dict_to_json(error_response)
 
 @server.tool()
-async def get_all_memories(project_name: Optional[str] = None) -> str:
+async def get_all_memories(random_string: str = "") -> str:
     """
     Get all memories for a user/project.
     
     Args:
-        project_name: Optional project name (defaults to current project)
+        random_string: Dummy parameter (required by MCP interface but not used)
     
     Returns:
         JSON string with all memories in the knowledge graph
     """
     try:
-        result = graph_manager.get_all_memories(project_name)
+        # Project name is taken from graph_manager.default_project_name internally
+        result = graph_manager.get_all_memories(None)
         return result
     except Exception as e:
         logger.error(f"Error getting all memories: {str(e)}")
         error_response = ErrorResponse.create(
             message=f"Failed to get all memories: {str(e)}",
             code="memory_retrieval_error",
-            details={"project_name": project_name or graph_manager.default_project_name}
+            details={"project_name": graph_manager.default_project_name}
         )
         return dict_to_json(error_response)
 
@@ -777,7 +785,7 @@ async def delete_all_memories(random_string: str = "") -> str:
     Delete all memories for a user/project.
     
     Args:
-        project_name: Optional project name (defaults to current project)
+        random_string: Dummy parameter (required by MCP interface but not used)
     
     Returns:
         JSON response with deletion result

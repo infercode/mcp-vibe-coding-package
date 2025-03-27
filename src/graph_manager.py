@@ -810,6 +810,11 @@ class GraphMemoryManager:
                     "project": project_name,
                     "message": "Neo4j driver not available"
                 })
+            
+            # Split query into tokens for better search
+            search_tokens = [token for token in query.strip().split() if token]
+            # Use original query if no tokens or just one token
+            use_token_search = len(search_tokens) > 1
                 
             formatted_results = []
             
@@ -858,29 +863,131 @@ class GraphMemoryManager:
                 self.logger.info("Using basic text search (embeddings disabled)")
                 
                 # Use basic text matching in Cypher with correct relationship pattern
-                text_query = """
-                MATCH (e:Entity)
-                WHERE e.name CONTAINS $search_text OR e.entityType CONTAINS $search_text
-                WITH e
-                OPTIONAL MATCH (e)-[:HAS_OBSERVATION]->(o:Observation)
-                WITH e, collect(o.content) as observations
-                RETURN e.name as name, e.entityType as entityType, observations
-                LIMIT $limit
-                """
-                
-                text_results = self.neo4j_driver.execute_query(
-                    text_query,
-                    search_text=query,
-                    limit=limit,
-                    database_=self.neo4j_database
-                )
+                if use_token_search:
+                    # Use parameterized query for multi-token search
+                    text_query = """
+                    MATCH (e:Entity)
+                    WHERE any(token IN $search_tokens WHERE 
+                         toLower(e.name) CONTAINS toLower(token) OR 
+                         toLower(e.entityType) CONTAINS toLower(token))
+                    WITH e
+                    OPTIONAL MATCH (e)-[:HAS_OBSERVATION]->(o:Observation)
+                    WITH e, collect(o.content) as observations
+                    RETURN e.name as name, e.entityType as entityType, observations
+                    LIMIT $limit
+                    """
+                    
+                    # Execute with search_tokens parameter
+                    text_results = self.neo4j_driver.execute_query(
+                        text_query,
+                        search_tokens=search_tokens,
+                        limit=limit,
+                        database_=self.neo4j_database
+                    )
+                else:
+                    # Use single-token search
+                    text_query = """
+                    MATCH (e:Entity)
+                    WHERE toLower(e.name) CONTAINS toLower($search_text) 
+                       OR toLower(e.entityType) CONTAINS toLower($search_text)
+                    WITH e
+                    OPTIONAL MATCH (e)-[:HAS_OBSERVATION]->(o:Observation)
+                    WITH e, collect(o.content) as observations
+                    RETURN e.name as name, e.entityType as entityType, observations
+                    LIMIT $limit
+                    """
+                    
+                    # Execute with search_text parameter
+                    text_results = self.neo4j_driver.execute_query(
+                        text_query,
+                        search_text=query,
+                        limit=limit,
+                        database_=self.neo4j_database
+                    )
                 
                 # Process text search results
                 records = text_results[0] if text_results and len(text_results) > 0 else []
+                
+                # If no results from entity name/type, try searching through observations
+                if not records:
+                    self.logger.info("No results in entity names/types, searching in observations")
+                    
+                    if use_token_search:
+                        # Use parameterized query for multi-token observation search
+                        obs_query = """
+                        MATCH (e:Entity)-[:HAS_OBSERVATION]->(o:Observation)
+                        WHERE any(token IN $search_tokens WHERE toLower(o.content) CONTAINS toLower(token))
+                        WITH e, collect(DISTINCT o.content) as observations
+                        RETURN DISTINCT e.name as name, e.entityType as entityType, observations
+                        LIMIT $limit
+                        """
+                        
+                        # Execute with search_tokens parameter
+                        obs_results = self.neo4j_driver.execute_query(
+                            obs_query,
+                            search_tokens=search_tokens,
+                            limit=limit,
+                            database_=self.neo4j_database
+                        )
+                    else:
+                        # Single-token observation search
+                        obs_query = """
+                        MATCH (e:Entity)-[:HAS_OBSERVATION]->(o:Observation)
+                        WHERE toLower(o.content) CONTAINS toLower($search_text)
+                        WITH e, collect(o.content) as observations
+                        RETURN e.name as name, e.entityType as entityType, observations
+                        LIMIT $limit
+                        """
+                        
+                        obs_results = self.neo4j_driver.execute_query(
+                            obs_query,
+                            search_text=query,
+                            limit=limit,
+                            database_=self.neo4j_database
+                        )
+                    
+                    records = obs_results[0] if obs_results and len(obs_results) > 0 else []
+                
                 for record in records:
                     entity_name = record["name"]
                     entity_type = record["entityType"]
                     observations = record["observations"]
+                    
+                    # Calculate basic relevance score
+                    score = 1.0  # Default score
+                    
+                    # Boost score based on matches in name and type
+                    name_match = query.lower() in entity_name.lower()
+                    type_match = query.lower() in (entity_type or "").lower()
+                    
+                    if name_match:
+                        score += 0.5  # Boost for name match
+                    if type_match:
+                        score += 0.3  # Boost for type match
+                        
+                    # For multi-token searches, count matching tokens
+                    if use_token_search:
+                        token_matches = 0
+                        for token in search_tokens:
+                            if token.lower() in entity_name.lower():
+                                token_matches += 1
+                            if token.lower() in (entity_type or "").lower():
+                                token_matches += 1
+                        
+                        # Observation token matches
+                        obs_matches = 0
+                        for obs in observations:
+                            for token in search_tokens:
+                                if token.lower() in obs.lower():
+                                    obs_matches += 1
+                        
+                        # Calculate token match percentage and add to score
+                        if len(search_tokens) > 0:
+                            token_match_percentage = token_matches / (len(search_tokens) * 2)  # x2 for name and type
+                            score += token_match_percentage * 0.3
+                            
+                            obs_match_percentage = min(1.0, obs_matches / len(search_tokens))
+                            score += obs_match_percentage * 0.2
                     
                     entity = {
                         "name": entity_name,
@@ -891,9 +998,15 @@ class GraphMemoryManager:
                     
                     formatted_result = {
                         "entity": entity,
-                        "score": 1.0  # Default score for text search
+                        "score": score
                     }
                     formatted_results.append(formatted_result)
+                
+                # Sort results by score in descending order
+                formatted_results.sort(key=lambda x: x["score"], reverse=True)
+                
+                # Limit to requested number of results
+                formatted_results = formatted_results[:limit]
             
             # If no results from either method, provide a message
             if not formatted_results:
