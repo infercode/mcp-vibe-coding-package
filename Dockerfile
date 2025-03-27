@@ -10,6 +10,7 @@ RUN pip install poetry && \
 
 # Copy application code
 COPY src/ ./src/
+COPY neo4j_mcp_server.py ./
 
 # Default port for SSE
 ENV PORT=8080
@@ -19,4 +20,4 @@ ENV USE_SSE=false
 # Expose port for SSE
 EXPOSE 8080
 
-CMD ["python", "src/main.py"] 
+CMD ["python", "neo4j_mcp_server.py"] 

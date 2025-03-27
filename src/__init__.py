@@ -1,1 +1,1 @@
-"""MCP Graph Memory Server with mem0ai.""" 
+"""MCP Graph Memory Server with Neo4j.""" 

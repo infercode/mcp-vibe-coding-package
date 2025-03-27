@@ -1,55 +1,18 @@
-import json
 import os
-from typing import Any, Dict, List, Optional, Union, cast, TYPE_CHECKING
+import json
+import time
+import traceback
+from typing import List, Dict, Any, Optional, Union, cast, TYPE_CHECKING
+from neo4j import GraphDatabase
 
-# No imports in TYPE_CHECKING block - we'll use string literals for type annotations
-
-# Try to import mem0 with fallbacks for when types aren't available during IDE linting
-try:
-    from mem0 import Memory  # type: ignore
-except ImportError:
-    # Stubs for type checking
-    class Memory:
-        @classmethod
-        def from_config(cls, config_dict=None):
-            return cls()
-            
-        def __init__(self, config=None):
-            pass
-
-        def search(self, **kwargs):
-            return {"results": []}
-            
-        def add(self, **kwargs):
-            pass
-            
-        def get_all(self, **kwargs):
-            return []
-            
-        def delete_all(self, **kwargs):
-            pass
-
-# Import Neo4j driver for direct operations
-try:
-    from neo4j import GraphDatabase, RoutingControl  # type: ignore
-except ImportError:
-    # Stubs for type checking when Neo4j driver is not available
-    class GraphDatabase:
-        @staticmethod
-        def driver(*args, **kwargs):
-            return None
-    
-    class RoutingControl:
-        READ = "READ"
-        WRITE = "WRITE"
-
-from src.logger import Logger, get_logger
 from src.types import Entity, KnowledgeGraph, Observation, Relation
 from src.utils import dict_to_json, extract_error, generate_id
+from src.embedding_manager import LiteLLMEmbeddingManager
+from src.logger import Logger, get_logger
 
 
 class GraphMemoryManager:
-    """Memory manager for the knowledge graph using mem0ai with graph capabilities."""
+    """Memory manager for the knowledge graph using Neo4j."""
 
     def __init__(self, logger: Optional[Logger] = None):
         """
@@ -60,20 +23,22 @@ class GraphMemoryManager:
         """
         self.logger = logger or get_logger()
         self.initialized = False
-        self.memory = None
         self.neo4j_driver = None
         
-        # Default project name/user ID for memory operations if none is provided
+        # Default project name for memory operations if none is provided
         # This will be overridden when the AI agent provides a project name
-        self.default_user_id = "default-project"
+        self.default_project_name = "default-project"
         
-        self.logger.info(f"Using initial default user ID: {self.default_user_id}")
+        self.logger.info(f"Using initial default project name: {self.default_project_name}")
         
         # Get config from environment variables
         self.neo4j_uri = os.environ.get("NEO4J_URI", "bolt://localhost:7687")
         self.neo4j_user = os.environ.get("NEO4J_USER", "neo4j")
         self.neo4j_password = os.environ.get("NEO4J_PASSWORD", "password")
         self.neo4j_database = os.environ.get("NEO4J_DATABASE", "neo4j")
+        
+        # Initialize embedding manager
+        self.embedding_manager = LiteLLMEmbeddingManager(self.logger)
         
         # Check if embeddings should be enabled
         self.embedder_provider = os.environ.get("EMBEDDER_PROVIDER", "none").lower()
@@ -85,88 +50,126 @@ class GraphMemoryManager:
             self.logger.info("Embeddings disabled - operating in basic mode without vector search")
             return
             
+        # Configure embedding manager based on provider
+        embedding_config = {
+            "provider": self.embedder_provider,
+            "model": "",
+            "api_key": "",
+            "api_base": "",
+            "dimensions": 0,
+            "additional_params": {}
+        }
+        
         # Initialize embedding model configuration based on provider
         if self.embedder_provider == "openai":
-            self.embedding_model = os.environ.get("EMBEDDING_MODEL", "text-embedding-3-small")
-            self.openai_api_key = os.environ.get("OPENAI_API_KEY", "")
-            self.openai_api_base = os.environ.get("OPENAI_API_BASE", "")
-            self.embedding_dims = int(os.environ.get("EMBEDDING_DIMS", "1536"))
+            embedding_config["model"] = os.environ.get("EMBEDDING_MODEL", "text-embedding-3-small")
+            embedding_config["api_key"] = os.environ.get("OPENAI_API_KEY", "")
+            embedding_config["api_base"] = os.environ.get("OPENAI_API_BASE", "")
+            embedding_config["dimensions"] = int(os.environ.get("EMBEDDING_DIMS", "1536"))
             
             # Check if API key is provided
-            if not self.openai_api_key:
+            if not embedding_config["api_key"]:
                 self.logger.warn("OpenAI API key not provided. Embeddings will not work until configured.")
                 self.embedding_enabled = False
         elif self.embedder_provider == "huggingface":
-            self.huggingface_model = os.environ.get("HUGGINGFACE_MODEL", "sentence-transformers/all-mpnet-base-v2")
-            self.huggingface_model_kwargs = json.loads(os.environ.get("HUGGINGFACE_MODEL_KWARGS", '{"device":"cpu"}'))
-            self.embedding_dims = int(os.environ.get("EMBEDDING_DIMS", "768"))
+            embedding_config["model"] = os.environ.get("HUGGINGFACE_MODEL", "sentence-transformers/all-mpnet-base-v2")
+            embedding_config["api_key"] = os.environ.get("HUGGINGFACE_API_KEY", "")
+            embedding_config["dimensions"] = int(os.environ.get("EMBEDDING_DIMS", "768"))
+            embedding_config["additional_params"] = json.loads(os.environ.get("HUGGINGFACE_MODEL_KWARGS", '{"device":"cpu"}'))
         elif self.embedder_provider == "ollama":
-            self.ollama_model = os.environ.get("OLLAMA_MODEL", "llama2")
-            self.ollama_base_url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
-            self.embedding_dims = int(os.environ.get("EMBEDDING_DIMS", "4096"))
+            embedding_config["model"] = os.environ.get("OLLAMA_MODEL", "llama2")
+            embedding_config["api_base"] = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+            embedding_config["dimensions"] = int(os.environ.get("EMBEDDING_DIMS", "4096"))
         elif self.embedder_provider in ["azure", "azure_openai"]:
             # Support both "azure" and "azure_openai" for backward compatibility
-            self.azure_model = os.environ.get("AZURE_MODEL", "text-embedding-3-small")
-            # Support both new and old environment variable names
-            self.azure_api_key = os.environ.get("EMBEDDING_AZURE_OPENAI_API_KEY", os.environ.get("AZURE_API_KEY", ""))
-            self.azure_deployment = os.environ.get("EMBEDDING_AZURE_DEPLOYMENT", os.environ.get("AZURE_DEPLOYMENT", ""))
-            self.azure_endpoint = os.environ.get("EMBEDDING_AZURE_ENDPOINT", os.environ.get("AZURE_ENDPOINT", ""))
-            self.azure_api_version = os.environ.get("EMBEDDING_AZURE_API_VERSION", "2023-05-15")
-            # Custom headers (optional)
-            self.azure_default_headers = {}
+            embedding_config["model"] = os.environ.get("AZURE_MODEL", "text-embedding-3-small")
+            embedding_config["api_key"] = os.environ.get("EMBEDDING_AZURE_OPENAI_API_KEY", os.environ.get("AZURE_API_KEY", ""))
+            embedding_config["api_base"] = os.environ.get("EMBEDDING_AZURE_ENDPOINT", os.environ.get("AZURE_ENDPOINT", ""))
+            embedding_config["dimensions"] = int(os.environ.get("EMBEDDING_DIMS", "1536"))
+            
+            additional_params = {}
+            additional_params["api_version"] = os.environ.get("EMBEDDING_AZURE_API_VERSION", "2023-05-15")
+            additional_params["deployment"] = os.environ.get("EMBEDDING_AZURE_DEPLOYMENT", os.environ.get("AZURE_DEPLOYMENT", ""))
+            
+            embedding_config["additional_params"] = additional_params
+            
+            # Add custom headers if provided
             azure_headers_env = os.environ.get("EMBEDDING_AZURE_DEFAULT_HEADERS", "{}")
             try:
-                self.azure_default_headers = json.loads(azure_headers_env)
+                azure_headers = json.loads(azure_headers_env)
+                if azure_headers:
+                    embedding_config["additional_params"]["default_headers"] = azure_headers
             except json.JSONDecodeError:
                 self.logger.warn(f"Failed to parse EMBEDDING_AZURE_DEFAULT_HEADERS as JSON: {azure_headers_env}")
-            self.embedding_dims = int(os.environ.get("EMBEDDING_DIMS", "1536"))
             
             # Check if required Azure config is provided
-            if not (self.azure_api_key and self.azure_deployment and self.azure_endpoint):
+            if not (embedding_config["api_key"] and embedding_config["additional_params"]["deployment"] and embedding_config["api_base"]):
                 self.logger.warn("Required Azure OpenAI configuration missing. Embeddings will not work until configured.")
                 self.embedding_enabled = False
         elif self.embedder_provider == "lmstudio":
-            self.lmstudio_base_url = os.environ.get("LMSTUDIO_BASE_URL", "http://localhost:1234")
-            self.embedding_dims = int(os.environ.get("EMBEDDING_DIMS", "4096"))
+            embedding_config["model"] = "lmstudio/embedding"
+            embedding_config["api_base"] = os.environ.get("LMSTUDIO_BASE_URL", "http://localhost:1234")
+            embedding_config["dimensions"] = int(os.environ.get("EMBEDDING_DIMS", "4096"))
         elif self.embedder_provider == "vertexai":
-            self.vertexai_model = os.environ.get("VERTEXAI_MODEL", "text-embedding-004")
-            self.vertexai_credentials_json = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "")
-            self.embedding_dims = int(os.environ.get("EMBEDDING_DIMS", "256"))
-            # Special embedding types for different operations
-            self.memory_add_embedding_type = os.environ.get("VERTEXAI_MEMORY_ADD_EMBEDDING_TYPE", "RETRIEVAL_DOCUMENT")
-            self.memory_update_embedding_type = os.environ.get("VERTEXAI_MEMORY_UPDATE_EMBEDDING_TYPE", "RETRIEVAL_DOCUMENT")
-            self.memory_search_embedding_type = os.environ.get("VERTEXAI_MEMORY_SEARCH_EMBEDDING_TYPE", "RETRIEVAL_QUERY")
+            embedding_config["model"] = os.environ.get("VERTEXAI_MODEL", "text-embedding-004")
+            embedding_config["dimensions"] = int(os.environ.get("EMBEDDING_DIMS", "256"))
+            
+            additional_params = {}
+            additional_params["vertex_credentials_json"] = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "")
+            additional_params["project"] = os.environ.get("VERTEX_PROJECT", "")
+            additional_params["location"] = os.environ.get("VERTEX_LOCATION", "us-central1")
+            additional_params["embedding_type"] = os.environ.get("VERTEXAI_MEMORY_ADD_EMBEDDING_TYPE", "RETRIEVAL_DOCUMENT")
+            
+            embedding_config["additional_params"] = additional_params
             
             # Check if credentials file is provided
-            if not self.vertexai_credentials_json:
+            if not embedding_config["additional_params"]["vertex_credentials_json"]:
                 self.logger.warn("Google credentials not provided. Embeddings will not work until configured.")
                 self.embedding_enabled = False
         elif self.embedder_provider == "gemini":
-            self.gemini_model = os.environ.get("GEMINI_MODEL", "models/text-embedding-004")
-            self.gemini_api_key = os.environ.get("GOOGLE_API_KEY", "")
-            self.embedding_dims = int(os.environ.get("EMBEDDING_DIMS", "768"))
+            embedding_config["model"] = os.environ.get("GEMINI_MODEL", "models/text-embedding-004")
+            embedding_config["api_key"] = os.environ.get("GOOGLE_API_KEY", "")
+            embedding_config["dimensions"] = int(os.environ.get("EMBEDDING_DIMS", "768"))
             
             # Check if API key is provided
-            if not self.gemini_api_key:
+            if not embedding_config["api_key"]:
                 self.logger.warn("Google API key not provided. Embeddings will not work until configured.")
+                self.embedding_enabled = False
+        elif self.embedder_provider == "mistral":
+            embedding_config["model"] = os.environ.get("MISTRAL_MODEL", "mistral-embed")
+            embedding_config["api_key"] = os.environ.get("MISTRAL_API_KEY", "")
+            embedding_config["dimensions"] = int(os.environ.get("EMBEDDING_DIMS", "1024"))
+            
+            # Check if API key is provided
+            if not embedding_config["api_key"]:
+                self.logger.warn("Mistral API key not provided. Embeddings will not work until configured.")
                 self.embedding_enabled = False
         else:
             # Unknown provider
             self.logger.warn(f"Unknown embedder provider: {self.embedder_provider}. Embeddings will be disabled.")
             self.embedding_enabled = False
+        
+        # Configure the embedding manager
+        if self.embedding_enabled:
+            result = self.embedding_manager.configure(embedding_config)
+            if result["status"] != "success":
+                self.logger.warn(f"Failed to configure embedding manager: {result['message']}")
+                self.embedding_enabled = False
+            else:
+                self.logger.info(f"Embedding manager configured successfully: {result['message']}")
 
     def set_project_name(self, project_name: str) -> None:
         """
-        Set the project name to use as the default user ID.
+        Set the default project name for memory operations.
         
         Args:
-            project_name: The name of the project
+            project_name: The project name to use for memory operations
         """
         if project_name and project_name.strip():
-            self.default_user_id = project_name.strip()
-            self.logger.info(f"Updated default user ID to: {self.default_user_id}")
+            self.default_project_name = project_name.strip()
+            self.logger.info(f"Updated default project name to: {self.default_project_name}")
         else:
-            self.logger.warn("Attempted to set empty project name, keeping existing default")
+            self.logger.warn("Cannot set empty project name")
 
     def initialize(self) -> None:
         """Initialize the memory manager and connect to the graph database."""
@@ -174,195 +177,123 @@ class GraphMemoryManager:
             return
 
         try:
-            # Configure Neo4j graph store
-            graph_store_config = {
-                "graph_store": {
-                    "provider": "neo4j",
-                    "config": {
-                        "url": self.neo4j_uri,
-                        "username": self.neo4j_user,
-                        "password": self.neo4j_password,
-                        "database": self.neo4j_database
-                    }
-                }
-            }
-            
-            # Only configure embedding if enabled
-            if self.embedding_enabled:
-                # Configure embedding based on provider
-                embedding_config = self._get_embedding_config()
-                
-                # Combine configurations
-                config = {**graph_store_config, **embedding_config}
-            else:
-                # Use only graph store configuration without embeddings
-                config = graph_store_config
-                self.logger.info("Initializing memory manager without embedding support")
-            
-            # Initialize mem0 memory
-            self.memory = Memory.from_config(config_dict=config)
-            
-            # Initialize direct Neo4j driver for operations not supported by mem0
+            # Initialize Neo4j driver with connection pooling parameters
             self.neo4j_driver = GraphDatabase.driver(
                 self.neo4j_uri,
-                auth=(self.neo4j_user, self.neo4j_password)
+                auth=(self.neo4j_user, self.neo4j_password),
+                # Connection pooling parameters
+                max_connection_lifetime=30 * 60,  # 30 minutes
+                max_connection_pool_size=50,      # Max 50 connections in the pool
+                connection_acquisition_timeout=60, # 60 seconds timeout for acquiring a connection
+                keep_alive=True                   # Keep connections alive
             )
             
-            # Test the Neo4j connection
-            self._test_neo4j_connection()
+            # Test the Neo4j connection with retry
+            self._test_neo4j_connection_with_retry(max_retries=3)
             
-            self.initialized = True
+            # Setup vector index if embeddings are enabled
             if self.embedding_enabled:
+                self._setup_vector_index()
                 self.logger.info(f"Memory graph manager initialized successfully with {self.embedder_provider} embedder")
             else:
                 self.logger.info("Memory graph manager initialized successfully without embeddings")
+                
+            self.initialized = True
+            
         except Exception as e:
-            self.logger.error(f"Failed to initialize memory graph manager: {str(e)}")
+            self.logger.error(f"Failed to initialize memory manager: {str(e)}")
             raise e
             
-    def _get_embedding_config(self) -> Dict[str, Any]:
-        """Get the embedding configuration based on the selected provider."""
-        if self.embedder_provider == "openai":
-            config = {
-                "embedder": {
-                    "provider": "openai",
-                    "config": {
-                        "api_key": self.openai_api_key,
-                        "model": self.embedding_model,
-                        "embedding_dims": self.embedding_dims
-                    }
-                }
-            }
-            # Add API base if provided
-            if hasattr(self, "openai_api_base") and self.openai_api_base:
-                config["embedder"]["config"]["api_base"] = self.openai_api_base
-            return config
+    def _test_neo4j_connection_with_retry(self, max_retries=3, initial_delay=1.0):
+        """Test Neo4j connection with exponential backoff retry mechanism."""
+        if not self.neo4j_driver:
+            self.logger.debug("Neo4j driver not initialized, skipping connection test")
+            return
             
-        elif self.embedder_provider == "huggingface":
-            config = {
-                "embedder": {
-                    "provider": "huggingface",
-                    "config": {
-                        "model": self.huggingface_model,
-                        "embedding_dims": self.embedding_dims
-                    }
-                }
-            }
-            
-            # Only add model_kwargs if it has been explicitly set
-            if os.environ.get("HUGGINGFACE_MODEL_KWARGS"):
-                config["embedder"]["config"]["model_kwargs"] = self.huggingface_model_kwargs
+        import time
+        
+        delay = initial_delay
+        last_exception = None
+        
+        for retry in range(max_retries):
+            try:
+                self.logger.debug(f"Connection attempt {retry + 1}/{max_retries}")
+                self._test_neo4j_connection()
+                self.logger.debug(f"Connection successful on attempt {retry + 1}")
+                return  # Success, exit the retry loop
+            except Exception as e:
+                last_exception = e
+                self.logger.warn(f"Neo4j connection attempt {retry + 1}/{max_retries} failed: {str(e)}")
                 
-            return config
+                if retry < max_retries - 1:  # Don't sleep after the last attempt
+                    self.logger.info(f"Retrying in {delay:.1f} seconds...")
+                    time.sleep(delay)
+                    delay *= 2  # Exponential backoff
+        
+        # If we're here, all retries failed
+        self.logger.error(f"Failed to connect to Neo4j after {max_retries} attempts")
+        if last_exception:
+            raise last_exception
+
+    def _setup_vector_index(self) -> None:
+        """Setup vector index in Neo4j if it doesn't exist."""
+        if not self.neo4j_driver or not self.embedding_enabled:
+            return
             
-        elif self.embedder_provider == "ollama":
-            config = {
-                "embedder": {
-                    "provider": "ollama",
-                    "config": {
-                        "model": self.ollama_model,
-                        "embedding_dims": self.embedding_dims
-                    }
-                }
-            }
+        try:
+            # Check if vector index exists
+            index_query = """
+            SHOW INDEXES
+            YIELD name, type
+            WHERE type = 'VECTOR'
+            RETURN count(*) > 0 AS exists
+            """
             
-            # Only add ollama_base_url if it has been explicitly set
-            if os.environ.get("OLLAMA_BASE_URL"):
-                config["embedder"]["config"]["ollama_base_url"] = self.ollama_base_url
+            result = self.neo4j_driver.execute_query(
+                index_query,
+                database_=self.neo4j_database
+            )
+            
+            index_exists = result[0][0]["exists"] if result and result[0] else False
+            
+            if not index_exists:
+                # Create vector index for entity nodes with embeddings
+                create_index_query = """
+                CREATE VECTOR INDEX entity_embedding IF NOT EXISTS
+                FOR (e:Entity)
+                ON e.embedding
+                OPTIONS {indexConfig: {
+                    `vector.dimensions`: $dimensions,
+                    `vector.similarity_function`: 'cosine'
+                }}
+                """
                 
-            return config
-            
-        elif self.embedder_provider in ["azure", "azure_openai"]:
-            # Support both "azure" and "azure_openai" for backward compatibility
-            config = {
-                "embedder": {
-                    "provider": "azure_openai",
-                    "config": {
-                        "model": self.azure_model,
-                        "embedding_dims": self.embedding_dims,
-                        "azure_kwargs": {
-                            "api_version": self.azure_api_version,
-                            "azure_deployment": self.azure_deployment,
-                            "azure_endpoint": self.azure_endpoint,
-                            "api_key": self.azure_api_key
-                        }
-                    }
-                }
-            }
-            
-            # Add default headers if provided
-            if self.azure_default_headers:
-                config["embedder"]["config"]["azure_kwargs"]["default_headers"] = self.azure_default_headers
+                # Get dimensions from embedding manager config
+                embedding_dimensions = self.embedding_manager.dimensions
+                if not embedding_dimensions:
+                    embedding_dimensions = 1536  # Use a default value if not set
                 
-            return config
-            
-        elif self.embedder_provider == "vertexai":
-            config = {
-                "embedder": {
-                    "provider": "vertexai",
-                    "config": {
-                        "model": self.vertexai_model,
-                        "embedding_dims": self.embedding_dims,
-                        "memory_add_embedding_type": self.memory_add_embedding_type,
-                        "memory_update_embedding_type": self.memory_update_embedding_type,
-                        "memory_search_embedding_type": self.memory_search_embedding_type
-                    }
-                }
-            }
-            
-            # Add credentials json path if explicitly set
-            if os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"):
-                config["embedder"]["config"]["vertex_credentials_json"] = self.vertexai_credentials_json
+                self.neo4j_driver.execute_query(
+                    create_index_query,
+                    dimensions=embedding_dimensions,
+                    database_=self.neo4j_database
+                )
                 
-            return config
-            
-        elif self.embedder_provider == "gemini":
-            config = {
-                "embedder": {
-                    "provider": "gemini",
-                    "config": {
-                        "model": self.gemini_model,
-                        "embedding_dims": self.embedding_dims
-                    }
-                }
-            }
-            
-            # Add API key if provided
-            if self.gemini_api_key:
-                config["embedder"]["config"]["api_key"] = self.gemini_api_key
-                
-            return config
-            
-        elif self.embedder_provider == "lmstudio":
-            return {
-                "embedder": {
-                    "provider": "lmstudio",
-                    "config": {
-                        "lmstudio_base_url": self.lmstudio_base_url,
-                        "embedding_dims": self.embedding_dims
-                    }
-                }
-            }
-            
-        # Default to OpenAI if provider is not recognized
-        self.logger.warn(f"Unknown embedder provider: {self.embedder_provider}. Falling back to OpenAI.")
-        return {
-            "embedder": {
-                "provider": "openai",
-                "config": {
-                    "api_key": os.environ.get("OPENAI_API_KEY", ""),
-                    "model": "text-embedding-3-small",
-                    "embedding_dims": 1536
-                }
-            }
-        }
+                self.logger.info(f"Created vector index with {embedding_dimensions} dimensions")
+            else:
+                self.logger.info("Vector index already exists")
+        except Exception as e:
+            self.logger.error(f"Error setting up vector index: {str(e)}")
+            # Don't fail initialization if index creation fails
 
     def _test_neo4j_connection(self) -> None:
         """Test the Neo4j connection by running a simple query."""
         if not self.neo4j_driver:
+            self.logger.debug("Neo4j driver not initialized, skipping connection test")
             return
         
         try:
+            self.logger.debug("Testing Neo4j connection with simple query")
             result_data = self.neo4j_driver.execute_query(
                 "RETURN 'Connection successful' AS message",
                 database_=self.neo4j_database
@@ -370,10 +301,28 @@ class GraphMemoryManager:
             records = result_data[0] if result_data and len(result_data) > 0 else []
             message = records[0]["message"] if records and len(records) > 0 else "Unknown"
             self.logger.info(f"Neo4j direct connection test: {message}")
+            
+            # Additional connection status check
+            driver_info = self.neo4j_driver.get_server_info()
+            self.logger.info(f"Connected to Neo4j Server: {driver_info.agent} (Version: {driver_info.protocol_version})")
+            
+            # Log connection pool metrics - commented out due to potential API incompatibility
+            # Some Neo4j driver versions don't support get_metrics()
+            self.logger.debug("Neo4j connection pool metrics not available or skipped")
+            
         except Exception as e:
-            self.logger.error(f"Neo4j connection test failed: {str(e)}")
-            # Don't raise - we can still use mem0 even if direct connection fails
-
+            error_message = str(e)
+            if "Authentication failed" in error_message:
+                self.logger.error(f"Neo4j authentication failed. Please check your credentials: {error_message}")
+            elif "Connection refused" in error_message:
+                self.logger.error(f"Neo4j connection refused. Is the database running? {error_message}")
+            elif "Failed to establish connection" in error_message:
+                self.logger.error(f"Failed to establish Neo4j connection. Check network and server: {error_message}")
+            else:
+                self.logger.error(f"Neo4j connection test failed: {error_message}")
+            
+            # Don't raise - we can still use basic functionality without direct connection
+            
     def close(self) -> None:
         """Close the Neo4j driver connection."""
         if self.neo4j_driver:
@@ -396,100 +345,130 @@ class GraphMemoryManager:
             created_entities = []
             
             for entity in entities:
-                # Process entity for mem0 format
+                # Process entity
                 entity_dict = self._convert_to_dict(entity)
                 
-                # Create memory string from entity
+                # Extract entity information
                 entity_name = entity_dict.get("name", "")
                 entity_type = entity_dict.get("entityType", "")
                 observations = entity_dict.get("observations", [])
                 
                 if entity_name and entity_type:
-                    memory_str = f"{entity_name} is a {entity_type}."
+                    # Create the entity in Neo4j
+                    self._create_entity_in_neo4j(entity_name, entity_type, observations)
                     
-                    # Add base entity information with metadata
-                    if self.memory:
-                        self.memory.add(
-                            memory=memory_str, 
-                            user_id=self.default_user_id,
-                            metadata={
-                                "type": "entity",
-                                "entity_name": entity_name,
-                                "entity_type": entity_type
-                            }
-                        )
-                    
-                    # Add observations if present
-                    if observations:
-                        for obs in observations:
-                            # Add each observation as a separate memory with metadata
-                            memory_obs = f"{entity_name} {obs}"
-                            if self.memory:
-                                self.memory.add(
-                                    memory=memory_obs, 
-                                    user_id=self.default_user_id,
-                                    metadata={
-                                        "type": "observation",
-                                        "entity_name": entity_name,
-                                        "entity_type": entity_type
-                                    }
-                                )
-                                
-                    # Also create entity directly in Neo4j for operations not supported by mem0
-                    if self.neo4j_driver:
-                        self._create_entity_in_neo4j(entity_name, entity_type, observations)
+                    # Add entity with embedding if embeddings are enabled
+                    if self.embedding_enabled:
+                        # Generate description for embedding
+                        description = f"{entity_name} is a {entity_type}."
+                        if observations:
+                            description += " " + " ".join(observations)
+                            
+                        # Generate embedding
+                        embedding = self._generate_embedding(description)
                         
+                        # Store embedding with entity
+                        if embedding:
+                            self._update_entity_embedding(entity_name, embedding)
+                    
                     created_entities.append(entity_dict)
                     self.logger.info(f"Created entity: {entity_name}")
             
             return dict_to_json({"created": created_entities})
+                
         except Exception as e:
             error_msg = f"Error creating entities: {str(e)}"
             self.logger.error(error_msg)
             return dict_to_json({"error": error_msg})
+            
+    def _update_entity_embedding(self, entity_name: str, embedding: List[float]) -> None:
+        """
+        Update the embedding for an entity.
+        
+        Args:
+            entity_name: The name of the entity
+            embedding: The embedding vector
+        """
+        if not self.neo4j_driver:
+            return
+            
+        try:
+            # Update entity with embedding
+            query = """
+            MATCH (e:Entity {name: $name})
+            SET e.embedding = $embedding
+            """
+            
+            self.neo4j_driver.execute_query(
+                query,
+                name=entity_name,
+                embedding=embedding,
+                database_=self.neo4j_database
+            )
+            
+            self.logger.info(f"Updated embedding for entity: {entity_name}")
+        except Exception as e:
+            self.logger.error(f"Error updating entity embedding: {str(e)}")
+            # Don't raise - we can still use basic functionality without embeddings
 
     def _create_entity_in_neo4j(self, name: str, entity_type: str, observations: List[str]) -> None:
         """Create an entity directly in Neo4j."""
         if not self.neo4j_driver:
+            self.logger.debug("Neo4j driver not initialized, skipping entity creation")
             return
         
         try:
             # Create the entity node
+            self.logger.debug(f"Creating entity node in Neo4j: {name}", context={"entity_type": entity_type})
             query = """
             MERGE (e:Entity {name: $name})
             SET e.entityType = $entity_type
             RETURN e
             """
-            self.neo4j_driver.execute_query(
+            result = self.neo4j_driver.execute_query(
                 query,
                 name=name,
                 entity_type=entity_type,
                 database_=self.neo4j_database
             )
             
+            result_summary = result[1] if len(result) > 1 else None
+            self.logger.debug("Entity node creation result", context={
+                "counters": str(result_summary.counters) if result_summary else "No summary",
+                "entity": name
+            })
+            
             # Add observations if present
             if observations:
-                for observation in observations:
+                self.logger.debug(f"Adding {len(observations)} observations to entity: {name}")
+                for idx, observation in enumerate(observations):
+                    self.logger.debug(f"Adding observation {idx+1}/{len(observations)}", 
+                                     context={"entity": name, "content_length": len(observation)})
                     obs_query = """
                     MATCH (e:Entity {name: $name})
                     MERGE (o:Observation {content: $content})
                     MERGE (e)-[:HAS_OBSERVATION]->(o)
                     """
-                    self.neo4j_driver.execute_query(
+                    obs_result = self.neo4j_driver.execute_query(
                         obs_query,
                         name=name,
                         content=observation,
                         database_=self.neo4j_database
                     )
                     
+                    obs_summary = obs_result[1] if len(obs_result) > 1 else None
+                    self.logger.debug(f"Observation {idx+1} creation result", context={
+                        "counters": str(obs_summary.counters) if obs_summary else "No summary"
+                    })
+                    
             self.logger.info(f"Created entity in Neo4j: {name}")
         except Exception as e:
-            self.logger.error(f"Error creating entity in Neo4j: {str(e)}")
+            self.logger.error(f"Error creating entity in Neo4j: {str(e)}", context={"entity": name, "entity_type": entity_type}, exc_info=True)
             # Don't raise - we can still use mem0 even if direct Neo4j operations fail
-
+            
     def create_relations(self, relations: List[Union[Dict, Any]]) -> str:
         """
-        Create multiple relations between entities in the knowledge graph.
+        Create multiple relations in the knowledge graph.
         
         Args:
             relations: List of relations to create
@@ -503,7 +482,7 @@ class GraphMemoryManager:
             created_relations = []
             
             for relation in relations:
-                # Process relation for mem0 format
+                # Process relation
                 relation_dict = self._convert_to_dict(relation)
                 
                 # Map from_ to from for Pydantic models
@@ -515,30 +494,20 @@ class GraphMemoryManager:
                 relation_type = relation_dict.get("relationType", "")
                 
                 if from_entity and to_entity and relation_type:
-                    # Create a memory string for the relation
-                    memory_str = f"{from_entity} {relation_type} {to_entity}."
+                    # Create relation directly in Neo4j
+                    self._create_relation_in_neo4j(from_entity, to_entity, relation_type)
                     
-                    # Add relation as a memory with metadata
-                    if self.memory:
-                        self.memory.add(
-                            memory=memory_str, 
-                            user_id=self.default_user_id,
-                            metadata={
-                                "type": "relation",
-                                "from_entity": from_entity,
-                                "to_entity": to_entity,
-                                "relation_type": relation_type
-                            }
-                        )
-                    
-                    # Also create relation directly in Neo4j for operations not supported by mem0
-                    if self.neo4j_driver:
-                        self._create_relation_in_neo4j(from_entity, to_entity, relation_type)
-                        
-                    created_relations.append(relation_dict)
-                    self.logger.info(f"Created relation: {from_entity} {relation_type} {to_entity}")
+                    # Add relation to created_relations
+                    created_relation = {
+                        "from": from_entity,
+                        "to": to_entity,
+                        "relationType": relation_type
+                    }
+                    created_relations.append(created_relation)
+                    self.logger.info(f"Created relation: {from_entity} -{relation_type}-> {to_entity}")
             
             return dict_to_json({"created": created_relations})
+                
         except Exception as e:
             error_msg = f"Error creating relations: {str(e)}"
             self.logger.error(error_msg)
@@ -584,7 +553,7 @@ class GraphMemoryManager:
             added_observations = []
             
             for observation in observations:
-                # Process observation for mem0 format
+                # Process observation
                 observation_dict = self._convert_to_dict(observation)
                 
                 entity_name = observation_dict.get("entityName", "")
@@ -592,28 +561,44 @@ class GraphMemoryManager:
                 
                 if entity_name and contents:
                     for content in contents:
-                        # Create memory string for observation
-                        memory_str = f"{entity_name} {content}"
+                        # Add observation directly to Neo4j
+                        self._add_observation_in_neo4j(entity_name, content)
+                    
+                    # Update embedding if enabled
+                    if self.embedding_enabled and self.neo4j_driver:
+                        # Get all observations for the entity
+                        query = """
+                        MATCH (e:Entity {name: $name})<-[:DESCRIBES]-(o:Observation)
+                        RETURN e.entityType as entityType, collect(o.content) as observations
+                        """
                         
-                        # Add observation as memory with metadata
-                        if self.memory:
-                            self.memory.add(
-                                memory=memory_str, 
-                                user_id=self.default_user_id,
-                                metadata={
-                                    "type": "observation",
-                                    "entity_name": entity_name
-                                }
-                            )
+                        result = self.neo4j_driver.execute_query(
+                            query,
+                            name=entity_name,
+                            database_=self.neo4j_database
+                        )
                         
-                        # Also add observation directly in Neo4j
-                        if self.neo4j_driver:
-                            self._add_observation_in_neo4j(entity_name, content)
+                        if result and result[0] and result[0][0]:
+                            entity_type = result[0][0]["entityType"] or "Unknown"
+                            all_observations = result[0][0]["observations"]
                             
+                            # Generate description for embedding
+                            description = f"{entity_name} is a {entity_type}."
+                            if all_observations:
+                                description += " " + " ".join(all_observations)
+                                
+                            # Generate embedding
+                            embedding = self._generate_embedding(description)
+                            
+                            # Store embedding with entity
+                            if embedding:
+                                self._update_entity_embedding(entity_name, embedding)
+                        
                     added_observations.append(observation_dict)
                     self.logger.info(f"Added observations to {entity_name}")
             
             return dict_to_json({"added": added_observations})
+                
         except Exception as e:
             error_msg = f"Error adding observations: {str(e)}"
             self.logger.error(error_msg)
@@ -798,14 +783,14 @@ class GraphMemoryManager:
             self.logger.error(f"Error deleting relation in Neo4j: {str(e)}")
             raise e
 
-    def search_nodes(self, query: str, limit: int = 10, user_id: Optional[str] = None) -> str:
+    def search_nodes(self, query: str, limit: int = 10, project_name: Optional[str] = None) -> str:
         """
         Search for nodes in the knowledge graph.
         
         Args:
             query: Search query
             limit: Maximum number of results to return
-            user_id: Optional user/project identifier (defaults to current project)
+            project_name: Optional project identifier (defaults to current project)
             
         Returns:
             JSON string with search results
@@ -813,63 +798,111 @@ class GraphMemoryManager:
         try:
             self._ensure_initialized()
             
-            # Use default user ID if not provided
-            user_id = user_id or self.default_user_id
+            # Use default project name if not provided
+            project_name = project_name or self.default_project_name
             
-            # Check if embeddings are enabled for semantic search
-            if not self.embedding_enabled:
-                self.logger.warn("Search performed without embeddings - returning empty results. Configure embeddings for semantic search.")
+            # Check if Neo4j driver is available
+            if not self.neo4j_driver:
+                self.logger.warn("Neo4j driver not available for search")
                 return dict_to_json({
                     "results": [],
                     "query": query,
-                    "project": user_id,
-                    "message": "Embeddings are disabled. Configure embeddings to enable semantic search."
+                    "project": project_name,
+                    "message": "Neo4j driver not available"
                 })
-            
-            # Search using mem0's search method
-            if self.memory:
-                results = self.memory.search(
-                    query=query, 
-                    limit=limit,
-                    user_id=user_id
-                )
-            else:
-                results = {"results": []}
-            
-            # Format results
+                
             formatted_results = []
-            for result in results.get("results", []):
-                # Extract entity information from memory content
-                memory = result.get("memory", "")
-                metadata = result.get("metadata", {})
+            
+            # Check if embeddings are enabled for semantic search
+            if self.embedding_enabled:
+                # Generate embedding for query
+                query_embedding = self._generate_embedding(query)
                 
-                # Extract entity information from metadata if available
-                entity_name = metadata.get("entity_name", "")
-                entity_type = metadata.get("entity_type", "")
+                if query_embedding:
+                    # Use vector search to find similar entities
+                    vector_query = """
+                    MATCH (e:Entity)
+                    WHERE e.embedding IS NOT NULL
+                    WITH e, vector.similarity.cosine(e.embedding, $query_embedding) AS score
+                    WHERE score > 0.7
+                    RETURN e.name AS name, e.entityType AS entityType, score
+                    ORDER BY score DESC
+                    LIMIT $limit
+                    """
+                    
+                    vector_results = self.neo4j_driver.execute_query(
+                        vector_query,
+                        query_embedding=query_embedding,
+                        limit=limit,
+                        database_=self.neo4j_database
+                    )
+                    
+                    # Process vector search results
+                    records = vector_results[0] if vector_results and len(vector_results) > 0 else []
+                    for record in records:
+                        entity_name = record["name"]
+                        entity_type = record["entityType"]
+                        score = record["score"]
+                        
+                        # Get observations for this entity
+                        entity_data = self._get_entity_from_neo4j(entity_name)
+                        
+                        if entity_data:
+                            formatted_result = {
+                                "entity": entity_data,
+                                "score": score
+                            }
+                            formatted_results.append(formatted_result)
+            else:
+                # Fallback to basic text search if embeddings are not enabled
+                self.logger.info("Using basic text search (embeddings disabled)")
                 
-                # If metadata doesn't have entity info, try to parse from memory content
-                if not entity_name:
-                    parts = memory.split(" ")
-                    entity_name = parts[0] if parts else ""
+                # Use basic text matching in Cypher
+                text_query = """
+                MATCH (e:Entity)
+                WHERE e.name CONTAINS $search_text OR e.entityType CONTAINS $search_text
+                WITH e
+                MATCH (e)<-[:DESCRIBES]-(o:Observation)
+                WITH e, collect(o.content) as observations
+                RETURN e.name as name, e.entityType as entityType, observations
+                LIMIT $limit
+                """
                 
-                # Combine memory information into an entity
-                entity = {
-                    "name": entity_name,
-                    "entityType": entity_type or "Unknown",
-                    "observations": [memory],
-                    "project": user_id  # Include the project/user_id in the response
-                }
+                text_results = self.neo4j_driver.execute_query(
+                    text_query,
+                    search_text=query,
+                    limit=limit,
+                    database_=self.neo4j_database
+                )
                 
-                formatted_result = {
-                    "entity": entity,
-                    "score": result.get("score", 0.0)
-                }
-                formatted_results.append(formatted_result)
+                # Process text search results
+                records = text_results[0] if text_results and len(text_results) > 0 else []
+                for record in records:
+                    entity_name = record["name"]
+                    entity_type = record["entityType"]
+                    observations = record["observations"]
+                    
+                    entity = {
+                        "name": entity_name,
+                        "entityType": entity_type or "Unknown",
+                        "observations": observations,
+                        "project": project_name
+                    }
+                    
+                    formatted_result = {
+                        "entity": entity,
+                        "score": 1.0  # Default score for text search
+                    }
+                    formatted_results.append(formatted_result)
+            
+            # If no results from either method, provide a message
+            if not formatted_results:
+                self.logger.info(f"No results found for query: {query}")
                 
             search_response = {
                 "results": formatted_results,
                 "query": query,
-                "project": user_id
+                "project": project_name
             }
             
             return dict_to_json(search_response)
@@ -895,51 +928,21 @@ class GraphMemoryManager:
             results = []
             
             for name in names:
-                entity = None
-                
-                # Try to get entity directly from Neo4j first if available
-                if self.neo4j_driver:
-                    entity = self._get_entity_from_neo4j(name)
-                
-                # Fall back to mem0 search if Neo4j didn't return a result
-                if not entity and self.memory:
-                    # Search for the specific entity name
-                    results_data = self.memory.search(
-                        query=f"Find information about {name}", 
-                        user_id=self.default_user_id,
-                        limit=10
-                    )
-                    
-                    # Extract entity information
-                    memories = []
-                    entity_type = "Unknown"
-                    
-                    for result in results_data.get("results", []):
-                        memory = result.get("memory", "")
-                        metadata = result.get("metadata", {})
-                        
-                        if metadata.get("entity_type"):
-                            entity_type = metadata.get("entity_type")
-                            
-                        if memory:
-                            memories.append(memory)
-                    
-                    if memories:
-                        entity = {
-                            "name": name,
-                            "entityType": entity_type,
-                            "observations": memories
-                        }
+                # Get entity directly from Neo4j
+                entity = self._get_entity_from_neo4j(name)
                 
                 if entity:
                     results.append(entity)
+                else:
+                    self.logger.info(f"Entity '{name}' not found")
             
             return dict_to_json({"entities": results})
+                
         except Exception as e:
-            error_msg = f"Error opening nodes: {str(e)}"
+            error_msg = f"Error retrieving nodes: {str(e)}"
             self.logger.error(error_msg)
             return dict_to_json({"error": error_msg})
-
+            
     def _get_entity_from_neo4j(self, entity_name: str) -> Optional[Dict[str, Any]]:
         """Get an entity directly from Neo4j."""
         if not self.neo4j_driver:
@@ -975,9 +978,9 @@ class GraphMemoryManager:
             self.logger.error(f"Error getting entity from Neo4j: {str(e)}")
             return None
 
-    def _convert_to_dict(self, obj: Any) -> Dict:
+    def _convert_to_dict(self, obj: Any) -> Dict[str, Any]:
         """
-        Convert an object to a dictionary, handling Pydantic models.
+        Convert an object to a dictionary.
         
         Args:
             obj: Object to convert
@@ -985,36 +988,26 @@ class GraphMemoryManager:
         Returns:
             Dictionary representation of the object
         """
-        if hasattr(obj, "model_dump"):
-            # For Pydantic models
-            try:
-                return obj.model_dump(by_alias=True)
-            except Exception:
-                # Fallback method
-                return {k: getattr(obj, k) for k in dir(obj) 
-                       if not k.startswith('_') and not callable(getattr(obj, k))}
-        elif isinstance(obj, dict):
-            # For dictionaries
-            return dict(obj)
+        if isinstance(obj, dict):
+            return obj
+        elif hasattr(obj, "dict") and callable(getattr(obj, "dict")):
+            return obj.dict()
+        elif hasattr(obj, "__dict__"):
+            return obj.__dict__
         else:
-            # For other objects, try to convert to dict
-            try:
-                return dict(obj)
-            except (ValueError, TypeError):
-                return {k: getattr(obj, k) for k in dir(obj)
-                       if not k.startswith('_') and not callable(getattr(obj, k))}
+            return {"value": str(obj)}
 
     def _ensure_initialized(self) -> None:
         """Ensure the memory manager is initialized."""
         if not self.initialized:
             self.initialize()
             
-    def get_all_memories(self, user_id: Optional[str] = None) -> str:
+    def get_all_memories(self, project_name: Optional[str] = None) -> str:
         """
-        Get all memories for a user.
+        Get all entities and their observations from the knowledge graph.
         
         Args:
-            user_id: Optional user identifier
+            project_name: Optional project identifier (currently not used with Neo4j implementation)
             
         Returns:
             JSON string with all memories
@@ -1022,36 +1015,59 @@ class GraphMemoryManager:
         try:
             self._ensure_initialized()
             
-            # Use default user ID if not provided
-            user_id = user_id or self.default_user_id
-            
-            if self.memory:
-                # Get all memories from mem0
-                memories = self.memory.get_all(user_id=user_id)
-                
-                # Format the response
-                return dict_to_json({
-                    "status": "success",
-                    "memories": memories,
-                    "count": len(memories) if isinstance(memories, list) else 0
-                })
-            else:
+            if not self.neo4j_driver:
                 return dict_to_json({
                     "status": "error",
-                    "message": "Memory not initialized"
+                    "message": "Neo4j driver not initialized"
                 })
+                
+            # Retrieve all entities and observations from Neo4j
+            query = """
+            MATCH (e:Entity)
+            OPTIONAL MATCH (e)<-[:DESCRIBES]-(o:Observation)
+            WITH e, collect(o.content) as observations
+            RETURN e.name as name, e.entityType as entityType, observations
+            """
+            
+            results = self.neo4j_driver.execute_query(
+                query, 
+                database_=self.neo4j_database
+            )
+            
+            memories = []
+            
+            records = results[0] if results and len(results) > 0 else []
+            for record in records:
+                entity_name = record["name"]
+                entity_type = record["entityType"]
+                observations = record["observations"]
+                
+                # Format as entity with observations
+                entity = {
+                    "name": entity_name,
+                    "entityType": entity_type or "Unknown",
+                    "observations": observations
+                }
+                
+                memories.append(entity)
+            
+            return dict_to_json({
+                "status": "success",
+                "memories": memories,
+                "count": len(memories)
+            })
                 
         except Exception as e:
             error_msg = f"Error getting all memories: {str(e)}"
             self.logger.error(error_msg)
             return dict_to_json({"error": error_msg})
             
-    def delete_all_memories(self, user_id: Optional[str] = None) -> str:
+    def delete_all_memories(self, project_name: Optional[str] = None) -> str:
         """
-        Delete all memories for a user.
+        Delete all entities and observations in the knowledge graph.
         
         Args:
-            user_id: Optional user identifier
+            project_name: Optional project identifier (currently not used with Neo4j implementation)
             
         Returns:
             JSON string with result information
@@ -1059,25 +1075,29 @@ class GraphMemoryManager:
         try:
             self._ensure_initialized()
             
-            # Use default user ID if not provided
-            user_id = user_id or self.default_user_id
-            
-            if self.memory:
-                # Delete all memories from mem0
-                self.memory.delete_all(user_id=user_id)
-                
-                self.logger.info(f"Deleted all memories for user {user_id}")
-                
-                # Format the response
-                return dict_to_json({
-                    "status": "success",
-                    "message": f"All memories deleted for user {user_id}"
-                })
-            else:
+            if not self.neo4j_driver:
                 return dict_to_json({
                     "status": "error",
-                    "message": "Memory not initialized"
+                    "message": "Neo4j driver not initialized"
                 })
+                
+            # Delete all relationships and nodes using the Neo4j driver
+            query = """
+            MATCH (n)
+            DETACH DELETE n
+            """
+            
+            self.neo4j_driver.execute_query(
+                query,
+                database_=self.neo4j_database
+            )
+            
+            self.logger.info("Deleted all nodes and relationships from Neo4j")
+            
+            return dict_to_json({
+                "status": "success",
+                "message": "All memories deleted"
+            })
                 
         except Exception as e:
             error_msg = f"Error deleting all memories: {str(e)}"
@@ -1092,149 +1112,169 @@ class GraphMemoryManager:
             # Ignore errors during cleanup
             pass 
 
-    def apply_client_config(self, config: Dict[str, Any]) -> Dict[str, Any]:
+    def configure_embeddings(self, config: Dict[str, Any]) -> Dict[str, str]:
         """
-        Apply client-provided configuration for embedding provider.
-        This method updates the instance variables but does not reinitialize the memory.
-        Call reinitialize() after this to apply the changes.
+        Configure the embedding provider with the provided settings.
         
         Args:
-            config: A dictionary containing embedding configuration
+            config: Dictionary containing the embedder configuration
             
         Returns:
-            Dictionary with status information
+            Dictionary with status and message
         """
         try:
-            # Extract the provider from the configuration
-            embedder_config = config.get("embedder", {})
-            provider = embedder_config.get("provider")
+            if not config or "provider" not in config:
+                return {"status": "error", "message": "Invalid configuration: missing provider"}
             
-            if not provider:
-                return {"status": "error", "message": "Missing embedder provider in configuration"}
-                
-            # Update instance variables based on provider
+            provider = config.get("provider", "").lower()
+            provider_config = config.get("config", {})
+            
+            # Update the embedder provider
             self.embedder_provider = provider
             
-            # Enable embeddings since a provider is explicitly configured
-            self.embedding_enabled = True
+            # Enable or disable embeddings based on provider
+            self.embedding_enabled = provider != "none"
             
-            provider_config = embedder_config.get("config", {})
-            
-            # Set common configurations
-            if "embedding_dims" in provider_config:
-                self.embedding_dims = provider_config["embedding_dims"]
+            if not self.embedding_enabled:
+                self.logger.info("Embeddings disabled by configuration")
+                return {"status": "success", "message": "Embeddings disabled"}
                 
-            # Provider-specific configuration
+            # Prepare embedding configuration for the manager
+            embedding_config = {
+                "provider": provider,
+                "model": provider_config.get("model", ""),
+                "dimensions": provider_config.get("embedding_dims", 0),
+                "api_key": provider_config.get("api_key", ""),
+                "api_base": provider_config.get("api_base", ""),
+                "additional_params": {}
+            }
+            
+            # Provider-specific configuration adjustments
             if provider == "openai":
-                if "api_key" in provider_config:
-                    self.openai_api_key = provider_config["api_key"]
-                if "model" in provider_config:
-                    self.embedding_model = provider_config["model"]
-                if "api_base" in provider_config:
-                    self.openai_api_base = provider_config["api_base"]
+                # OpenAI uses model string without provider prefix
+                if embedding_config["model"].startswith("openai/"):
+                    embedding_config["model"] = embedding_config["model"].replace("openai/", "")
+                
+                # Default to text-embedding-3-small if not specified
+                if not embedding_config["model"]:
+                    embedding_config["model"] = "text-embedding-3-small"
                     
             elif provider == "huggingface":
-                if "model" in provider_config:
-                    self.huggingface_model = provider_config["model"]
+                # Add any model_kwargs as additional_params
                 if "model_kwargs" in provider_config:
-                    self.huggingface_model_kwargs = provider_config["model_kwargs"]
+                    embedding_config["additional_params"] = provider_config["model_kwargs"]
+                
+                # Ensure the model has huggingface/ prefix if needed
+                if embedding_config["model"] and not embedding_config["model"].startswith("huggingface/"):
+                    embedding_config["model"] = f"huggingface/{embedding_config['model']}"
+                    
+                # Set input_type parameter if provided
+                if "input_type" in provider_config:
+                    embedding_config["additional_params"]["input_type"] = provider_config["input_type"]
                     
             elif provider == "ollama":
-                if "model" in provider_config:
-                    self.ollama_model = provider_config["model"]
-                if "ollama_base_url" in provider_config:
-                    self.ollama_base_url = provider_config["ollama_base_url"]
+                # Map ollama_base_url to api_base if needed
+                if "ollama_base_url" in provider_config and not embedding_config["api_base"]:
+                    embedding_config["api_base"] = provider_config["ollama_base_url"]
+                
+                # Ensure the model has ollama/ prefix if needed
+                if embedding_config["model"] and not embedding_config["model"].startswith("ollama/"):
+                    embedding_config["model"] = f"ollama/{embedding_config['model']}"
                     
             elif provider in ["azure", "azure_openai"]:
-                if "model" in provider_config:
-                    self.azure_model = provider_config["model"]
-                
+                # Handle azure-specific configuration
                 azure_kwargs = provider_config.get("azure_kwargs", {})
-                if "api_key" in azure_kwargs:
-                    self.azure_api_key = azure_kwargs["api_key"]
+                
+                # Set deployment as required parameter
+                deployment = None
                 if "azure_deployment" in azure_kwargs:
-                    self.azure_deployment = azure_kwargs["azure_deployment"]
-                if "azure_endpoint" in azure_kwargs:
-                    self.azure_endpoint = azure_kwargs["azure_endpoint"]
-                if "api_version" in azure_kwargs:
-                    self.azure_api_version = azure_kwargs["api_version"]
+                    deployment = azure_kwargs["azure_deployment"]
+                elif "deployment" in azure_kwargs:
+                    deployment = azure_kwargs["deployment"]
+                elif "deployment_name" in provider_config:
+                    deployment = provider_config["deployment_name"]
+                
+                # Azure requires a deployment name
+                if deployment:
+                    embedding_config["additional_params"]["deployment"] = deployment
+                
+                # Model format for Azure is different - use the deployment name
+                if deployment and not embedding_config["model"]:
+                    embedding_config["model"] = f"azure/{deployment}"
+                
+                # Azure API version
+                api_version = azure_kwargs.get("api_version") or provider_config.get("api_version")
+                if api_version:
+                    embedding_config["additional_params"]["api_version"] = api_version
+                
+                # Azure endpoint/api_base
+                if "azure_endpoint" in azure_kwargs and not embedding_config["api_base"]:
+                    embedding_config["api_base"] = azure_kwargs["azure_endpoint"]
+                elif "api_base" in azure_kwargs and not embedding_config["api_base"]:
+                    embedding_config["api_base"] = azure_kwargs["api_base"]
+                
+                # Azure custom headers
                 if "default_headers" in azure_kwargs:
-                    self.azure_default_headers = azure_kwargs["default_headers"]
+                    embedding_config["additional_params"]["default_headers"] = azure_kwargs["default_headers"]
                     
-            elif provider == "vertexai":
-                if "model" in provider_config:
-                    self.vertexai_model = provider_config["model"]
+            elif provider == "vertexai" or provider == "vertex_ai":
+                # Vertex AI specific configuration
+                # Set default location if not provided
+                location = provider_config.get("location", "us-central1")
+                embedding_config["additional_params"]["location"] = location
+                
+                # Set project if provided
+                if "project" in provider_config:
+                    embedding_config["additional_params"]["project"] = provider_config["project"]
+                    
+                # Handle credentials
                 if "vertex_credentials_json" in provider_config:
-                    self.vertexai_credentials_json = provider_config["vertex_credentials_json"]
-                if "memory_add_embedding_type" in provider_config:
-                    self.memory_add_embedding_type = provider_config["memory_add_embedding_type"]
-                if "memory_update_embedding_type" in provider_config:
-                    self.memory_update_embedding_type = provider_config["memory_update_embedding_type"]
-                if "memory_search_embedding_type" in provider_config:
-                    self.memory_search_embedding_type = provider_config["memory_search_embedding_type"]
-                    
-            elif provider == "gemini":
-                if "model" in provider_config:
-                    self.gemini_model = provider_config["model"]
-                if "api_key" in provider_config:
-                    self.gemini_api_key = provider_config["api_key"]
+                    embedding_config["additional_params"]["vertex_credentials_json"] = provider_config["vertex_credentials_json"]
+                
+                # Ensure model has correct format for VertexAI
+                if embedding_config["model"]:
+                    if not embedding_config["model"].startswith("vertex_ai/"):
+                        embedding_config["model"] = f"vertex_ai/{embedding_config['model']}"
+                else:
+                    # Default model if not specified
+                    embedding_config["model"] = "vertex_ai/textembedding-gecko"
                     
             elif provider == "lmstudio":
-                if "lmstudio_base_url" in provider_config:
-                    self.lmstudio_base_url = provider_config["lmstudio_base_url"]
-            elif provider == "none":
-                # Explicitly disable embeddings
+                # Map lmstudio_base_url to api_base
+                if "lmstudio_base_url" in provider_config and not embedding_config["api_base"]:
+                    embedding_config["api_base"] = provider_config["lmstudio_base_url"]
+                
+                # Ensure model is set with proper format
+                if not embedding_config["model"]:
+                    embedding_config["model"] = "lmstudio/embedding"
+                elif not embedding_config["model"].startswith("lmstudio/"):
+                    embedding_config["model"] = f"lmstudio/{embedding_config['model']}"
+                    
+            elif provider == "mistral":
+                # Ensure model has correct format for Mistral
+                if not embedding_config["model"]:
+                    embedding_config["model"] = "mistral/mistral-embed"
+                elif not embedding_config["model"].startswith("mistral/"):
+                    embedding_config["model"] = f"mistral/{embedding_config['model']}"
+            
+            elif provider == "gemini":
+                # Ensure model has correct format for Gemini
+                if not embedding_config["model"]:
+                    embedding_config["model"] = "gemini/text-embedding-004"
+                elif not embedding_config["model"].startswith("gemini/"):
+                    embedding_config["model"] = f"gemini/{embedding_config['model']}"
+                                 
+            # Configure the embedding manager with our prepared config
+            result = self.embedding_manager.configure(embedding_config)
+            if result["status"] != "success":
+                self.logger.warn(f"Failed to configure embedding manager: {result['message']}")
                 self.embedding_enabled = False
-                self.logger.info("Embeddings explicitly disabled by client configuration")
-            
-            # Validate that requirements for the provider are met
-            if self.embedding_enabled:
-                if provider == "openai" and not self.openai_api_key:
-                    self.logger.warn("OpenAI API key missing from configuration. Embeddings may not work correctly.")
-                elif provider in ["azure", "azure_openai"] and not (self.azure_api_key and self.azure_deployment and self.azure_endpoint):
-                    self.logger.warn("Required Azure OpenAI configuration missing. Embeddings may not work correctly.")
-                elif provider == "vertexai" and not self.vertexai_credentials_json:
-                    self.logger.warn("Google credentials missing from configuration. Embeddings may not work correctly.")
-                elif provider == "gemini" and not self.gemini_api_key:
-                    self.logger.warn("Google API key missing from configuration. Embeddings may not work correctly.")
-            
-            return {
-                "status": "success", 
-                "message": f"Applied configuration for {provider}",
-                "provider": provider,
-                "embedding_enabled": self.embedding_enabled
-            }
-            
+                return result
+                
+            self.logger.info(f"Embedding provider configured: {provider} with model {embedding_config['model']}")
+            return {"status": "success", "message": f"Embedding provider configured: {provider}"}
         except Exception as e:
-            self.logger.error(f"Error applying client configuration: {str(e)}")
-            return {"status": "error", "message": f"Failed to apply configuration: {str(e)}"}
-    
-    def reinitialize(self) -> Dict[str, Any]:
-        """
-        Reinitialize the memory manager with the current configuration.
-        This should be called after apply_client_config() to apply the changes.
-        
-        Returns:
-            Dictionary with status information
-        """
-        try:
-            # Close any existing connections
-            self.close()
-            
-            # Reset initialization flag
-            self.initialized = False
-            
-            # Reinitialize with new configuration
-            self.initialize()
-            
-            return {
-                "status": "success",
-                "message": f"Reinitialized memory manager with {self.embedder_provider} embedder",
-                "provider": self.embedder_provider
-            }
-            
-        except Exception as e:
-            error_msg = f"Failed to reinitialize memory manager: {str(e)}"
+            error_msg = f"Error configuring embeddings: {str(e)}"
             self.logger.error(error_msg)
             return {"status": "error", "message": error_msg}
             
@@ -1257,7 +1297,27 @@ class GraphMemoryManager:
             }
         }
         
-        embedding_config = self._get_embedding_config()
+        embedding_config = {}
+        
+        if self.embedding_enabled:
+            # Get configuration from the embedding manager
+            manager_config = self.embedding_manager.get_config()
+            
+            embedding_config = {
+                "embedder": {
+                    "provider": manager_config.get("provider", "none"),
+                    "config": {
+                        "model": manager_config.get("model", ""),
+                        "embedding_dims": manager_config.get("dimensions", 0)
+                    }
+                }
+            }
+            
+            # Include any additional non-sensitive parameters
+            if "additional_params" in manager_config:
+                for key, value in manager_config.get("additional_params", {}).items():
+                    if "key" not in key.lower() and "password" not in key.lower() and "credentials" not in key.lower():
+                        embedding_config["embedder"]["config"][key] = value
         
         return {**graph_store_config, **embedding_config}
 
@@ -1407,4 +1467,159 @@ class GraphMemoryManager:
         except Exception as e:
             error_msg = f"Error deleting observation: {str(e)}"
             self.logger.error(error_msg)
-            return dict_to_json({"error": error_msg}) 
+            return dict_to_json({"error": error_msg})
+
+    def _generate_embedding(self, text: str) -> Optional[List[float]]:
+        """
+        Generate an embedding for the given text using the configured provider.
+        
+        Args:
+            text: The text to generate an embedding for
+            
+        Returns:
+            A list of floats representing the embedding vector, or None if embedding generation fails
+        """
+        if not self.embedding_enabled:
+            self.logger.debug("Embeddings are disabled, skipping embedding generation")
+            return None
+            
+        try:
+            self.logger.debug(f"Generating embedding for text: '{text[:50]}...' ({len(text)} chars)")
+            embedding = self.embedding_manager.generate_embedding(text)
+            
+            if embedding:
+                self.logger.debug(f"Successfully generated embedding with {len(embedding)} dimensions")
+                return embedding
+            else:
+                self.logger.warn("Failed to generate embedding")
+                return None
+        except Exception as e:
+            self.logger.error(f"Error generating embedding: {str(e)}", exc_info=True)
+            return None 
+
+    def apply_client_config(self, config: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Apply client-provided configuration for embedding provider.
+        This method updates the instance variables but does not reinitialize the memory.
+        Call reinitialize() after this to apply the changes.
+        
+        Args:
+            config: A dictionary containing embedding configuration
+            
+        Returns:
+            Dictionary with status information
+        """
+        try:
+            # Extract the embedder configuration
+            embedder_config = config.get("embedder", {})
+            
+            if not embedder_config:
+                return {"status": "error", "message": "Missing embedder configuration"}
+            
+            # Use our new configure_embeddings method
+            result = self.configure_embeddings({
+                "provider": embedder_config.get("provider", "none"),
+                "config": embedder_config.get("config", {})
+            })
+            
+            if result["status"] != "success":
+                return result
+            
+            return {
+                "status": "success", 
+                "message": f"Applied configuration for {self.embedder_provider}",
+                "provider": self.embedder_provider,
+                "embedding_enabled": self.embedding_enabled
+            }
+            
+        except Exception as e:
+            self.logger.error(f"Error applying client configuration: {str(e)}")
+            return {"status": "error", "message": f"Failed to apply configuration: {str(e)}"}
+    
+    def reinitialize(self) -> Dict[str, Any]:
+        """
+        Reinitialize the memory manager with the current configuration.
+        This should be called after apply_client_config() to apply the changes.
+        
+        In SSE mode, this method will perform a non-disruptive reinitialization
+        that preserves existing connections for other clients.
+        
+        Returns:
+            Dictionary with status information
+        """
+        try:
+            # Check if we're running in SSE mode
+            use_sse = os.environ.get("USE_SSE", "").lower() in ["true", "1", "yes"]
+            
+            if use_sse:
+                # Non-disruptive reinitialization for SSE mode
+                self.logger.info("Performing non-disruptive reinitialization in SSE mode")
+                
+                # Store current driver temporarily if it exists
+                current_driver = self.neo4j_driver
+                
+                # Create a new driver with the current configuration
+                try:
+                    # Create a new driver instance with the updated configuration
+                    new_driver = GraphDatabase.driver(
+                        self.neo4j_uri,
+                        auth=(self.neo4j_user, self.neo4j_password),
+                        # Connection pooling parameters
+                        max_connection_lifetime=30 * 60,  # 30 minutes
+                        max_connection_pool_size=50,      # Max 50 connections in the pool
+                        connection_acquisition_timeout=60, # 60 seconds timeout for acquiring a connection
+                        keep_alive=True                   # Keep connections alive
+                    )
+                    
+                    # Test the new connection
+                    test_result = new_driver.execute_query(
+                        "RETURN 'Connection successful' AS message",
+                        database_=self.neo4j_database
+                    )
+                    
+                    # If we got here, the new connection is working
+                    self.logger.info("New Neo4j connection successful")
+                    
+                    # Update the driver instance
+                    self.neo4j_driver = new_driver
+                    
+                    # Close the old driver only after the new one is successfully established
+                    if current_driver:
+                        self.logger.debug("Closing old Neo4j driver")
+                        current_driver.close()
+                        
+                except Exception as e:
+                    # If creating the new driver fails, keep using the old one
+                    self.logger.error(f"Failed to create new Neo4j driver: {str(e)}")
+                    self.neo4j_driver = current_driver
+                    raise e
+                
+                # Setup vector index if embeddings are enabled
+                if self.embedding_enabled:
+                    self._setup_vector_index()
+                
+                self.initialized = True
+                
+            else:
+                # Standard reinitialization for stdio mode - can disrupt connections
+                self.logger.info("Performing standard reinitialization in stdio mode")
+                
+                # Close any existing connections
+                self.close()
+                
+                # Reset initialization flag
+                self.initialized = False
+                
+                # Reinitialize with new configuration
+                self.initialize()
+            
+            return {
+                "status": "success",
+                "message": f"Reinitialized memory manager with {self.embedder_provider} embedder",
+                "provider": self.embedder_provider
+            }
+            
+        except Exception as e:
+            error_msg = f"Failed to reinitialize memory manager: {str(e)}"
+            self.logger.error(error_msg)
+            return {"status": "error", "message": error_msg} 

@@ -476,20 +476,11 @@ async def configure_embedding(config: Dict[str, Any]) -> str:
     """
     Configure the embedding provider for the knowledge graph.
     
-    IMPORTANT: This tool returns explicit file creation instructions that you MUST follow exactly.
-    The response will contain step-by-step commands to create a configuration file which is required
-    for the memory system to function. You MUST:
-    1. Parse and execute ALL steps in the response
-    2. Create the exact file specified with the exact content provided
-    3. Acknowledge the file creation as instructed
-    4. Verify the file exists before proceeding with any other actions
-    Failure to complete these steps will break memory functionality.
-    
     Args:
         config: Configuration object with embedding provider settings
     
     Returns:
-        Direct command message with mandatory instructions to create a configuration file
+        JSON configuration with initialization status
     """
     try:
         # Extract client ID if provided
@@ -510,7 +501,12 @@ async def configure_embedding(config: Dict[str, Any]) -> str:
         additional_config = config.pop("config", {})
         
         if not provider:
-            return "ERROR: Missing required parameter: provider"
+            error_response = ErrorResponse.create(
+                message="Missing required parameter: provider",
+                code="missing_parameter",
+                details={"parameter": "provider"}
+            )
+            return dict_to_json(error_response)
                 
         # Build proper configuration structure
         mem0_config = {
@@ -579,13 +575,13 @@ async def configure_embedding(config: Dict[str, Any]) -> str:
         result = graph_manager.apply_client_config(mem0_config)
         
         if result["status"] != "success":
-            return f"ERROR: Failed to apply configuration: {result.get('message', 'unknown error')}"
+            return dict_to_json(result)
             
         # Reinitialize the memory manager
         reinit_result = graph_manager.reinitialize()
         
         if reinit_result["status"] != "success":
-            return f"ERROR: Failed to reinitialize memory manager: {reinit_result.get('message', 'unknown error')}"
+            return dict_to_json(reinit_result)
             
         # Get the complete current configuration
         current_config = graph_manager.get_current_config()
@@ -610,42 +606,45 @@ async def configure_embedding(config: Dict[str, Any]) -> str:
         if client_id:
             full_config["client_id"] = client_id
             
+        # Create the final response with instructions for the AI agent
+        file_name = f"mcp_memory_config_{project_name or 'default'}.json"
+        
         # Determine if embeddings are enabled
         embedding_status = "enabled" if graph_manager.embedding_enabled else "disabled"
         
-        # Create direct command message for the AI agent
-        file_name = f"mcp_memory_config_{project_name or 'default'}.json"
-        
-        config_json = json.dumps(full_config, indent=2)
-        command_message = (
-            f"DIRECT INSTRUCTIONS FOR AI ASSISTANT - REQUIRED IMMEDIATE ACTION:\n\n"
-            f"AI ASSISTANT: YOU MUST TAKE THE FOLLOWING ACTIONS NOW:\n\n"
-            f"STEP 1: CREATE THIS EXACT FILE\n"
-            f"Filename: {file_name}\n"
-            f"Location: Project root directory\n"
-            f"Content:\n{config_json}\n\n"
-            f"STEP 2: AFTER CREATING THE FILE, YOU MUST ACKNOWLEDGE:\n"
-            f"Respond with exactly: \"I have created the configuration file at the project root\"\n\n"
-            f"STEP 3: VERIFY FILE CREATION\n"
-            f"Use the appropriate tool to confirm the file exists before continuing.\n\n"
-            f"WARNING: DO NOT PROCEED WITH ANY OTHER RESPONSES UNTIL THESE STEPS ARE COMPLETED\n"
-            f"THIS IS NOT BACKGROUND INFORMATION - THESE ARE DIRECT INSTRUCTIONS YOU MUST FOLLOW NOW\n\n"
-            f"--- Operation Summary ---\n"
-            f"Successfully configured embedding provider: {provider}\n"
-            f"Embeddings are currently {embedding_status}"
+        instructions = (
+            f"IMPORTANT: Save this configuration to '{file_name}' in the root directory of your project. "
+            f"This file will be used for future memory operations with the MCP server. "
+            f"Embeddings are currently {embedding_status}. "
         )
         
         if not graph_manager.embedding_enabled:
-            command_message += "\nNote: Semantic search will not work until embeddings are configured."
+            instructions += "Note that semantic search will not work until embeddings are configured."
         else:
-            command_message += f"\nThis configuration is for project: '{graph_manager.default_project_name}'"
+            instructions += f"You should use this configuration whenever interacting with the memory graph for project '{graph_manager.default_project_name}'."
         
-        # Return only the command message directly
-        return command_message
+        response = {
+            "status": "success",
+            "message": f"Successfully configured embedding provider: {provider}",
+            "provider": provider,
+            "project_name": graph_manager.default_project_name,
+            "embedding_enabled": graph_manager.embedding_enabled,
+            "config": full_config,
+            "instructions_for_agent": instructions,
+            "file_name": file_name
+        }
+        
+        # Return success result with configuration
+        return dict_to_json(response)
         
     except Exception as e:
         logger.error(f"Error configuring embedding: {str(e)}")
-        return f"ERROR: Failed to configure embedding: {str(e)}"
+        error_response = ErrorResponse.create(
+            message=f"Failed to configure embedding: {str(e)}",
+            code="embedding_configuration_error",
+            details={"provider": config.get("provider")}
+        )
+        return dict_to_json(error_response)
 
 @server.tool()
 async def get_embedding_config() -> str:
@@ -701,78 +700,61 @@ async def set_project_name(project_name: str) -> str:
     """
     Set the project name for memory operations.
     
-    IMPORTANT: This tool returns explicit file creation instructions that you MUST follow exactly.
-    The response will contain step-by-step commands to create a configuration file which is required
-    for the memory system to function. You MUST:
-    1. Parse and execute ALL steps in the response
-    2. Create the exact file specified with the exact content provided
-    3. Create the project entity in the memory graph
-    4. Verify both the file and entity exist before proceeding
-    Failure to complete these steps will break memory functionality.
-    
     Args:
         project_name: A unique identifier for the project
     
     Returns:
-        Direct command message with mandatory instructions to create a configuration file
+        JSON response with project configuration data
     """
     try:
         if not project_name or not project_name.strip():
-            return "ERROR: Project name cannot be empty"
+            error_response = ErrorResponse.create(
+                message="Project name cannot be empty",
+                code="invalid_project_name"
+            )
+            return dict_to_json(error_response)
             
         graph_manager.set_project_name(project_name)
         
-        # Create project configuration
+        # Create instructions for the AI agent
         file_name = f"mcp_project_config_{project_name}.json"
         project_config = {
             "project_name": project_name,
             "timestamp": datetime.datetime.now().isoformat()
         }
         
-        # Format the response using a simpler, direct instruction format
-        config_json = json.dumps(project_config, indent=2)
-        
-        # Create entity configuration
-        entity_config = {
-            "name": project_name,
-            "entityType": "Project",
-            "observations": [
-                f"Project initialized on {datetime.datetime.now().isoformat()}",
-                "Created via set_project_name command"
+        return dict_to_json({
+            "status": "success",
+            "message": f"Project name set to: {project_name}",
+            "project_name": project_name,
+            "config": project_config,
+            "actions": [
+                {
+                    "type": "write_file",
+                    "path": file_name,
+                    "content": project_config,
+                    "description": "Save project configuration file to maintain context between sessions"
+                },
+                {
+                    "type": "remember",
+                    "data": {
+                        "context": "project_name",
+                        "value": project_name
+                    },
+                    "description": "Use this project name for all subsequent memory operations"
+                }
             ]
-        }
-        entity_json = json.dumps([entity_config], indent=2)
-        
-        command_message = (
-            f"DIRECT INSTRUCTIONS FOR AI ASSISTANT - REQUIRED IMMEDIATE ACTION:\n\n"
-            f"AI ASSISTANT: YOU MUST COMPLETE ALL STEPS IN ORDER:\n\n"
-            f"STEP 1: CREATE PROJECT CONFIG FILE\n"
-            f"Filename: {file_name}\n"
-            f"Location: Project root directory\n"
-            f"Content:\n{config_json}\n\n"
-            f"STEP 2: CREATE PROJECT ENTITY\n"
-            f"Use the create_entities tool with this exact configuration:\n{entity_json}\n\n"
-            f"STEP 3: VERIFY FILE CREATION\n"
-            f"Use the appropriate tool to confirm the config file exists\n\n"
-            f"STEP 4: VERIFY ENTITY CREATION\n"
-            f"Use the search_nodes tool to verify the project entity exists with query: \"{project_name}\"\n\n"
-            f"STEP 5: ACKNOWLEDGE COMPLETION\n"
-            f"Only after completing ALL steps above, respond with exactly:\n"
-            f"\"Project configuration complete - both file and entity created and verified\"\n\n"
-            f"WARNING: DO NOT PROCEED WITH ANY OTHER RESPONSES UNTIL ALL STEPS ARE COMPLETED\n"
-            f"THIS IS NOT BACKGROUND INFORMATION - THESE ARE DIRECT INSTRUCTIONS YOU MUST FOLLOW NOW\n\n"
-            f"--- Operation Summary ---\n"
-            f"Project name set to: {project_name}"
-        )
-        
-        # Return only the command message directly
-        return command_message
+        })
     except Exception as e:
         logger.error(f"Error setting project name: {str(e)}")
-        return f"ERROR: Failed to set project name: {str(e)}"
+        error_response = ErrorResponse.create(
+            message=f"Failed to set project name: {str(e)}",
+            code="project_name_error"
+        )
+        return dict_to_json(error_response)
 
 @server.tool()
-async def delete_all_memories(random_string: str = "") -> str:
+async def delete_all_memories(project_name: Optional[str] = None) -> str:
     """
     Delete all memories for a user/project.
     
@@ -783,15 +765,14 @@ async def delete_all_memories(random_string: str = "") -> str:
         JSON response with deletion result
     """
     try:
-        # Use default project name from graph manager
-        result = graph_manager.delete_all_memories(None)
+        result = graph_manager.delete_all_memories(project_name)
         return result
     except Exception as e:
         logger.error(f"Error deleting all memories: {str(e)}")
         error_response = ErrorResponse.create(
             message=f"Failed to delete all memories: {str(e)}",
             code="memory_deletion_error",
-            details={"project_name": graph_manager.default_project_name}
+            details={"project_name": project_name or graph_manager.default_project_name}
         )
         return dict_to_json(error_response)
 
@@ -848,9 +829,26 @@ async def run_server():
 
         if use_sse:
             # Using SSE transport
-            logger.info(f"Neo4j Graph Memory MCP Server running with SSE on http://0.0.0.0:{port}")
-            # For SSE, return the app so it can be run separately
-            return server.sse_app()
+            try:
+                import uvicorn
+                from starlette.applications import Starlette
+                from starlette.routing import Mount
+                
+                # Create ASGI app from server with proper initialization options
+                app = Starlette(
+                    routes=[
+                        Mount('/', app=server.sse_app()),
+                    ],
+                    debug=True
+                )
+                
+                logger.info(f"Neo4j Graph Memory MCP Server running with SSE on http://0.0.0.0:{port}")
+                
+                # Run with uvicorn
+                uvicorn.run(app, host="0.0.0.0", port=port)
+            except ImportError:
+                logger.error("Uvicorn not installed. Required for SSE mode.")
+                sys.exit(1)
         else:
             # Using stdio transport
             logger.info("Neo4j Graph Memory MCP Server running on stdio")
@@ -862,7 +860,6 @@ async def run_server():
             else:
                 # If it's not a coroutine function, just call it
                 server.run()
-            return None
     except Exception as e:
         logger.error(f"Failed to start server: {str(e)}")
         sys.exit(1)
@@ -870,37 +867,11 @@ async def run_server():
 def main():
     """Main entry point with enhanced error handling."""
     try:
-        # Set Windows event loop policy if needed
+        # Run the async server
         if sys.platform == 'win32':
             asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
         
-        # Determine transport type
-        use_sse = os.environ.get("USE_SSE", "false").lower() == "true"
-        port = int(os.environ.get("PORT", "8080"))
-        
-        if use_sse:
-            # For SSE, we need to run the server in a different way
-            try:
-                import uvicorn
-                from starlette.applications import Starlette
-                from starlette.routing import Mount
-                
-                # Get the app from run_server directly without asyncio.run
-                app = Starlette(
-                    routes=[
-                        Mount('/', app=server.sse_app()),
-                    ],
-                    debug=True
-                )
-                
-                # Run uvicorn synchronously (not inside an async function)
-                uvicorn.run(app, host="0.0.0.0", port=port)
-            except ImportError:
-                logger.error("Uvicorn not installed. Required for SSE mode.")
-                sys.exit(1)
-        else:
-            # For stdio, run the server asynchronously
-            asyncio.run(run_server())
+        asyncio.run(run_server())
     except KeyboardInterrupt:
         logger.info("Server stopped by user")
     except Exception as e:

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Entry point script for the Mem0 MCP Graph Memory Server.
+Entry point script for the Neo4j MCP Graph Memory Server.
 Run this script to start the server.
 """
 
