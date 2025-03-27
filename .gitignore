@@ -137,3 +137,6 @@ dist
 
 # Private individual user cursor rules
 .cursor/rules/_*.mdc
+*memory.json
+__pycache__/
+src/__pycache__/

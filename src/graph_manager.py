@@ -857,12 +857,12 @@ class GraphMemoryManager:
                 # Fallback to basic text search if embeddings are not enabled
                 self.logger.info("Using basic text search (embeddings disabled)")
                 
-                # Use basic text matching in Cypher
+                # Use basic text matching in Cypher with correct relationship pattern
                 text_query = """
                 MATCH (e:Entity)
                 WHERE e.name CONTAINS $search_text OR e.entityType CONTAINS $search_text
                 WITH e
-                MATCH (e)<-[:DESCRIBES]-(o:Observation)
+                OPTIONAL MATCH (e)-[:HAS_OBSERVATION]->(o:Observation)
                 WITH e, collect(o.content) as observations
                 RETURN e.name as name, e.entityType as entityType, observations
                 LIMIT $limit
