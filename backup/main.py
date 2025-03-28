@@ -13,7 +13,7 @@ from mcp.server.models import InitializationOptions
 from mcp.types import TextContent, PromptMessage
 from pydantic import BaseModel, Field
 
-from src.graph_manager import GraphMemoryManager
+from src.legacy_graph_manager import GraphMemoryManager
 from src.logger import LogLevel, get_logger
 from src.utils import dict_to_json, dump_neo4j_nodes
 

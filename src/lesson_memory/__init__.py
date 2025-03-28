@@ -65,9 +65,9 @@ class LessonMemoryManager:
         """Delete a lesson container and optionally its contents."""
         return self.container.delete_container(name, delete_contents)
     
-    def list_containers(self, sort_by: str = "name", limit: int = 100) -> str:
+    def list_containers(self, limit: int = 100, sort_by: str = "created") -> str:
         """List all lesson containers."""
-        return self.container.list_containers(sort_by, limit)
+        return self.container.list_containers(limit, sort_by)
     
     def add_entity_to_container(self, container_name: str, entity_name: str) -> str:
         """Add an entity to a lesson container."""
@@ -78,22 +78,18 @@ class LessonMemoryManager:
         return self.container.remove_entity_from_container(container_name, entity_name)
     
     def get_container_entities(self, container_name: str, 
-                            entity_type: Optional[str] = None) -> str:
+                            entity_type: Optional[str] = None,
+                            limit: int = 100) -> str:
         """Get all entities in a container."""
-        return self.container.get_container_entities(container_name, entity_type)
+        return self.container.get_container_entities(container_name, entity_type, limit)
     
     # Lesson Entity Operations
-    def create_lesson_entity(self, name: str, content: str, 
-                          entity_type: str = "Lesson",
-                          container_name: Optional[str] = None,
-                          context: Optional[str] = None,
-                          confidence: float = 0.5,
-                          metadata: Optional[Dict[str, Any]] = None,
-                          observations: Optional[Dict[str, Any]] = None) -> str:
+    def create_lesson_entity(self, container_name: str, entity_name: str, entity_type: str,
+                          observations: Optional[List[str]] = None,
+                          metadata: Optional[Dict[str, Any]] = None) -> str:
         """Create a new lesson entity."""
-        return self.entity.create_lesson_entity(name, content, entity_type,
-                                            container_name, context, confidence,
-                                            metadata, observations)
+        return self.entity.create_lesson_entity(container_name, entity_name, entity_type,
+                                             observations, metadata)
     
     def get_lesson_entity(self, entity_name: str, 
                        container_name: Optional[str] = None) -> str:
@@ -108,10 +104,10 @@ class LessonMemoryManager:
     
     def delete_lesson_entity(self, entity_name: str, 
                           container_name: Optional[str] = None,
-                          only_remove_from_container: bool = False) -> str:
+                          remove_from_container_only: bool = False) -> str:
         """Delete a lesson entity or remove it from a container."""
         return self.entity.delete_lesson_entity(entity_name, container_name, 
-                                            only_remove_from_container)
+                                            remove_from_container_only)
     
     def tag_lesson_entity(self, entity_name: str, tags: List[str],
                        container_name: Optional[str] = None) -> str:
@@ -167,21 +163,21 @@ class LessonMemoryManager:
         """Create a supersedes relationship between lesson versions."""
         return self.relation.create_supersedes_relation(new_version, old_version)
     
-    def track_lesson_application(self, lesson_name: str, target_context: str,
-                              success_score: float,
-                              application_notes: Optional[str] = None) -> str:
+    def track_lesson_application(self, lesson_name: str, context_entity: str,
+                              application_notes: Optional[str] = None,
+                              success_score: Optional[float] = None) -> str:
         """Track the application of a lesson to a specific context."""
-        return self.relation.track_lesson_application(lesson_name, target_context,
-                                                  success_score, application_notes)
+        return self.relation.track_lesson_application(lesson_name, context_entity,
+                                                  application_notes, success_score)
     
     # Lesson Observation Operations
     def add_lesson_observation(self, entity_name: str, 
-                            observation_type: str,
                             content: str,
+                            observation_type: str,
                             container_name: Optional[str] = None) -> str:
         """Add a structured observation to a lesson entity."""
-        return self.observation.add_lesson_observation(entity_name, observation_type,
-                                                   content, container_name)
+        return self.observation.add_lesson_observation(entity_name, content, observation_type,
+                                                   container_name)
     
     def get_lesson_observations(self, entity_name: str,
                              observation_type: Optional[str] = None,
@@ -203,10 +199,20 @@ class LessonMemoryManager:
         return self.observation.delete_lesson_observation(entity_name, observation_id)
     
     def create_structured_lesson_observations(self, entity_name: str,
-                                           observations: Dict[str, str],
+                                           what_was_learned: Optional[str] = None,
+                                           why_it_matters: Optional[str] = None,
+                                           how_to_apply: Optional[str] = None,
+                                           root_cause: Optional[str] = None,
+                                           evidence: Optional[str] = None,
                                            container_name: Optional[str] = None) -> str:
         """Create all structured observations for a lesson entity at once."""
-        return self.observation.create_structured_lesson_observations(entity_name, observations, container_name)
+        return self.observation.create_structured_lesson_observations(entity_name, 
+                                                                   what_was_learned,
+                                                                   why_it_matters,
+                                                                   how_to_apply,
+                                                                   root_cause,
+                                                                   evidence,
+                                                                   container_name)
     
     def check_observation_completeness(self, entity_name: str) -> str:
         """Check which structured observation types are present for a lesson entity."""

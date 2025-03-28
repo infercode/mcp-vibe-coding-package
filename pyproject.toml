@@ -19,6 +19,9 @@ python-dotenv = "^1.1.0"
 
 [tool.poetry.extras]
 
+[tool.poetry.group.dev.dependencies]
+flake8 = "^7.1.2"
+
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
 build-backend = "poetry.core.masonry.api"

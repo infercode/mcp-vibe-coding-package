@@ -1,13 +1,12 @@
 import os
 import time
-import traceback
-from typing import Any, Dict, List, Optional, Tuple, Union, cast
+import json
+from typing import Any, Dict, List, Optional, Tuple, cast
 from typing_extensions import LiteralString
-from neo4j import GraphDatabase
+from neo4j import GraphDatabase, Session, Transaction
 
 from src.logger import Logger, get_logger
 from src.embedding_manager import LiteLLMEmbeddingManager
-from src.utils import extract_error
 
 class BaseManager:
     """Base manager for Neo4j graph database connections and core functionality."""
