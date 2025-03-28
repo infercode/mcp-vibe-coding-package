@@ -804,6 +804,453 @@ async def delete_all_memories(random_string: str = "") -> str:
         return dict_to_json(error_response)
 
 @server.tool()
+async def create_lesson_container() -> str:
+    """
+    Create a lessons container in the knowledge graph.
+    
+    This container serves as a central hub for organizing all lessons in the system.
+    
+    Returns:
+        JSON response with operation result
+    """
+    logger.debug("Creating lesson container")
+    
+    try:
+        result = graph_manager.create_lesson_container()
+        logger.debug("Lesson container creation completed")
+        return result
+    except Exception as e:
+        logger.error(f"Error creating lesson container: {str(e)}", exc_info=True)
+        error_response = ErrorResponse.create(
+            message=f"Error creating lesson container: {str(e)}",
+            code="lesson_container_creation_error"
+        )
+        return dict_to_json(error_response)
+
+@server.tool()
+async def create_lesson(
+    name: str,
+    problem_description: str,
+    context: Optional[str] = None,
+    impact: str = "Medium",
+    resolution: Optional[str] = None,
+    what_was_learned: Optional[str] = None,
+    why_it_matters: Optional[str] = None,
+    how_to_apply: Optional[str] = None,
+    root_cause: Optional[str] = None,
+    evidence: Optional[str] = None,
+    originated_from: Optional[str] = None,
+    solved_with: Optional[str] = None,
+    prevents: Optional[str] = None,
+    builds_on: Optional[str] = None,
+    applies_to: Optional[str] = None,
+    confidence: float = 0.8,
+    source: str = "Manual"
+) -> str:
+    """
+    Create a new lesson in the knowledge graph.
+    
+    Args:
+        name: Unique identifier for the lesson
+        problem_description: Description of the problem or scenario
+        context: The context in which the lesson was learned
+        impact: Impact level (Low, Medium, High)
+        resolution: How the problem was resolved
+        what_was_learned: Key takeaways from the experience
+        why_it_matters: Why this lesson is important
+        how_to_apply: How to apply this lesson in the future
+        root_cause: The underlying cause of the problem
+        evidence: Supporting evidence or examples
+        originated_from: Entity that the lesson originated from
+        solved_with: Entity that helped solve the problem
+        prevents: Issue that this lesson helps prevent
+        builds_on: Lesson that this one builds upon
+        applies_to: Context where this lesson applies
+        confidence: Confidence level in this lesson (0.0-1.0)
+        source: Source of the lesson (Manual, Automated, etc.)
+    
+    Returns:
+        JSON response with operation result
+    """
+    logger.debug(f"Creating lesson: {name}")
+    
+    try:
+        result = graph_manager.create_lesson(
+            name=name,
+            problem_description=problem_description,
+            context=context,
+            impact=impact,
+            resolution=resolution,
+            what_was_learned=what_was_learned,
+            why_it_matters=why_it_matters,
+            how_to_apply=how_to_apply,
+            root_cause=root_cause,
+            evidence=evidence,
+            originated_from=originated_from,
+            solved_with=solved_with,
+            prevents=prevents,
+            builds_on=builds_on,
+            applies_to=applies_to,
+            confidence=confidence,
+            source=source
+        )
+        logger.debug(f"Lesson creation completed: {name}")
+        return result
+    except Exception as e:
+        logger.error(f"Error creating lesson: {str(e)}", exc_info=True)
+        error_response = ErrorResponse.create(
+            message=f"Error creating lesson: {str(e)}",
+            code="lesson_creation_error",
+            details={"lesson_name": name}
+        )
+        return dict_to_json(error_response)
+
+@server.tool()
+async def get_lessons(
+    filter_criteria: Optional[Dict[str, Any]] = None,
+    related_to: Optional[str] = None,
+    applies_to: Optional[str] = None,
+    limit: int = 50,
+    include_superseded: bool = False,
+    min_confidence: float = 0.0,
+    sort_by: str = "relevance",
+    include_observations: bool = True
+) -> str:
+    """
+    Retrieve lessons from the knowledge graph based on various criteria.
+    
+    Args:
+        filter_criteria: Dictionary of property-value pairs to filter lessons
+        related_to: Entity name that lessons should be related to
+        applies_to: Context that lessons should apply to
+        limit: Maximum number of lessons to return
+        include_superseded: Whether to include superseded lessons
+        min_confidence: Minimum confidence threshold (0.0-1.0)
+        sort_by: How to sort results ("relevance", "confidence", "date")
+        include_observations: Whether to include detailed observations
+    
+    Returns:
+        JSON string with matching lessons
+    """
+    logger.debug("Retrieving lessons", context={
+        "filter_criteria": filter_criteria,
+        "related_to": related_to,
+        "limit": limit
+    })
+    
+    try:
+        result = graph_manager.get_lessons(
+            filter_criteria=filter_criteria,
+            related_to=related_to,
+            applies_to=applies_to,
+            limit=limit,
+            include_superseded=include_superseded,
+            min_confidence=min_confidence,
+            sort_by=sort_by,
+            include_observations=include_observations
+        )
+        
+        try:
+            result_json = json.loads(result)
+            lesson_count = len(result_json.get("lessons", []))
+            logger.debug(f"Retrieved {lesson_count} lessons")
+        except json.JSONDecodeError:
+            logger.warn(f"Could not parse get_lessons result as JSON")
+            
+        return result
+    except Exception as e:
+        logger.error(f"Error retrieving lessons: {str(e)}", exc_info=True)
+        error_response = ErrorResponse.create(
+            message=f"Error retrieving lessons: {str(e)}",
+            code="lesson_retrieval_error",
+            details={
+                "filter_criteria": filter_criteria,
+                "related_to": related_to
+            }
+        )
+        return dict_to_json(error_response)
+
+@server.tool()
+async def update_lesson(
+    lesson_name: str,
+    updated_properties: Optional[Dict[str, Any]] = None,
+    updated_observations: Optional[Dict[str, str]] = None,
+    new_relationships: Optional[Dict[str, List[str]]] = None,
+    update_confidence: bool = True
+) -> str:
+    """
+    Update an existing lesson in the knowledge graph.
+    
+    Args:
+        lesson_name: Name of the lesson to update
+        updated_properties: Dictionary of properties to update
+        updated_observations: Dictionary of observation types and their new content
+        new_relationships: Dictionary of relationship types and target entity names
+        update_confidence: Whether to automatically adjust confidence
+    
+    Returns:
+        JSON response with operation result
+    """
+    logger.debug(f"Updating lesson: {lesson_name}")
+    
+    try:
+        result = graph_manager.update_lesson(
+            lesson_name=lesson_name,
+            updated_properties=updated_properties,
+            updated_observations=updated_observations,
+            new_relationships=new_relationships,
+            update_confidence=update_confidence
+        )
+        logger.debug(f"Lesson update completed: {lesson_name}")
+        return result
+    except Exception as e:
+        logger.error(f"Error updating lesson: {str(e)}", exc_info=True)
+        error_response = ErrorResponse.create(
+            message=f"Error updating lesson: {str(e)}",
+            code="lesson_update_error",
+            details={"lesson_name": lesson_name}
+        )
+        return dict_to_json(error_response)
+
+@server.tool()
+async def apply_lesson_to_context(
+    lesson_name: str,
+    context_entity: str,
+    application_notes: Optional[str] = None,
+    success_score: Optional[float] = None
+) -> str:
+    """
+    Apply a lesson to a specific context entity.
+    
+    This creates an APPLIES_TO relationship between the lesson and the context,
+    optionally with notes about the application and a success score.
+    
+    Args:
+        lesson_name: Name of the lesson to apply
+        context_entity: Name of the entity to apply the lesson to
+        application_notes: Notes about how the lesson was applied
+        success_score: Score indicating how successful the application was (0.0-1.0)
+    
+    Returns:
+        JSON response with operation result
+    """
+    logger.debug(f"Applying lesson {lesson_name} to context {context_entity}")
+    
+    try:
+        result = graph_manager.apply_lesson_to_context(
+            lesson_name=lesson_name,
+            context_entity=context_entity,
+            application_notes=application_notes,
+            success_score=success_score
+        )
+        logger.debug(f"Lesson application completed")
+        return result
+    except Exception as e:
+        logger.error(f"Error applying lesson to context: {str(e)}", exc_info=True)
+        error_response = ErrorResponse.create(
+            message=f"Error applying lesson to context: {str(e)}",
+            code="lesson_application_error",
+            details={
+                "lesson_name": lesson_name,
+                "context_entity": context_entity
+            }
+        )
+        return dict_to_json(error_response)
+
+@server.tool()
+async def extract_potential_lessons(
+    conversation_text: Optional[str] = None,
+    code_diff: Optional[str] = None,
+    issue_description: Optional[str] = None,
+    error_logs: Optional[str] = None,
+    min_confidence: float = 0.6
+) -> str:
+    """
+    Extract potential lessons from various sources of information.
+    
+    Args:
+        conversation_text: Text from a conversation to analyze
+        code_diff: Code changes to analyze
+        issue_description: Description of an issue to analyze
+        error_logs: Error logs to analyze
+        min_confidence: Minimum confidence threshold for extracted lessons (0.0-1.0)
+    
+    Returns:
+        JSON string with extracted potential lessons
+    """
+    logger.debug("Extracting potential lessons")
+    
+    try:
+        result = graph_manager.extract_potential_lessons(
+            conversation_text=conversation_text,
+            code_diff=code_diff,
+            issue_description=issue_description,
+            error_logs=error_logs,
+            min_confidence=min_confidence
+        )
+        
+        try:
+            result_json = json.loads(result)
+            lesson_count = len(result_json.get("potential_lessons", []))
+            logger.debug(f"Extracted {lesson_count} potential lessons")
+        except json.JSONDecodeError:
+            logger.warn(f"Could not parse extract_potential_lessons result as JSON")
+            
+        return result
+    except Exception as e:
+        logger.error(f"Error extracting potential lessons: {str(e)}", exc_info=True)
+        error_response = ErrorResponse.create(
+            message=f"Error extracting potential lessons: {str(e)}",
+            code="lesson_extraction_error"
+        )
+        return dict_to_json(error_response)
+
+@server.tool()
+async def consolidate_related_lessons(
+    lesson_ids: List[str],
+    new_name: Optional[str] = None,
+    strategy: str = "merge",
+    confidence_handling: str = "max"
+) -> str:
+    """
+    Consolidate multiple related lessons into a single lesson.
+    
+    Args:
+        lesson_ids: List of lesson names to consolidate
+        new_name: Name for the consolidated lesson (default: auto-generated)
+        strategy: Consolidation strategy ("merge", "supersede", "reference")
+        confidence_handling: How to handle confidence scores ("max", "min", "avg")
+    
+    Returns:
+        JSON response with operation result
+    """
+    logger.debug(f"Consolidating {len(lesson_ids)} lessons", context={"strategy": strategy})
+    
+    try:
+        result = graph_manager.consolidate_related_lessons(
+            lesson_ids=lesson_ids,
+            new_name=new_name,
+            strategy=strategy,
+            confidence_handling=confidence_handling
+        )
+        logger.debug(f"Lesson consolidation completed")
+        return result
+    except Exception as e:
+        logger.error(f"Error consolidating lessons: {str(e)}", exc_info=True)
+        error_response = ErrorResponse.create(
+            message=f"Error consolidating lessons: {str(e)}",
+            code="lesson_consolidation_error",
+            details={"lesson_count": len(lesson_ids)}
+        )
+        return dict_to_json(error_response)
+
+@server.tool()
+async def get_knowledge_evolution(
+    entity_name: Optional[str] = None,
+    lesson_type: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    include_superseded: bool = True
+) -> str:
+    """
+    Track how knowledge has evolved over time.
+    
+    Args:
+        entity_name: Name of the entity to track
+        lesson_type: Type of lessons to track
+        start_date: Start date for the evolution timeline (ISO format)
+        end_date: End date for the evolution timeline (ISO format)
+        include_superseded: Whether to include superseded knowledge
+    
+    Returns:
+        JSON string with knowledge evolution data
+    """
+    logger.debug("Retrieving knowledge evolution", context={
+        "entity_name": entity_name,
+        "start_date": start_date,
+        "end_date": end_date
+    })
+    
+    try:
+        result = graph_manager.get_knowledge_evolution(
+            entity_name=entity_name,
+            lesson_type=lesson_type,
+            start_date=start_date,
+            end_date=end_date,
+            include_superseded=include_superseded
+        )
+        
+        try:
+            result_json = json.loads(result)
+            timeline_entries = len(result_json.get("timeline", []))
+            logger.debug(f"Retrieved {timeline_entries} timeline entries")
+        except json.JSONDecodeError:
+            logger.warn(f"Could not parse get_knowledge_evolution result as JSON")
+            
+        return result
+    except Exception as e:
+        logger.error(f"Error retrieving knowledge evolution: {str(e)}", exc_info=True)
+        error_response = ErrorResponse.create(
+            message=f"Error retrieving knowledge evolution: {str(e)}",
+            code="knowledge_evolution_error",
+            details={"entity_name": entity_name}
+        )
+        return dict_to_json(error_response)
+
+@server.tool()
+async def query_across_contexts(
+    query_text: str,
+    containers: Optional[List[str]] = None,
+    confidence_threshold: float = 0.0,
+    relevance_threshold: float = 0.0,
+    limit_per_container: int = 10
+) -> str:
+    """
+    Search for knowledge across multiple containers and contexts.
+    
+    Args:
+        query_text: The search query
+        containers: List of container names to search in
+        confidence_threshold: Minimum confidence level for results (0.0-1.0)
+        relevance_threshold: Minimum relevance score for results (0.0-1.0)
+        limit_per_container: Maximum results to return per container
+    
+    Returns:
+        JSON string with search results across contexts
+    """
+    logger.debug(f"Querying across contexts: '{query_text}'", context={
+        "containers": containers,
+        "limit_per_container": limit_per_container
+    })
+    
+    try:
+        result = graph_manager.query_across_contexts(
+            query_text=query_text,
+            containers=containers,
+            confidence_threshold=confidence_threshold,
+            relevance_threshold=relevance_threshold,
+            limit_per_container=limit_per_container
+        )
+        
+        try:
+            result_json = json.loads(result)
+            container_count = len(result_json.get("containers", []))
+            total_results = sum(len(container.get("results", [])) for container in result_json.get("containers", []))
+            logger.debug(f"Search completed across {container_count} containers, found {total_results} total results")
+        except json.JSONDecodeError:
+            logger.warn(f"Could not parse query_across_contexts result as JSON")
+            
+        return result
+    except Exception as e:
+        logger.error(f"Error querying across contexts: {str(e)}", exc_info=True)
+        error_response = ErrorResponse.create(
+            message=f"Error querying across contexts: {str(e)}",
+            code="cross_context_query_error",
+            details={"query_text": query_text}
+        )
+        return dict_to_json(error_response)
+
+@server.tool()
 async def debug_dump_neo4j(limit: int = 100) -> str:
     """
     Dump Neo4j nodes and relationships for debugging.

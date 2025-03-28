@@ -4,12 +4,26 @@ import time
 import traceback
 import datetime
 from typing import List, Dict, Any, Optional, Union, cast, TYPE_CHECKING
+from typing_extensions import LiteralString
 from neo4j import GraphDatabase
 
 from src.types import Entity, KnowledgeGraph, Observation, Relation
 from src.utils import dict_to_json, extract_error, generate_id
 from src.embedding_manager import LiteLLMEmbeddingManager
 from src.logger import Logger, get_logger
+
+"""
+NOTE: Due to type checking requirements in the Neo4j Python driver, query strings passed to
+the execute_query method must be of type LiteralString (not just regular str).
+To handle this properly:
+1. Use the _safe_execute_query helper method to execute all Neo4j queries
+2. The helper method:
+   - Casts query strings to LiteralString to satisfy type checking
+   - Handles float parameters by converting them to strings
+   - Provides consistent error handling
+
+This approach avoids linter errors related to string types and parameter type mismatches.
+"""
 
 
 class GraphMemoryManager:
@@ -2164,7 +2178,7 @@ class GraphMemoryManager:
                 """
             
             # Execute the query
-            result = self.neo4j_driver.execute_query(
+            result = self._safe_execute_query(
                 query,
                 parameters_=params,
                 database_=self.neo4j_database
@@ -2597,12 +2611,12 @@ class GraphMemoryManager:
                 
             if success_score is not None:
                 application_query += ", r.success_score = $score"
-                params["score"] = success_score
+                params["score"] = str(success_score)  # Convert float to string
                 
             application_query += " RETURN r"
             
             # Create the relationship
-            application_result = self.neo4j_driver.execute_query(
+            application_result = self._safe_execute_query(
                 application_query,
                 parameters_=params,
                 database_=self.neo4j_database
@@ -2630,9 +2644,9 @@ class GraphMemoryManager:
             }
             
             if success_score is not None:
-                update_params["score"] = success_score
+                update_params["score"] = str(success_score)  # Convert float to string
                 
-            self.neo4j_driver.execute_query(
+            self._safe_execute_query(
                 update_lesson_query,
                 parameters_=update_params,
                 database_=self.neo4j_database
@@ -2865,3 +2879,776 @@ class GraphMemoryManager:
                 lessons.append(lesson)
         
         return lessons
+    
+    def consolidate_related_lessons(
+        self,
+        lesson_ids: List[str],
+        new_name: Optional[str] = None,
+        strategy: str = "merge",
+        confidence_handling: str = "max"
+    ) -> str:
+        """
+        Combine several related lessons into a more comprehensive one.
+        
+        Args:
+            lesson_ids: List of lessons to consolidate
+            new_name: Name for consolidated lesson (auto-generated if None)
+            strategy: How to combine content ('merge', 'summarize')
+            confidence_handling: How to set confidence ('max', 'avg', 'weighted')
+            
+        Returns:
+            JSON string with result information
+        """
+        try:
+            self._ensure_initialized()
+            
+            if not self.neo4j_driver:
+                return dict_to_json({
+                    "status": "error",
+                    "message": "Neo4j driver not initialized"
+                })
+                
+            if not lesson_ids or len(lesson_ids) < 2:
+                return dict_to_json({
+                    "status": "error",
+                    "message": "At least two lesson IDs are required for consolidation"
+                })
+            
+            # Retrieve all lessons to consolidate
+            lessons_query = """
+            MATCH (l:Lesson)
+            WHERE l.name IN $lesson_ids
+            AND (l.status = 'Active' OR l.status IS NULL)
+            RETURN l
+            """
+            
+            lessons_result = self.neo4j_driver.execute_query(
+                lessons_query,
+                lesson_ids=lesson_ids,
+                database_=self.neo4j_database
+            )
+            
+            lessons_records = lessons_result[0] if lessons_result and len(lessons_result[0]) > 0 else []
+            
+            if not lessons_records:
+                return dict_to_json({
+                    "status": "error",
+                    "message": "No active lessons found with the provided IDs"
+                })
+                
+            if len(lessons_records) < len(lesson_ids):
+                missing_count = len(lesson_ids) - len(lessons_records)
+                self.logger.warn(f"{missing_count} lessons not found or not active")
+            
+            # Extract lesson data from records
+            lessons_data = []
+            for record in lessons_records:
+                lesson = record["l"]
+                lesson_data = {k: v for k, v in lesson.items()}
+                lessons_data.append(lesson_data)
+            
+            # Generate a name for the consolidated lesson if not provided
+            if not new_name:
+                # Use common words from existing lesson names
+                lesson_names = [data.get("name", "").split("_") for data in lessons_data]
+                flattened_names = [word for name_parts in lesson_names for word in name_parts]
+                common_words = [word for word in flattened_names if flattened_names.count(word) > 1 and len(word) > 3]
+                
+                if common_words:
+                    new_name = "Consolidated_" + "_".join(sorted(set(common_words)))[:50]
+                else:
+                    # If no common words, use a generic name with timestamp
+                    timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M")
+                    new_name = f"Consolidated_Lesson_{timestamp}"
+            
+            # Calculate confidence for the consolidated lesson
+            confidences = [float(data.get("confidence", 0.8)) for data in lessons_data]
+            if confidence_handling == "max":
+                calculated_confidence = max(confidences)
+            elif confidence_handling == "avg":
+                calculated_confidence = sum(confidences) / len(confidences)
+            elif confidence_handling == "weighted":
+                # Weight by version number (more refined lessons count more)
+                versions = [int(data.get("version", 1)) for data in lessons_data]
+                calculated_confidence = sum(c * v for c, v in zip(confidences, versions)) / sum(versions)
+            else:
+                calculated_confidence = 0.8  # Default
+            
+            # Combine content based on strategy
+            problem_descriptions = [data.get("problemDescription", "") for data in lessons_data if data.get("problemDescription")]
+            resolutions = [data.get("resolution", "") for data in lessons_data if data.get("resolution")]
+            contexts = [data.get("context", "") for data in lessons_data if data.get("context")]
+            
+            if strategy == "merge":
+                # Combine all content with delimiters
+                combined_description = "\n\n".join(f"• {desc}" for desc in problem_descriptions)
+                combined_resolution = "\n\n".join(f"• {res}" for res in resolutions)
+                combined_context = ", ".join(set(contexts))
+            else:  # summarize strategy - just take the first one for now
+                # In a production system, this would use NLP to create a true summary
+                combined_description = problem_descriptions[0] if problem_descriptions else ""
+                combined_resolution = resolutions[0] if resolutions else ""
+                combined_context = contexts[0] if contexts else ""
+            
+            # Determine impact (highest impact wins)
+            impact_order = {"High": 3, "Medium": 2, "Low": 1}
+            impacts = [data.get("impact", "Medium") for data in lessons_data]
+            highest_impact = max(impacts, key=lambda x: impact_order.get(x, 0))
+            
+            # Create the consolidated lesson
+            create_lesson_query = """
+            CREATE (l:Entity:Lesson {
+              name: $name,
+              entityType: 'Lesson',
+              context: $context,
+              problemDescription: $problem_description,
+              impact: $impact,
+              resolution: $resolution,
+              status: 'Active',
+              version: 1,
+              confidence: $confidence,
+              source: 'Consolidated',
+              created: datetime(),
+              lastRefreshed: datetime()
+            })
+            RETURN l
+            """
+            
+            create_params = {
+                "name": new_name,
+                "context": combined_context,
+                "problem_description": combined_description,
+                "impact": highest_impact,
+                "resolution": combined_resolution,
+                "confidence": calculated_confidence
+            }
+            
+            self.neo4j_driver.execute_query(
+                create_lesson_query,
+                parameters_=create_params,
+                database_=self.neo4j_database
+            )
+            
+            # Add the consolidated lesson to the Lessons container
+            container_query = """
+            MATCH (lc:MemoryContainer {name: 'Lessons', type: 'LessonsContainer'})
+            MATCH (l:Lesson {name: $name})
+            MERGE (lc)-[r:CONTAINS]->(l)
+            ON CREATE SET r.since = datetime()
+            RETURN lc, l
+            """
+            
+            self.neo4j_driver.execute_query(
+                container_query,
+                name=new_name,
+                database_=self.neo4j_database
+            )
+            
+            # Create consolidation relationships
+            for lesson_id in lesson_ids:
+                consolidation_query = """
+                MATCH (master:Lesson {name: $master_name})
+                MATCH (component:Lesson {name: $component_name})
+                MERGE (master)-[r:CONSOLIDATES]->(component)
+                ON CREATE SET r.since = datetime()
+                RETURN r
+                """
+                
+                try:
+                    self.neo4j_driver.execute_query(
+                        consolidation_query,
+                        master_name=new_name,
+                        component_name=lesson_id,
+                        database_=self.neo4j_database
+                    )
+                except Exception as e:
+                    self.logger.warn(f"Failed to create consolidation relationship for {lesson_id}: {str(e)}")
+            
+            # Set component lessons as consolidated
+            update_status_query = """
+            MATCH (master:Lesson {name: $master_name})-[:CONSOLIDATES]->(component:Lesson)
+            SET component.status = 'Consolidated'
+            RETURN count(component) as updated_count
+            """
+            
+            status_result = self.neo4j_driver.execute_query(
+                update_status_query,
+                master_name=new_name,
+                database_=self.neo4j_database
+            )
+            
+            updated_count = 0
+            if status_result and status_result[0]:
+                updated_count = status_result[0][0].get("updated_count", 0)
+            
+            # Collect all observations from component lessons
+            consolidated_observations = {}
+            
+            for lesson_id in lesson_ids:
+                observations_query = """
+                MATCH (l:Lesson {name: $name})-[:HAS_OBSERVATION]->(o:Observation)
+                RETURN o.type as type, o.content as content
+                """
+                
+                obs_result = self.neo4j_driver.execute_query(
+                    observations_query,
+                    name=lesson_id,
+                    database_=self.neo4j_database
+                )
+                
+                if obs_result and obs_result[0]:
+                    for record in obs_result[0]:
+                        obs_type = record.get("type")
+                        content = record.get("content")
+                        
+                        if obs_type and content:
+                            if obs_type not in consolidated_observations:
+                                consolidated_observations[obs_type] = []
+                            consolidated_observations[obs_type].append(content)
+            
+            # Add consolidated observations to the master lesson
+            for obs_type, contents in consolidated_observations.items():
+                if strategy == "merge":
+                    # Combine all contents with delimiters
+                    combined_content = "\n\n".join(f"• {content}" for content in contents)
+                else:  # summarize
+                    # Just take the first one in this simplified implementation
+                    combined_content = contents[0] if contents else ""
+                
+                obs_query = """
+                MATCH (l:Lesson {name: $name})
+                CREATE (o:Observation {
+                    id: $obs_id,
+                    type: $type,
+                    content: $content,
+                    created: datetime()
+                })
+                CREATE (l)-[r:HAS_OBSERVATION]->(o)
+                RETURN o
+                """
+                
+                self.neo4j_driver.execute_query(
+                    obs_query,
+                    name=new_name,
+                    obs_id=generate_id(),
+                    type=obs_type,
+                    content=combined_content,
+                    database_=self.neo4j_database
+                )
+            
+            # Migrate relevant relationships from component lessons to master lesson
+            relationship_types = ["APPLIES_TO", "SOLVED_WITH", "PREVENTS", "BUILDS_ON", "ORIGINATED_FROM"]
+            migrated_relationships = 0
+            
+            for rel_type in relationship_types:
+                migrate_rels_query = f"""
+                MATCH (master:Lesson {{name: $master_name}})
+                MATCH (master)-[:CONSOLIDATES]->(component:Lesson)-[r:{rel_type}]->(target)
+                WHERE NOT EXISTS((master)-[:{rel_type}]->(target))
+                WITH master, target, collect(component.name) as sources
+                MERGE (master)-[new_rel:{rel_type}]->(target)
+                ON CREATE SET new_rel.sources = sources,
+                               new_rel.since = datetime()
+                RETURN count(new_rel) as rel_count
+                """
+                
+                migrate_rels_query_str = cast(LiteralString, migrate_rels_query)  # Cast to LiteralString
+                copy_rel_result = self._safe_execute_query(
+                    migrate_rels_query,
+                    parameters_={"master_name": new_name},
+                    database_=self.neo4j_database
+                )
+                
+                if copy_rel_result and copy_rel_result[0]:
+                    migrated_relationships += copy_rel_result[0][0].get("rel_count", 0)
+            
+            self.logger.info(f"Consolidated {len(lessons_records)} lessons into '{new_name}'")
+            
+            return dict_to_json({
+                "status": "success",
+                "message": f"Successfully consolidated {len(lessons_records)} lessons",
+                "data": {
+                    "name": new_name,
+                    "source_lessons": lesson_ids,
+                    "confidence": calculated_confidence,
+                    "observation_types": list(consolidated_observations.keys()),
+                    "relationships_migrated": migrated_relationships
+                }
+            })
+            
+        except Exception as e:
+            error_info = extract_error(e)
+            self.logger.error(f"Error consolidating lessons: {error_info}")
+            return dict_to_json({
+                "status": "error",
+                "message": f"Failed to consolidate lessons: {error_info}"
+            })
+
+    def get_knowledge_evolution(
+        self,
+        entity_name: Optional[str] = None,
+        lesson_type: Optional[str] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        include_superseded: bool = True
+    ) -> str:
+        """
+        Track how knowledge has evolved over time.
+        
+        Args:
+            entity_name: Entity name to filter lessons by (can be partial)
+            lesson_type: Type of lessons to include
+            start_date: Start date for timeline (ISO format YYYY-MM-DD)
+            end_date: End date for timeline (ISO format YYYY-MM-DD)
+            include_superseded: Whether to include superseded lesson versions
+            
+        Returns:
+            JSON string with timeline of lesson evolution
+        """
+        try:
+            self._ensure_initialized()
+            
+            if not self.neo4j_driver:
+                return dict_to_json({
+                    "status": "error",
+                    "message": "Neo4j driver not initialized"
+                })
+            
+            # Build the query based on provided filters
+            query = """
+            MATCH (lc:MemoryContainer {name: 'Lessons', type: 'LessonsContainer'})-[:CONTAINS]->(l:Lesson)
+            """
+            
+            # Initialize parameters
+            params = {}
+            
+            # Add entity name filter if provided
+            if entity_name:
+                query += """
+                WHERE (l.name CONTAINS $entity_name 
+                       OR l.context CONTAINS $entity_name
+                       OR EXISTS((l)-[:ORIGINATED_FROM]->(:Entity {name: $entity_name}))
+                       OR EXISTS((l)-[:APPLIES_TO]->(:Entity {name: $entity_name})))
+                """
+                params["entity_name"] = entity_name
+            
+            # Add lesson type filter if provided
+            if lesson_type:
+                if entity_name:  # If we already have a WHERE clause
+                    query += " AND "
+                else:
+                    query += " WHERE "
+                
+                query += "(l.entityType = $lesson_type OR l.type = $lesson_type)"
+                params["lesson_type"] = lesson_type
+            
+            # Add date range filters if provided
+            date_filters = []
+            
+            if start_date:
+                date_filters.append("l.created >= datetime($start_date)")
+                params["start_date"] = start_date
+                
+            if end_date:
+                date_filters.append("l.created <= datetime($end_date)")
+                params["end_date"] = end_date
+            
+            if date_filters:
+                if entity_name or lesson_type:  # If we already have a WHERE clause
+                    query += " AND "
+                else:
+                    query += " WHERE "
+                
+                query += "(" + " AND ".join(date_filters) + ")"
+            
+            # Exclude superseded if requested
+            if not include_superseded:
+                if entity_name or lesson_type or date_filters:  # If we already have a WHERE clause
+                    query += " AND "
+                else:
+                    query += " WHERE "
+                
+                query += "(l.status = 'Active' OR l.status IS NULL)"
+            
+            # Add versioning relationships to capture evolution
+            query += """
+            OPTIONAL MATCH version_path = (l)-[:SUPERSEDES*]->(older:Lesson)
+            OPTIONAL MATCH application_path = (l)-[applied:APPLIED_TO]->(context:Entity)
+            OPTIONAL MATCH consolidation_path = (master:Lesson)-[:CONSOLIDATES]->(l)
+            
+            WITH l,
+                 collect(older) as older_versions,
+                 collect(DISTINCT {context: context.name, date: applied.last_applied, count: applied.application_count}) as applications,
+                 collect(DISTINCT master.name) as consolidated_into
+            
+            // Calculate evolution metrics
+            WITH l,
+                 older_versions,
+                 applications,
+                 consolidated_into,
+                 size(older_versions) as version_count,
+                 CASE WHEN l.confidence IS NOT NULL THEN l.confidence ELSE 0.0 END as current_confidence
+                 
+            RETURN l.name as name,
+                   l.created as created,
+                   l.lastRefreshed as last_refreshed,
+                   l.status as status,
+                   l.version as version,
+                   current_confidence as confidence,
+                   CASE WHEN l.relevanceScore IS NOT NULL THEN l.relevanceScore ELSE 0.0 END as relevance,
+                   applications,
+                   version_count,
+                   [v in older_versions | {name: v.name, created: v.created, version: v.version, confidence: v.confidence}] as version_history,
+                   consolidated_into,
+                   l.context as context
+            ORDER BY l.created
+            """
+            
+            # Execute the query
+            result = self._safe_execute_query(
+                query,
+                parameters_=params,
+                database_=self.neo4j_database
+            )
+            
+            # Process results
+            records = result[0] if result and len(result) > 0 else []
+            
+            if not records:
+                return dict_to_json({
+                    "status": "success",
+                    "message": "No knowledge evolution data found for the given parameters",
+                    "data": {
+                        "timeline": []
+                    }
+                })
+            
+            # Process records to build the evolution timeline
+            timeline = []
+            
+            for record in records:
+                # Convert Neo4j data to Python dictionary
+                lesson_data = {}
+                
+                for key in record.keys():
+                    value = record[key]
+                    
+                    # Handle datetime objects
+                    if hasattr(value, 'iso_format'):
+                        lesson_data[key] = value.iso_format()
+                    # Handle non-serializable objects
+                    elif not isinstance(value, (dict, list, str, int, float, bool, type(None))):
+                        lesson_data[key] = str(value)
+                    else:
+                        lesson_data[key] = value
+                
+                # Calculate evolution metrics
+                if "version_history" in lesson_data and lesson_data["version_history"]:
+                    # Convert datetimes in version history
+                    for version in lesson_data["version_history"]:
+                        if "created" in version and hasattr(version["created"], 'iso_format'):
+                            version["created"] = version["created"].iso_format()
+                    
+                    # Calculate confidence evolution
+                    if "confidence" in lesson_data and lesson_data["version_history"][0].get("confidence") is not None:
+                        initial_confidence = float(lesson_data["version_history"][0].get("confidence", 0))
+                        current_confidence = float(lesson_data.get("confidence", 0))
+                        lesson_data["confidence_evolution"] = current_confidence - initial_confidence
+                
+                # Filter out empty applications
+                if "applications" in lesson_data:
+                    lesson_data["applications"] = [app for app in lesson_data["applications"] 
+                                                 if app.get("context") is not None]
+                    
+                    # Convert datetimes in applications
+                    for app in lesson_data["applications"]:
+                        if "date" in app and hasattr(app["date"], 'iso_format'):
+                            app["date"] = app["date"].iso_format()
+                
+                timeline.append(lesson_data)
+            
+            # Add timeline events for key changes
+            events = []
+            
+            for lesson in timeline:
+                # Add creation event
+                events.append({
+                    "type": "creation",
+                    "date": lesson.get("created"),
+                    "lesson": lesson.get("name"),
+                    "version": lesson.get("version", 1),
+                    "confidence": lesson.get("confidence")
+                })
+                
+                # Add version events
+                for version in lesson.get("version_history", []):
+                    events.append({
+                        "type": "version_update",
+                        "date": version.get("created"),
+                        "lesson": version.get("name"),
+                        "version": version.get("version", 1),
+                        "confidence": version.get("confidence")
+                    })
+                
+                # Add application events
+                for app in lesson.get("applications", []):
+                    events.append({
+                        "type": "application",
+                        "date": app.get("date"),
+                        "lesson": lesson.get("name"),
+                        "context": app.get("context"),
+                        "application_count": app.get("count")
+                    })
+                
+                # Add consolidation events
+                for master in lesson.get("consolidated_into", []):
+                    events.append({
+                        "type": "consolidation",
+                        "date": lesson.get("last_refreshed"),  # Approximation
+                        "from_lesson": lesson.get("name"),
+                        "to_lesson": master
+                    })
+            
+            # Sort events by date
+            events.sort(key=lambda x: x.get("date", ""))
+            
+            self.logger.info(f"Retrieved knowledge evolution timeline with {len(timeline)} lessons and {len(events)} events")
+            
+            return dict_to_json({
+                "status": "success",
+                "message": f"Retrieved knowledge evolution timeline with {len(timeline)} lessons",
+                "data": {
+                    "lessons": timeline,
+                    "events": events
+                }
+            })
+            
+        except Exception as e:
+            error_info = extract_error(e)
+            self.logger.error(f"Error retrieving knowledge evolution: {error_info}")
+            return dict_to_json({
+                "status": "error",
+                "message": f"Failed to retrieve knowledge evolution: {error_info}"
+            })
+
+    def query_across_contexts(
+        self,
+        query_text: str,
+        containers: Optional[List[str]] = None,
+        confidence_threshold: float = 0.0,
+        relevance_threshold: float = 0.0,
+        limit_per_container: int = 10
+    ) -> str:
+        """
+        Execute unified search queries across different memory containers.
+        
+        Args:
+            query_text: Search query text
+            containers: List of container names to include (all if None)
+            confidence_threshold: Minimum confidence level for returned results
+            relevance_threshold: Minimum relevance score for returned results
+            limit_per_container: Maximum results to return per container
+            
+        Returns:
+            JSON string with unified results across containers
+        """
+        try:
+            self._ensure_initialized()
+            
+            if not self.neo4j_driver:
+                return dict_to_json({
+                    "status": "error",
+                    "message": "Neo4j driver not initialized"
+                })
+            
+            # If no containers specified, get all available containers
+            if not containers:
+                containers_query = """
+                MATCH (c:MemoryContainer)
+                RETURN c.name as name
+                """
+                
+                containers_result = self.neo4j_driver.execute_query(
+                    containers_query,
+                    database_=self.neo4j_database
+                )
+                
+                containers = []
+                if containers_result and containers_result[0]:
+                    for record in containers_result[0]:
+                        container_name = record.get("name")
+                        if container_name:
+                            containers.append(container_name)
+                
+                if not containers:
+                    containers = ["Lessons"]  # Default to Lessons container if none found
+            
+            # Build the cross-container query
+            query = """
+            // Find entities in specified containers
+            MATCH (container:MemoryContainer)-[:CONTAINS]->(entity)
+            WHERE container.name IN $containers
+            
+            // Apply confidence threshold
+            AND (entity.confidence >= $confidence_threshold OR entity.confidence IS NULL)
+            
+            // Apply relevance threshold if available
+            AND (entity.relevanceScore >= $relevance_threshold OR entity.relevanceScore IS NULL)
+            
+            // Text matching in entity properties and observations
+            AND (
+                entity.name CONTAINS $query_text
+                OR entity.problemDescription CONTAINS $query_text
+                OR entity.resolution CONTAINS $query_text
+                OR entity.context CONTAINS $query_text
+                OR EXISTS(
+                    (entity)-[:HAS_OBSERVATION]->(o:Observation)
+                    WHERE o.content CONTAINS $query_text
+                )
+            )
+            
+            // Get observations for each matching entity
+            OPTIONAL MATCH (entity)-[:HAS_OBSERVATION]->(obs:Observation)
+            
+            // Collect results by container
+            WITH container.name as container_name,
+                 entity,
+                 collect(obs) as observations
+                 
+            // Calculate relevance score - prefer explicit scores but provide defaults
+            WITH container_name,
+                 entity,
+                 observations,
+                 CASE
+                     WHEN entity.relevanceScore IS NOT NULL THEN entity.relevanceScore
+                     WHEN entity.confidence IS NOT NULL THEN entity.confidence
+                     ELSE 0.5
+                 END as calculated_relevance
+            
+            // Return results with relevance ranking
+            RETURN container_name,
+                   entity.name as entity_name,
+                   entity.entityType as entity_type,
+                   calculated_relevance as relevance,
+                   CASE WHEN entity.confidence IS NOT NULL THEN entity.confidence ELSE 0.5 END as confidence,
+                   [o IN observations | {type: o.type, content: o.content}] as observations,
+                   entity.created as created,
+                   entity.lastRefreshed as last_refreshed
+            
+            // Order by relevance and limit results
+            ORDER BY calculated_relevance DESC, entity.lastRefreshed DESC
+            LIMIT $total_limit
+            """
+            
+            # Set up parameters
+            params = {
+                "containers": containers,
+                "query_text": query_text,
+                "confidence_threshold": confidence_threshold,
+                "relevance_threshold": relevance_threshold,
+                "total_limit": limit_per_container * len(containers)
+            }
+            
+            # Execute the query
+            result = self._safe_execute_query(
+                query,
+                parameters_=params,
+                database_=self.neo4j_database
+            )
+            
+            # Process results
+            records = result[0] if result and len(result) > 0 else []
+            
+            if not records:
+                return dict_to_json({
+                    "status": "success",
+                    "message": "No results found across the specified containers",
+                    "data": {
+                        "containers": containers,
+                        "results": []
+                    }
+                })
+            
+            # Organize results by container
+            container_results = {}
+            
+            for record in records:
+                container_name = record.get("container_name")
+                
+                if container_name not in container_results:
+                    container_results[container_name] = []
+                
+                # Convert Neo4j data to Python dictionary
+                result_data = {}
+                
+                for key in record.keys():
+                    if key == "container_name":
+                        continue
+                        
+                    value = record[key]
+                    
+                    # Handle datetime objects
+                    if hasattr(value, 'iso_format'):
+                        result_data[key] = value.iso_format()
+                    # Handle non-serializable objects
+                    elif not isinstance(value, (dict, list, str, int, float, bool, type(None))):
+                        result_data[key] = str(value)
+                    else:
+                        result_data[key] = value
+                
+                container_results[container_name].append(result_data)
+                
+            # Limit results per container
+            for container, results in container_results.items():
+                container_results[container] = results[:limit_per_container]
+            
+            # Count total results
+            total_results = sum(len(results) for results in container_results.values())
+            
+            self.logger.info(f"Cross-container query found {total_results} results across {len(container_results)} containers")
+            
+            return dict_to_json({
+                "status": "success",
+                "message": f"Found {total_results} results across {len(container_results)} containers",
+                "data": {
+                    "query": query_text,
+                    "containers": containers,
+                    "results_by_container": container_results,
+                    "total_results": total_results
+                }
+            })
+            
+        except Exception as e:
+            error_info = extract_error(e)
+            self.logger.error(f"Error in cross-container query: {error_info}")
+            return dict_to_json({
+                "status": "error",
+                "message": f"Failed to execute cross-container query: {error_info}"
+            })
+
+    def _safe_execute_query(self, query: str, **kwargs):
+        """
+        Helper method to safely execute Neo4j queries with the correct type handling.
+        
+        Args:
+            query: The query string to execute
+            **kwargs: Additional parameters to pass to execute_query
+            
+        Returns:
+            Query result from Neo4j driver
+        """
+        if not self.neo4j_driver:
+            self.logger.error("Neo4j driver not initialized")
+            return None
+            
+        # Cast the query string to LiteralString to satisfy Neo4j driver's typing requirements
+        typed_query = cast(LiteralString, query)
+        
+        # Handle float values in parameters to prevent type errors
+        if 'parameters_' in kwargs and kwargs['parameters_']:
+            params = kwargs['parameters_']
+            for key, value in params.items():
+                if isinstance(value, float):
+                    params[key] = str(value)
+        
+        return self.neo4j_driver.execute_query(typed_query, **kwargs)
