@@ -5,529 +5,347 @@ import json
 from src.graph_memory import SearchManager
 
 
-def test_init(mock_base_manager, mock_embedding_adapter, mock_logger):
+def test_init(mock_base_manager):
     """Test initialization of SearchManager."""
     # Create search manager with mocked dependencies
-    manager = SearchManager(mock_base_manager, mock_embedding_adapter, mock_logger)
+    manager = SearchManager(mock_base_manager)
     
     # Verify manager attributes are set correctly
     assert manager.base_manager == mock_base_manager
-    assert manager.embedding_adapter == mock_embedding_adapter
-    assert manager.logger == mock_logger
+    assert manager.logger == mock_base_manager.logger
 
 
-def test_search_nodes_text_based(mock_base_manager, mock_embedding_adapter, mock_logger):
-    """Test text-based search for nodes."""
+def test_search_entities_text_based(mock_base_manager):
+    """Test text-based search for entities."""
     # Create manager
-    manager = SearchManager(mock_base_manager, mock_embedding_adapter, mock_logger)
-    
-    # Mock embedding availability check
-    mock_embedding_adapter.is_available.return_value = False
+    manager = SearchManager(mock_base_manager)
     
     # Mock query execution
-    mock_search_results = [
-        {"node": {"id": "entity-1", "name": "Test Entity 1", "content": "This is test entity one"}},
-        {"node": {"id": "entity-2", "name": "Test Entity 2", "content": "This is test entity two"}}
+    mock_records = [
+        MagicMock(
+            get=lambda x: MagicMock(
+                id="entity-1", 
+                items=lambda: [("name", "Test Entity 1"), ("content", "This is test entity one")]
+            ) if x == "e" else None
+        ),
+        MagicMock(
+            get=lambda x: MagicMock(
+                id="entity-2", 
+                items=lambda: [("name", "Test Entity 2"), ("content", "This is test entity two")]
+            ) if x == "e" else None
+        )
     ]
-    mock_base_manager.execute_query.return_value = {"results": mock_search_results}
+    
+    mock_base_manager.safe_execute_query.return_value = (mock_records, None)
     
     # Execute search
-    result = manager.search_nodes("test query", limit=10)
+    result = manager.search_entities("test query", limit=10)
     
     # Verify result
-    result_list = json.loads(result)
-    assert len(result_list) == 2
-    assert result_list[0]["id"] == "entity-1"
-    assert result_list[1]["id"] == "entity-2"
+    result_dict = json.loads(result)
+    assert len(result_dict["entities"]) == 2
+    assert result_dict["entities"][0]["id"] == "entity-1"
+    assert result_dict["entities"][1]["id"] == "entity-2"
     
-    # Verify base_manager.execute_query was called with correct parameters
-    mock_base_manager.execute_query.assert_called_once()
+    # Verify base_manager.safe_execute_query was called with correct parameters
+    mock_base_manager.safe_execute_query.assert_called_once()
     # Check that the query contains the search term
-    query = mock_base_manager.execute_query.call_args[0][0]
+    query, params = mock_base_manager.safe_execute_query.call_args[0]
     assert "MATCH" in query
     assert "RETURN" in query
-    assert "LIMIT 10" in query
-    
-    # Verify embedding_adapter.is_available was called
-    mock_embedding_adapter.is_available.assert_called_once()
-    # Verify embedding_adapter.get_embedding was NOT called (text-based search)
-    mock_embedding_adapter.get_embedding.assert_not_called()
+    assert "LIMIT" in query
+    assert params["search_term"] == "test query"
 
 
-def test_search_nodes_vector_based(mock_base_manager, mock_embedding_adapter, mock_logger):
-    """Test vector-based search for nodes."""
+def test_search_entities_with_entity_types(mock_base_manager):
+    """Test search with entity type filters."""
     # Create manager
-    manager = SearchManager(mock_base_manager, mock_embedding_adapter, mock_logger)
+    manager = SearchManager(mock_base_manager)
     
-    # Mock embedding availability check
-    mock_embedding_adapter.is_available.return_value = True
+    # Mock query execution
+    mock_records = [
+        MagicMock(
+            get=lambda x: MagicMock(
+                id="entity-3", 
+                items=lambda: [("name", "Filtered Entity"), ("type", "Person")]
+            ) if x == "e" else None
+        )
+    ]
+    
+    mock_base_manager.safe_execute_query.return_value = (mock_records, None)
+    
+    # Execute search with entity type filters
+    entity_types = ["Person", "Organization"]
+    result = manager.search_entities("test query", entity_types=entity_types, limit=5)
+    
+    # Verify result
+    result_dict = json.loads(result)
+    assert len(result_dict["entities"]) == 1
+    assert result_dict["entities"][0]["id"] == "entity-3"
+    assert result_dict["entities"][0]["type"] == "Person"
+    
+    # Verify base_manager.safe_execute_query was called with correct parameters
+    mock_base_manager.safe_execute_query.assert_called_once()
+    # Check that the query contains the entity types filter
+    query, params = mock_base_manager.safe_execute_query.call_args[0]
+    assert "MATCH" in query
+    assert "WHERE" in query
+    assert "LIMIT" in query
+    assert params["entity_types"] == entity_types
+
+
+def test_semantic_search_entities(mock_base_manager):
+    """Test semantic search for entities."""
+    # Create manager
+    manager = SearchManager(mock_base_manager)
     
     # Mock embedding generation
-    mock_embedding_adapter.get_embedding.return_value = [0.1, 0.2, 0.3, 0.4]
+    mock_base_manager.generate_embedding.return_value = [0.1, 0.2, 0.3, 0.4]
     
     # Mock query execution for vector search
-    mock_search_results = [
-        {
-            "node": {"id": "entity-1", "name": "Test Entity 1", "content": "This is test entity one"},
-            "score": 0.95
-        },
-        {
-            "node": {"id": "entity-2", "name": "Test Entity 2", "content": "This is test entity two"},
-            "score": 0.85
-        }
+    mock_records = [
+        MagicMock(
+            get=lambda key: MagicMock(
+                id="entity-1", 
+                items=lambda: [("name", "Test Entity 1"), ("content", "This is test entity one")]
+            ) if key == "e" else 0.95 if key == "score" else None
+        ),
+        MagicMock(
+            get=lambda key: MagicMock(
+                id="entity-2", 
+                items=lambda: [("name", "Test Entity 2"), ("content", "This is test entity two")]
+            ) if key == "e" else 0.85 if key == "score" else None
+        )
     ]
-    mock_base_manager.execute_query.return_value = {"results": mock_search_results}
+    
+    mock_base_manager.safe_execute_query.return_value = (mock_records, None)
     
     # Execute search
-    result = manager.search_nodes("semantic query", limit=10)
+    result = manager.search_entities("semantic query", semantic=True, limit=10)
     
     # Verify result
-    result_list = json.loads(result)
-    assert len(result_list) == 2
-    assert result_list[0]["id"] == "entity-1"
-    assert result_list[1]["id"] == "entity-2"
-    assert result_list[0]["score"] == 0.95
+    result_dict = json.loads(result)
+    assert len(result_dict["entities"]) == 2
+    assert result_dict["entities"][0]["id"] == "entity-1"
+    assert result_dict["entities"][1]["id"] == "entity-2"
+    assert result_dict["entities"][0]["similarity_score"] == 0.95
     
-    # Verify embedding_adapter.is_available was called
-    mock_embedding_adapter.is_available.assert_called_once()
-    # Verify embedding_adapter.get_embedding was called with correct parameters
-    mock_embedding_adapter.get_embedding.assert_called_once_with("semantic query")
+    # Verify base_manager.generate_embedding was called with correct parameters
+    mock_base_manager.generate_embedding.assert_called_once_with("semantic query")
     
-    # Verify base_manager.execute_query was called with correct parameters
-    mock_base_manager.execute_query.assert_called_once()
+    # Verify base_manager.safe_execute_query was called with correct parameters
+    mock_base_manager.safe_execute_query.assert_called_once()
+    
     # Check that the query contains vector search specifics
-    query = mock_base_manager.execute_query.call_args[0][0]
-    assert "MATCH" in query
-    assert "RETURN" in query
-    assert "LIMIT 10" in query
-    assert "vector" in query.lower() or "embedding" in query.lower()
+    query, params = mock_base_manager.safe_execute_query.call_args[0]
+    assert "CALL db.index.vector.queryNodes" in query
+    assert "embedding" in params
+    assert params["k"] == 10
 
 
-def test_search_nodes_with_filters(mock_base_manager, mock_embedding_adapter, mock_logger):
-    """Test search with additional filters."""
-    # Create manager
-    manager = SearchManager(mock_base_manager, mock_embedding_adapter, mock_logger)
-    
-    # Mock embedding availability check
-    mock_embedding_adapter.is_available.return_value = False
-    
-    # Mock query execution with filters
-    mock_search_results = [
-        {"node": {"id": "entity-3", "name": "Filtered Entity", "type": "Person"}}
-    ]
-    mock_base_manager.execute_query.return_value = {"results": mock_search_results}
-    
-    # Execute search with filters
-    filters = {"type": "Person", "metadata.location": "New York"}
-    result = manager.search_nodes("test query", filters=filters, limit=5)
-    
-    # Verify result
-    result_list = json.loads(result)
-    assert len(result_list) == 1
-    assert result_list[0]["id"] == "entity-3"
-    assert result_list[0]["type"] == "Person"
-    
-    # Verify base_manager.execute_query was called with correct parameters
-    mock_base_manager.execute_query.assert_called_once()
-    # Check that the query contains the filters
-    query = mock_base_manager.execute_query.call_args[0][0]
-    assert "MATCH" in query
-    assert "Person" in query
-    assert "New York" in query
-    assert "LIMIT 5" in query
-
-
-def test_search_error_handling(mock_base_manager, mock_embedding_adapter, mock_logger):
+def test_search_error_handling(mock_base_manager):
     """Test error handling during search operations."""
     # Create manager
-    manager = SearchManager(mock_base_manager, mock_embedding_adapter, mock_logger)
-    
-    # Mock embedding availability check
-    mock_embedding_adapter.is_available.return_value = True
+    manager = SearchManager(mock_base_manager)
     
     # Mock embedding generation that raises an exception
-    mock_embedding_adapter.get_embedding.side_effect = Exception("Embedding service unavailable")
-    
-    # Execute search - should fall back to text-based search
-    result = manager.search_nodes("query with embedding error")
-    
-    # Verify embedding_adapter.get_embedding was called
-    mock_embedding_adapter.get_embedding.assert_called_once()
-    
-    # Verify logger.error was called
-    mock_logger.error.assert_called()
-    
-    # Verify base_manager.execute_query was still called (fallback to text search)
-    mock_base_manager.execute_query.assert_called_once()
-
-
-def test_search_nodes_empty_query(mock_base_manager, mock_embedding_adapter, mock_logger):
-    """Test search with empty query."""
-    # Create manager
-    manager = SearchManager(mock_base_manager, mock_embedding_adapter, mock_logger)
-    
-    # Execute search with empty query
-    result = manager.search_nodes("")
-    
-    # Verify result is empty
-    result_list = json.loads(result)
-    assert len(result_list) == 0
-    
-    # Verify base_manager.execute_query was NOT called
-    mock_base_manager.execute_query.assert_not_called()
-    
-    # Verify embedding_adapter methods were NOT called
-    mock_embedding_adapter.is_available.assert_not_called()
-    mock_embedding_adapter.get_embedding.assert_not_called()
-
-
-def test_search_nodes_db_error(mock_base_manager, mock_embedding_adapter, mock_logger):
-    """Test handling of database errors during search."""
-    # Create manager
-    manager = SearchManager(mock_base_manager, mock_embedding_adapter, mock_logger)
-    
-    # Mock embedding availability check
-    mock_embedding_adapter.is_available.return_value = False
-    
-    # Mock query execution that raises an exception
-    mock_base_manager.execute_query.side_effect = Exception("Database connection error")
+    mock_base_manager.ensure_initialized.side_effect = Exception("Database connection error")
     
     # Execute search
-    result = manager.search_nodes("test query")
+    result = manager.search_entities("query with error")
     
-    # Verify result is empty
-    result_list = json.loads(result)
-    assert len(result_list) == 0
-    
-    # Verify base_manager.execute_query was called
-    mock_base_manager.execute_query.assert_called_once()
+    # Verify result contains error
+    result_dict = json.loads(result)
+    assert "error" in result_dict
+    assert "Database connection error" in result_dict["error"]
     
     # Verify logger.error was called
-    mock_logger.error.assert_called()
+    mock_base_manager.logger.error.assert_called()
 
 
-def test_search_nodes_with_custom_project(mock_base_manager, mock_embedding_adapter, mock_logger):
-    """Test search with custom project specified."""
+def test_search_entities_empty_query(mock_base_manager):
+    """Test search with empty query."""
     # Create manager
-    manager = SearchManager(mock_base_manager, mock_embedding_adapter, mock_logger)
-    
-    # Mock embedding availability check
-    mock_embedding_adapter.is_available.return_value = False
+    manager = SearchManager(mock_base_manager)
     
     # Mock query execution
-    mock_search_results = [
-        {"node": {"id": "entity-4", "name": "Project Entity", "project": "custom-project"}}
-    ]
-    mock_base_manager.execute_query.return_value = {"results": mock_search_results}
+    mock_records = []
+    mock_base_manager.safe_execute_query.return_value = (mock_records, None)
     
-    # Execute search with project specified
-    result = manager.search_nodes("project query", project_name="custom-project")
+    # Execute search with empty query
+    result = manager.search_entities("")
     
-    # Verify result
-    result_list = json.loads(result)
-    assert len(result_list) == 1
-    assert result_list[0]["id"] == "entity-4"
-    assert result_list[0]["project"] == "custom-project"
+    # Verify result is empty list
+    result_dict = json.loads(result)
+    assert len(result_dict["entities"]) == 0
     
-    # Verify base_manager.execute_query was called with correct parameters
-    mock_base_manager.execute_query.assert_called_once()
-    # Check that the query contains the project filter
-    query = mock_base_manager.execute_query.call_args[0][0]
-    assert "MATCH" in query
-    assert "custom-project" in query
+    # Verify base_manager.safe_execute_query was called
+    mock_base_manager.safe_execute_query.assert_called_once()
 
 
-def test_search_with_sort_options(mock_base_manager, mock_embedding_adapter, mock_logger):
-    """Test search with custom sorting options."""
+def test_query_knowledge_graph(mock_base_manager):
+    """Test executing custom Cypher queries."""
     # Create manager
-    manager = SearchManager(mock_base_manager, mock_embedding_adapter, mock_logger)
-    
-    # Mock embedding availability check
-    mock_embedding_adapter.is_available.return_value = False
+    manager = SearchManager(mock_base_manager)
     
     # Mock query execution
-    mock_search_results = [
-        {"node": {"id": "entity-5", "name": "First Entity", "created_at": "2023-01-02"}},
-        {"node": {"id": "entity-6", "name": "Second Entity", "created_at": "2023-01-01"}}
-    ]
-    mock_base_manager.execute_query.return_value = {"results": mock_search_results}
+    mock_record = MagicMock()
+    mock_record.keys.return_value = ["person", "count"]
+    mock_record.get = lambda key: (
+        MagicMock(
+            items=lambda: [("name", "John"), ("age", 30)]
+        ) if key == "person" else 5 if key == "count" else None
+    )
     
-    # Execute search with sort options
-    sort_options = {"field": "created_at", "order": "DESC"}
-    result = manager.search_nodes("sorted query", sort=sort_options)
+    mock_records = [mock_record]
+    mock_summary = {"counters": {"nodes_returned": 1}, "database": "neo4j", "time": 15}
     
-    # Verify result
-    result_list = json.loads(result)
-    assert len(result_list) == 2
-    assert result_list[0]["id"] == "entity-5"  # Should be first due to DESC sort
+    mock_base_manager.safe_execute_query.return_value = (mock_records, mock_summary)
     
-    # Verify base_manager.execute_query was called with correct parameters
-    mock_base_manager.execute_query.assert_called_once()
-    # Check that the query contains the sort options
-    query = mock_base_manager.execute_query.call_args[0][0]
-    assert "ORDER BY" in query
-    assert "DESC" in query
-
-
-def test_search_with_pagination(mock_base_manager, mock_embedding_adapter, mock_logger):
-    """Test search with pagination options."""
-    # Create manager
-    manager = SearchManager(mock_base_manager, mock_embedding_adapter, mock_logger)
-    
-    # Mock embedding availability check
-    mock_embedding_adapter.is_available.return_value = False
-    
-    # Mock query execution
-    mock_search_results = [
-        {"node": {"id": f"entity-{i}", "name": f"Entity {i}"}} for i in range(5, 10)
-    ]
-    mock_base_manager.execute_query.return_value = {"results": mock_search_results}
-    
-    # Execute search with pagination (skip first 5 results)
-    result = manager.search_nodes("paginated query", skip=5, limit=5)
+    # Execute custom query
+    custom_query = "MATCH (p:Person) RETURN p, count(p.friends) as count"
+    result = manager.query_knowledge_graph(custom_query, {"age": 30})
     
     # Verify result
-    result_list = json.loads(result)
-    assert len(result_list) == 5
-    assert result_list[0]["id"] == "entity-5"
-    assert result_list[4]["id"] == "entity-9"
+    result_dict = json.loads(result)
+    assert "results" in result_dict
+    assert len(result_dict["results"]) == 1
+    assert "person" in result_dict["results"][0]
+    assert "count" in result_dict["results"][0]
+    assert result_dict["results"][0]["person"]["name"] == "John"
+    assert result_dict["results"][0]["count"] == 5
     
-    # Verify base_manager.execute_query was called with correct parameters
-    mock_base_manager.execute_query.assert_called_once()
-    # Check that the query contains the pagination
-    query = mock_base_manager.execute_query.call_args[0][0]
-    assert "SKIP 5" in query
-    assert "LIMIT 5" in query
+    # Verify summary info
+    assert "summary" in result_dict
+    assert result_dict["summary"]["database"] == "neo4j"
+    
+    # Verify base_manager.safe_execute_query was called with correct parameters
+    mock_base_manager.safe_execute_query.assert_called_once_with(custom_query, {"age": 30})
 
 
-def test_semantic_search_with_threshold(mock_base_manager, mock_embedding_adapter, mock_logger):
-    """Test semantic search with similarity threshold."""
+def test_forbidden_query_operations(mock_base_manager):
+    """Test rejection of forbidden query operations."""
     # Create manager
-    manager = SearchManager(mock_base_manager, mock_embedding_adapter, mock_logger)
+    manager = SearchManager(mock_base_manager)
     
-    # Mock embedding availability check
-    mock_embedding_adapter.is_available.return_value = True
-    
-    # Mock embedding generation
-    mock_embedding_adapter.get_embedding.return_value = [0.1, 0.2, 0.3, 0.4]
-    
-    # Mock query execution for vector search with scores
-    mock_search_results = [
-        {
-            "node": {"id": "entity-1", "name": "High Similarity", "content": "Very relevant"},
-            "score": 0.95
-        },
-        {
-            "node": {"id": "entity-2", "name": "Medium Similarity", "content": "Somewhat relevant"},
-            "score": 0.75
-        },
-        {
-            "node": {"id": "entity-3", "name": "Low Similarity", "content": "Not very relevant"},
-            "score": 0.55
-        }
-    ]
-    mock_base_manager.execute_query.return_value = {"results": mock_search_results}
-    
-    # Execute search with similarity threshold of 0.7
-    result = manager.search_nodes("semantic query", similarity_threshold=0.7)
-    
-    # Verify result - should only include results above threshold
-    result_list = json.loads(result)
-    assert len(result_list) == 2  # Only the first two results are above threshold
-    assert result_list[0]["id"] == "entity-1"
-    assert result_list[1]["id"] == "entity-2"
-    assert "entity-3" not in [node["id"] for node in result_list]
-    
-    # Verify embedding_adapter methods were called
-    mock_embedding_adapter.is_available.assert_called_once()
-    mock_embedding_adapter.get_embedding.assert_called_once()
-    
-    # Verify base_manager.execute_query was called
-    mock_base_manager.execute_query.assert_called_once()
-
-
-def test_search_specific_node_types(mock_base_manager, mock_embedding_adapter, mock_logger):
-    """Test searching for specific node types."""
-    # Create manager
-    manager = SearchManager(mock_base_manager, mock_embedding_adapter, mock_logger)
-    
-    # Mock embedding availability check
-    mock_embedding_adapter.is_available.return_value = False
-    
-    # Mock query execution
-    mock_search_results = [
-        {"node": {"id": "entity-7", "name": "Document Entity", "type": "Document"}}
-    ]
-    mock_base_manager.execute_query.return_value = {"results": mock_search_results}
-    
-    # Execute search with node type filter
-    result = manager.search_nodes("document query", node_types=["Document", "File"])
-    
-    # Verify result
-    result_list = json.loads(result)
-    assert len(result_list) == 1
-    assert result_list[0]["id"] == "entity-7"
-    assert result_list[0]["type"] == "Document"
-    
-    # Verify base_manager.execute_query was called with correct parameters
-    mock_base_manager.execute_query.assert_called_once()
-    # Check that the query contains the node type filter
-    query = mock_base_manager.execute_query.call_args[0][0]
-    assert "Document" in query
-    assert "File" in query
-
-
-def test_full_text_search(mock_base_manager, mock_embedding_adapter, mock_logger):
-    """Test full-text search functionality."""
-    # Create manager
-    manager = SearchManager(mock_base_manager, mock_embedding_adapter, mock_logger)
-    
-    # Mock embedding availability check - doesn't matter for full-text search
-    mock_embedding_adapter.is_available.return_value = True
-    
-    # Mock query execution for full-text search
-    mock_search_results = [
-        {"node": {"id": "entity-8", "name": "Full Text Result", "content": "This contains the exact search phrase"}}
-    ]
-    mock_base_manager.execute_query.return_value = {"results": mock_search_results}
-    
-    # Execute full-text search
-    result = manager.full_text_search("exact search phrase")
-    
-    # Verify result
-    result_list = json.loads(result)
-    assert len(result_list) == 1
-    assert result_list[0]["id"] == "entity-8"
-    assert "exact search phrase" in result_list[0]["content"]
-    
-    # Verify base_manager.execute_query was called with correct parameters
-    mock_base_manager.execute_query.assert_called_once()
-    # Check that the query is set up for full-text search
-    query = mock_base_manager.execute_query.call_args[0][0]
-    assert "exact search phrase" in query
-    
-    # Full-text search should NOT use embeddings
-    mock_embedding_adapter.get_embedding.assert_not_called()
-
-
-def test_get_similar_nodes(mock_base_manager, mock_embedding_adapter, mock_logger):
-    """Test retrieval of similar nodes to a specific node."""
-    # Create manager
-    manager = SearchManager(mock_base_manager, mock_embedding_adapter, mock_logger)
-    
-    # Mock embedding availability check
-    mock_embedding_adapter.is_available.return_value = True
-    
-    # Mock query to get source node embedding
-    source_node = {
-        "id": "source-node", 
-        "name": "Source Node", 
-        "embedding": [0.1, 0.2, 0.3, 0.4]
-    }
-    mock_base_manager.execute_query.side_effect = [
-        {"results": [{"node": source_node}]},  # First call to get source node
-        {"results": [  # Second call to get similar nodes
-            {
-                "node": {"id": "similar-1", "name": "Similar Node 1"},
-                "score": 0.92
-            },
-            {
-                "node": {"id": "similar-2", "name": "Similar Node 2"},
-                "score": 0.85
-            }
-        ]}
+    # Try dangerous queries
+    dangerous_queries = [
+        "CREATE (n:Node {name: 'Test'})",
+        "MATCH (n) DELETE n",
+        "MATCH (n) SET n.prop = 'value'",
+        "MERGE (n:Node {name: 'Test'})",
+        "DROP INDEX ON :Node(name)",
+        "CALL db.index.vector.createNodeIndex"
     ]
     
-    # Execute get similar nodes
-    result = manager.get_similar_nodes("source-node", limit=5)
+    for query in dangerous_queries:
+        result = manager.query_knowledge_graph(query)
+        result_dict = json.loads(result)
+        
+        # Verify query was rejected
+        assert "error" in result_dict
+        assert "Forbidden operation" in result_dict["error"]
+        
+    # Verify safe_execute_query was not called
+    mock_base_manager.safe_execute_query.assert_not_called()
+
+
+def test_search_entity_neighborhoods(mock_base_manager):
+    """Test searching for entity neighborhoods."""
+    # Create manager
+    manager = SearchManager(mock_base_manager)
+    
+    # Mock query execution for neighborhood search
+    mock_node = MagicMock()
+    mock_node.items.return_value = [("name", "Central Entity"), ("type", "Person")]
+    mock_node.id = "entity-central"
+    
+    mock_rel = MagicMock()
+    mock_rel.items.return_value = [("type", "KNOWS"), ("since", 2020)]
+    mock_rel.id = "rel-1"
+    
+    mock_other_node = MagicMock()
+    mock_other_node.items.return_value = [("name", "Connected Entity"), ("type", "Organization")]
+    mock_other_node.id = "entity-connected"
+    
+    mock_record = MagicMock()
+    mock_record.keys.return_value = ["nodes", "relationships"]
+    mock_record.get = lambda *args: [mock_node, mock_other_node] if args[0] == "nodes" else [mock_rel] if args[0] == "relationships" else None
+    
+    mock_records = [mock_record]
+    mock_base_manager.safe_execute_query.return_value = (mock_records, None)
+    
+    # Execute neighborhood search
+    result = manager.search_entity_neighborhoods("Central Entity", max_depth=2, max_nodes=50)
     
     # Verify result
-    result_list = json.loads(result)
-    assert len(result_list) == 2
-    assert result_list[0]["id"] == "similar-1"
-    assert result_list[1]["id"] == "similar-2"
-    assert result_list[0]["score"] == 0.92
+    result_dict = json.loads(result)
+    assert "graph" in result_dict
+    assert "nodes" in result_dict["graph"]
+    assert "relationships" in result_dict["graph"]
+    assert len(result_dict["graph"]["nodes"]) == 2
+    assert len(result_dict["graph"]["relationships"]) == 1
+    assert result_dict["graph"]["center_entity"] == "Central Entity"
     
-    # Verify base_manager.execute_query was called twice
-    assert mock_base_manager.execute_query.call_count == 2
-    
-    # First call should get the source node
-    first_query = mock_base_manager.execute_query.call_args_list[0][0][0]
-    assert "source-node" in first_query
-    
-    # Second call should search for similar nodes
-    second_query = mock_base_manager.execute_query.call_args_list[1][0][0]
-    assert "LIMIT 5" in second_query
+    # Verify base_manager.safe_execute_query was called
+    assert mock_base_manager.safe_execute_query.call_count >= 1
 
 
-def test_get_similar_nodes_no_embeddings(mock_base_manager, mock_embedding_adapter, mock_logger):
-    """Test similar nodes when embeddings are not available."""
+def test_find_paths_between_entities(mock_base_manager):
+    """Test finding paths between entities."""
     # Create manager
-    manager = SearchManager(mock_base_manager, mock_embedding_adapter, mock_logger)
+    manager = SearchManager(mock_base_manager)
     
-    # Mock embedding availability check
-    mock_embedding_adapter.is_available.return_value = False
+    # Mock query execution for path finding
+    mock_path_node1 = MagicMock()
+    mock_path_node1.items.return_value = [("name", "Start Entity"), ("type", "Person")]
+    mock_path_node1.id = "entity-start"
     
-    # Execute get similar nodes
-    result = manager.get_similar_nodes("source-node")
+    mock_path_rel = MagicMock()
+    mock_path_rel.items.return_value = [("type", "KNOWS"), ("since", 2020)]
+    mock_path_rel.id = "rel-path"
     
-    # Verify result is empty due to no embedding support
-    result_list = json.loads(result)
-    assert len(result_list) == 0
+    mock_path_node2 = MagicMock()
+    mock_path_node2.items.return_value = [("name", "End Entity"), ("type", "Person")]
+    mock_path_node2.id = "entity-end"
     
-    # Verify logger.warning was called
-    mock_logger.warning.assert_called()
+    mock_path = MagicMock()
+    mock_path.nodes = [mock_path_node1, mock_path_node2]
+    mock_path.relationships = [mock_path_rel]
     
-    # Should not attempt to execute queries when embeddings unavailable
-    mock_base_manager.execute_query.assert_not_called()
-
-
-def test_get_similar_nodes_source_not_found(mock_base_manager, mock_embedding_adapter, mock_logger):
-    """Test similar nodes when source node is not found."""
-    # Create manager
-    manager = SearchManager(mock_base_manager, mock_embedding_adapter, mock_logger)
+    # Setup the mock record for the path
+    mock_path_record = MagicMock()
+    mock_path_record.get = lambda *args: mock_path if args[0] == "path" else None
     
-    # Mock embedding availability check
-    mock_embedding_adapter.is_available.return_value = True
+    # Setup the mock records for the entity checks
+    mock_from_entity = MagicMock()
+    mock_from_entity.items.return_value = [("name", "Start Entity"), ("type", "Person")]
+    mock_from_entity.id = "entity-start"
     
-    # Mock query to get source node - returns empty
-    mock_base_manager.execute_query.return_value = {"results": []}
+    mock_to_entity = MagicMock()
+    mock_to_entity.items.return_value = [("name", "End Entity"), ("type", "Person")]
+    mock_to_entity.id = "entity-end"
     
-    # Execute get similar nodes
-    result = manager.get_similar_nodes("nonexistent-node")
+    mock_entity_record = MagicMock()
+    mock_entity_record.get = lambda *args: mock_from_entity if args[0] == "from" else mock_to_entity if args[0] == "to" else None
     
-    # Verify result is empty
-    result_list = json.loads(result)
-    assert len(result_list) == 0
+    # Setup mock to return appropriate values for each call
+    mock_base_manager.safe_execute_query.side_effect = [
+        ([mock_entity_record], None),  # First call to verify entities exist
+        ([mock_path_record], None)     # Second call to find paths
+    ]
     
-    # Verify base_manager.execute_query was called once (to get source node)
-    mock_base_manager.execute_query.assert_called_once()
-    
-    # Verify logger.error was called
-    mock_logger.error.assert_called()
-
-
-def test_count_search_results(mock_base_manager, mock_embedding_adapter, mock_logger):
-    """Test counting search results."""
-    # Create manager
-    manager = SearchManager(mock_base_manager, mock_embedding_adapter, mock_logger)
-    
-    # Mock embedding availability check
-    mock_embedding_adapter.is_available.return_value = False
-    
-    # Mock query execution
-    mock_base_manager.execute_query.return_value = {"results": [{"count": 42}]}
-    
-    # Execute count search
-    result = manager.count_search_results("count query", filters={"type": "Document"})
+    # Execute path finding
+    result = manager.find_paths_between_entities("Start Entity", "End Entity", max_depth=3)
     
     # Verify result
-    result_obj = json.loads(result)
-    assert result_obj["count"] == 42
+    result_dict = json.loads(result)
+    assert "paths" in result_dict
+    assert len(result_dict["paths"]) == 1
+    assert "nodes" in result_dict["paths"][0]
+    assert "relationships" in result_dict["paths"][0]
+    assert len(result_dict["paths"][0]["nodes"]) == 2
+    assert len(result_dict["paths"][0]["relationships"]) == 1
     
-    # Verify base_manager.execute_query was called with correct parameters
-    mock_base_manager.execute_query.assert_called_once()
-    # Check that the query contains COUNT and filters
-    query = mock_base_manager.execute_query.call_args[0][0]
-    assert "COUNT" in query
-    assert "Document" in query 
+    # Verify base_manager.safe_execute_query was called twice
+    assert mock_base_manager.safe_execute_query.call_count == 2 
