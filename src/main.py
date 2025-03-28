@@ -810,6 +810,10 @@ async def create_lesson_container() -> str:
     
     This container serves as a central hub for organizing all lessons in the system.
     
+    IMPORTANT: This should only be called ONCE when setting up the system initially.
+    DO NOT call this if a lesson container already exists as it will cause errors.
+    This is a system initialization function, not a regular operation.
+    
     Returns:
         JSON response with operation result
     """
@@ -861,13 +865,24 @@ async def create_lesson(
         how_to_apply: How to apply this lesson in the future
         root_cause: The underlying cause of the problem
         evidence: Supporting evidence or examples
-        originated_from: Entity that the lesson originated from
-        solved_with: Entity that helped solve the problem
-        prevents: Issue that this lesson helps prevent
-        builds_on: Lesson that this one builds upon
-        applies_to: Context where this lesson applies
+        originated_from: Entity that the lesson originated from (e.g., "ProjectX")
+        solved_with: Entity that helped solve the problem (e.g., "Component123")
+        prevents: Issue that this lesson helps prevent (e.g., "DataLoss")
+        builds_on: Lesson that this one builds upon (e.g., "ErrorHandlingBasics")
+        applies_to: Context where this lesson applies (e.g., "DatabaseDesign")
         confidence: Confidence level in this lesson (0.0-1.0)
         source: Source of the lesson (Manual, Automated, etc.)
+    
+    Example:
+        create_lesson(
+            name="LessonAboutCaching",
+            problem_description="Slow API responses due to repeated database queries",
+            context="Performance optimization",
+            impact="High",
+            resolution="Implemented Redis caching layer",
+            what_was_learned="Proper cache invalidation is critical",
+            confidence=0.9
+        )
     
     Returns:
         JSON response with operation result
@@ -921,6 +936,7 @@ async def get_lessons(
     
     Args:
         filter_criteria: Dictionary of property-value pairs to filter lessons
+            Example: {"impact": "High", "source": "Manual"}
         related_to: Entity name that lessons should be related to
         applies_to: Context that lessons should apply to
         limit: Maximum number of lessons to return
@@ -928,6 +944,14 @@ async def get_lessons(
         min_confidence: Minimum confidence threshold (0.0-1.0)
         sort_by: How to sort results ("relevance", "confidence", "date")
         include_observations: Whether to include detailed observations
+    
+    Example:
+        get_lessons(
+            filter_criteria={"impact": "High"},
+            related_to="ProjectX",
+            min_confidence=0.7,
+            sort_by="confidence"
+        )
     
     Returns:
         JSON string with matching lessons
@@ -984,9 +1008,20 @@ async def update_lesson(
     Args:
         lesson_name: Name of the lesson to update
         updated_properties: Dictionary of properties to update
+            Example: {"impact": "High", "resolution": "New approach found"}
         updated_observations: Dictionary of observation types and their new content
+            Example: {"what_was_learned": "New insight", "how_to_apply": "Updated method"}
         new_relationships: Dictionary of relationship types and target entity names
+            Example: {"APPLIES_TO": ["ProjectY", "SystemZ"], "PREVENTS": ["ErrorX"]}
         update_confidence: Whether to automatically adjust confidence
+    
+    Example:
+        update_lesson(
+            lesson_name="LessonAboutCaching",
+            updated_properties={"impact": "Critical", "status": "Validated"},
+            updated_observations={"evidence": "Performance increased by 300%"},
+            new_relationships={"APPLIES_TO": ["RecommendationSystem"]}
+        )
     
     Returns:
         JSON response with operation result
@@ -1031,6 +1066,14 @@ async def apply_lesson_to_context(
         application_notes: Notes about how the lesson was applied
         success_score: Score indicating how successful the application was (0.0-1.0)
     
+    Example:
+        apply_lesson_to_context(
+            lesson_name="SecurityBestPractices",
+            context_entity="PaymentSystem",
+            application_notes="Implemented input validation based on this lesson",
+            success_score=0.95
+        )
+    
     Returns:
         JSON response with operation result
     """
@@ -1068,12 +1111,21 @@ async def extract_potential_lessons(
     """
     Extract potential lessons from various sources of information.
     
+    At least one of the source parameters must be provided (conversation_text,
+    code_diff, issue_description, or error_logs).
+    
     Args:
         conversation_text: Text from a conversation to analyze
         code_diff: Code changes to analyze
         issue_description: Description of an issue to analyze
         error_logs: Error logs to analyze
         min_confidence: Minimum confidence threshold for extracted lessons (0.0-1.0)
+    
+    Example:
+        extract_potential_lessons(
+            conversation_text="We encountered a deadlock in the database because two transactions were acquiring locks in different orders",
+            min_confidence=0.7
+        )
     
     Returns:
         JSON string with extracted potential lessons
@@ -1118,8 +1170,22 @@ async def consolidate_related_lessons(
     Args:
         lesson_ids: List of lesson names to consolidate
         new_name: Name for the consolidated lesson (default: auto-generated)
-        strategy: Consolidation strategy ("merge", "supersede", "reference")
-        confidence_handling: How to handle confidence scores ("max", "min", "avg")
+        strategy: Consolidation strategy:
+            - "merge": Combine all content into a new lesson (default)
+            - "supersede": Create new lesson and mark others as superseded
+            - "reference": Keep originals but add cross-references
+        confidence_handling: How to handle confidence scores:
+            - "max": Use highest confidence from source lessons (default)
+            - "min": Use lowest confidence from source lessons
+            - "avg": Use average confidence from source lessons
+    
+    Example:
+        consolidate_related_lessons(
+            lesson_ids=["DatabaseIndexing", "QueryOptimization", "SlowQueries"],
+            new_name="DatabasePerformanceOptimization",
+            strategy="supersede",
+            confidence_handling="max"
+        )
     
     Returns:
         JSON response with operation result
@@ -1158,9 +1224,17 @@ async def get_knowledge_evolution(
     Args:
         entity_name: Name of the entity to track
         lesson_type: Type of lessons to track
-        start_date: Start date for the evolution timeline (ISO format)
-        end_date: End date for the evolution timeline (ISO format)
+        start_date: Start date for the evolution timeline (ISO format, e.g., "2023-01-01")
+        end_date: End date for the evolution timeline (ISO format, e.g., "2023-12-31")
         include_superseded: Whether to include superseded knowledge
+    
+    Example:
+        get_knowledge_evolution(
+            entity_name="DatabaseSystem",
+            start_date="2023-01-01",
+            end_date="2023-12-31",
+            include_superseded=True
+        )
     
     Returns:
         JSON string with knowledge evolution data
@@ -1211,9 +1285,19 @@ async def query_across_contexts(
     Args:
         query_text: The search query
         containers: List of container names to search in
+            Example: ["Lessons", "ProjectX", "ComponentY"]
+            If None, searches across all available containers
         confidence_threshold: Minimum confidence level for results (0.0-1.0)
         relevance_threshold: Minimum relevance score for results (0.0-1.0)
         limit_per_container: Maximum results to return per container
+    
+    Example:
+        query_across_contexts(
+            query_text="database performance optimization techniques",
+            containers=["Lessons", "DatabaseProject"],
+            confidence_threshold=0.7,
+            limit_per_container=5
+        )
     
     Returns:
         JSON string with search results across contexts
