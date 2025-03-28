@@ -848,7 +848,7 @@ class VersionManager:
                 message = commit.get("message")
                 content = commit.get("content")
                 
-                # Skip if already exists
+                # Skip if already exists or version is missing
                 if commit_hash in existing_commits:
                     results.append({
                         "status": "skipped",
@@ -856,6 +856,16 @@ class VersionManager:
                         "commit": commit_hash,
                         "version": existing_commits[commit_hash]
                     })
+                    continue
+                
+                # Skip if version is missing
+                if not version:
+                    results.append({
+                        "status": "error",
+                        "message": f"Commit {commit_hash} has no version number",
+                        "commit": commit_hash
+                    })
+                    error_count += 1
                     continue
                 
                 # Prepare metadata

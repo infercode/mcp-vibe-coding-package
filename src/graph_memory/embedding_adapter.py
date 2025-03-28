@@ -44,13 +44,30 @@ class EmbeddingAdapter:
             return True
         
         try:
-            self.embedding_manager = LiteLLMEmbeddingManager(api_key=api_key, model_name=model_name)
+            # Create embedding manager with logger only
+            self.embedding_manager = LiteLLMEmbeddingManager(self.logger)
+            
+            # Configure with provided parameters
+            config = {
+                "provider": "openai",  # Default provider
+                "api_key": api_key,
+                "model": model_name
+            }
+            
+            # Apply configuration
+            result = self.embedding_manager.configure(config)
+            
+            if result["status"] != "success":
+                if self.logger:
+                    self.logger.error(f"Failed to configure embedding manager: {result.get('message', 'unknown error')}")
+                return False
+                
             self._initialized = True
             
             # Update properties from the new manager
             if self.embedding_manager:
-                self.model_name = getattr(self.embedding_manager, "model_name", "unknown")
-                self.embedding_dim = getattr(self.embedding_manager, "embedding_dim", 1536)
+                self.model_name = getattr(self.embedding_manager, "model", "unknown")
+                self.embedding_dim = getattr(self.embedding_manager, "dimensions", 1536)
             
             if self.logger:
                 self.logger.info(f"Initialized embedding manager with model: {self.model_name}")
@@ -91,6 +108,11 @@ class EmbeddingAdapter:
         try:
             if not text:
                 return None
+                
+            if not self.embedding_manager:
+                if self.logger:
+                    self.logger.error("Embedding manager is None despite initialization check")
+                return None
             
             # Clean text before embedding
             cleaned_text = self._clean_text(text)
@@ -98,7 +120,7 @@ class EmbeddingAdapter:
                 return None
             
             # Generate embedding
-            embedding = self.embedding_manager.get_embedding(cleaned_text)
+            embedding = self.embedding_manager.generate_embedding(cleaned_text)
             
             if embedding is None:
                 if self.logger:

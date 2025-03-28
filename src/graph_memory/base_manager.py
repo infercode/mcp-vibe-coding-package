@@ -360,7 +360,30 @@ class BaseManager:
             records = result[0] if result and len(result) > 0 else []
             summary = result[1] if result and len(result) > 1 else {}
             
-            return records, summary
+            # Convert Neo4j Record objects to dictionaries
+            records_dict = [dict(record) for record in records]
+            
+            # Convert ResultSummary to dictionary if needed
+            summary_dict = {}
+            if summary and not isinstance(summary, dict):
+                # Extract common attributes from ResultSummary
+                summary_dict = {
+                    "query_type": getattr(summary, "query_type", None),
+                    "database": getattr(summary, "database", None),
+                    "server_info": str(getattr(summary, "server", ""))
+                }
+                
+                # Handle counters separately
+                if hasattr(summary, "counters"):
+                    counter_dict = {}
+                    for k in dir(summary.counters):
+                        if not k.startswith('_') and not callable(getattr(summary.counters, k)):
+                            counter_dict[k] = getattr(summary.counters, k)
+                    summary_dict["counters"] = counter_dict
+            else:
+                summary_dict = summary
+            
+            return records_dict, summary_dict
         except Exception as e:
             self.logger.error(f"Error executing query: {str(e)}")
             self.logger.error(f"Query: {query}")

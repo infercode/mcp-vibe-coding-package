@@ -104,9 +104,9 @@ class SearchManager:
             self.base_manager.ensure_initialized()
             
             # Generate embedding for search term
-            embedding = self.base_manager.embedding_manager.get_embedding(search_term)
+            embedding = self.base_manager.generate_embedding(search_term)
             if not embedding:
-                self.logger.warning(f"Failed to generate embedding for search term: {search_term}")
+                self.logger.error(f"Failed to generate embedding for search term: {search_term}")
                 return dict_to_json({"error": "Failed to generate embedding for search term"})
             
             # Prepare vector search query
@@ -128,7 +128,7 @@ class SearchManager:
             
             # Execute query
             params = {
-                "index_name": self.base_manager.embedding_index_name,
+                "index_name": getattr(self.base_manager, "embedding_index_name", "entity_embedding"),
                 "k": min(limit, 100),  # Cap limit for safety
                 "embedding": embedding
             }
@@ -184,7 +184,7 @@ class SearchManager:
             for term in forbidden_terms:
                 if term in cypher_query.upper():
                     error_msg = f"Forbidden operation detected in query: {term}"
-                    self.logger.warning(error_msg)
+                    self.logger.error(error_msg)
                     return dict_to_json({"error": error_msg})
             
             # Execute the query
@@ -203,7 +203,7 @@ class SearchManager:
                         value = record.get(key)
                         
                         # Handle Neo4j Node objects
-                        if hasattr(value, "items"):
+                        if value is not None and hasattr(value, "items"):
                             record_dict[key] = dict(value.items())
                         else:
                             record_dict[key] = value
@@ -211,13 +211,37 @@ class SearchManager:
                     results.append(record_dict)
             
             # Add summary information
+            summary_info = {"counters": {}, "database": None, "time": None}
+            
+            # Check if summary is a dictionary
+            if isinstance(summary, dict):
+                summary_info.update({k: v for k, v in summary.items() if v is not None})
+            else:
+                # Extract data from ResultSummary object
+                if hasattr(summary, "counters") and summary.counters:
+                    try:
+                        # Handle counters using value_pairs or attributes
+                        if hasattr(summary.counters, "value_pairs") and callable(getattr(summary.counters, "value_pairs")):
+                            summary_info["counters"] = dict(summary.counters.value_pairs())
+                        else:
+                            # Extract counter properties via attributes
+                            counter_dict = {}
+                            for attr in ["nodes_created", "relationships_created", "properties_set", "labels_added"]:
+                                if hasattr(summary.counters, attr):
+                                    counter_dict[attr] = getattr(summary.counters, attr)
+                            summary_info["counters"] = counter_dict
+                    except Exception as e:
+                        self.logger.error(f"Error extracting counters: {str(e)}")
+                        
+                if hasattr(summary, "database"):
+                    summary_info["database"] = summary.database
+                    
+                if hasattr(summary, "result_available_after"):
+                    summary_info["time"] = summary.result_available_after
+            
             response = {
                 "results": results,
-                "summary": {
-                    "counters": summary.counters.value_pairs() if hasattr(summary, "counters") else None,
-                    "database": summary.database if hasattr(summary, "database") else None,
-                    "time": summary.result_available_after if hasattr(summary, "result_available_after") else None
-                }
+                "summary": summary_info
             }
             
             return dict_to_json(response)
@@ -270,6 +294,7 @@ class SearchManager:
             )
             
             if not records or len(records) == 0:
+                self.logger.error(f"Entity '{entity_name}' not found")
                 return dict_to_json({"error": f"Entity '{entity_name}' not found"})
             
             # Build neighborhood query

@@ -19,14 +19,20 @@ def extract_error(error: Exception) -> str:
     return f"{type(error).__name__}: {str(error)}"
 
 
-def generate_id() -> str:
+def generate_id(prefix: str = "") -> str:
     """
-    Generate a unique ID.
+    Generate a unique ID with an optional prefix.
+    
+    Args:
+        prefix: Optional prefix for the ID (e.g., "les" for lesson, "obs" for observation)
     
     Returns:
-        A unique ID string
+        A unique ID string with optional prefix
     """
-    return str(uuid.uuid4())
+    unique_id = str(uuid.uuid4())
+    if prefix:
+        return f"{prefix}_{unique_id}"
+    return unique_id
 
 
 def dict_to_json(data: Dict[str, Any]) -> str:

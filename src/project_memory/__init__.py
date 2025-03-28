@@ -632,39 +632,64 @@ class ProjectMemoryManager:
         Returns:
             Dictionary with the created project container
         """
-        # Use the entity manager to create an entity of type 'ProjectContainer'
+        # Use a direct query to create an entity of type 'ProjectContainer'
         timestamp = time.time()
         
         # Generate unique ID
         container_id = f"proj_{int(timestamp)}_{hash(name) % 10000:04d}"
         
-        container_entity = {
+        # Create entity query
+        query = """
+        CREATE (e:Entity {
+            id: $id,
+            name: $name,
+            entityType: 'ProjectContainer',
+            created: $created,
+            lastUpdated: $lastUpdated
+        })
+        RETURN e
+        """
+        
+        params = {
             "id": container_id,
             "name": name,
-            "entityType": "ProjectContainer",
             "created": timestamp,
             "lastUpdated": timestamp
         }
         
         if description:
-            container_entity["description"] = description
+            query = """
+            CREATE (e:Entity {
+                id: $id,
+                name: $name,
+                entityType: 'ProjectContainer',
+                description: $description,
+                created: $created,
+                lastUpdated: $lastUpdated
+            })
+            RETURN e
+            """
+            params["description"] = description
             
         if properties:
             for key, value in properties.items():
-                if key not in container_entity:
-                    container_entity[key] = value
+                if key not in params:
+                    params[key] = value
         
-        # Create entity using the underlying entity manager from base manager
-        entity_json = self.base_manager.entity_manager.create_entity(container_entity)
-        entity_result = json.loads(entity_json)
+        # Execute the query
+        records, _ = self.base_manager.safe_execute_query(query, params)
         
-        if "error" in entity_result:
-            return {"error": entity_result["error"]}
+        if not records or len(records) == 0:
+            return {"error": f"Failed to create project container '{name}'"}
+            
+        # Extract entity data
+        entity = records[0].get("e")
+        entity_data = dict(entity.items()) if entity else {}
         
         return {
             "status": "success",
             "message": f"Project container '{name}' created successfully",
-            "container": entity_result.get("entity", {})
+            "container": entity_data
         }
     
     def get_project_container(self, name: str) -> Dict[str, Any]:
@@ -678,30 +703,33 @@ class ProjectMemoryManager:
             Dictionary with the project container details
         """
         # Get entity by name and type
-        entity_json = self.base_manager.entity_manager.get_entity_by_name_and_type(
-            name, "ProjectContainer"
-        )
-        entity_result = json.loads(entity_json)
+        query = """
+        MATCH (e:Entity {name: $name, entityType: 'ProjectContainer'})
+        RETURN e
+        """
         
-        if "error" in entity_result:
-            return {"error": entity_result["error"]}
+        records, _ = self.base_manager.safe_execute_query(query, {"name": name})
         
-        # Get domain and component counts
-        container_id = entity_result.get("entity", {}).get("id")
+        if not records or len(records) == 0:
+            return {"error": f"Project container '{name}' not found"}
         
-        if not container_id:
-            return {"error": f"Project container '{name}' found but has no ID"}
+        # Extract entity data
+        entity = records[0].get("e")
+        container = dict(entity.items()) if entity else {}
         
+        if not container:
+            return {"error": f"Project container '{name}' found but has no data"}
+            
         # Get domain count
         domain_query = """
-        MATCH (c:Entity {id: $container_id})
+        MATCH (c:Entity {name: $container_name, entityType: 'ProjectContainer'})
         MATCH (d:Entity {entityType: 'Domain'})-[:PART_OF]->(c)
         RETURN count(d) as domain_count
         """
         
         domain_records, _ = self.base_manager.safe_execute_query(
             domain_query,
-            {"container_id": container_id}
+            {"container_name": name}
         )
         
         domain_count = 0
@@ -710,7 +738,7 @@ class ProjectMemoryManager:
         
         # Get component count
         component_query = """
-        MATCH (c:Entity {id: $container_id})
+        MATCH (c:Entity {name: $container_name, entityType: 'ProjectContainer'})
         MATCH (d:Entity {entityType: 'Domain'})-[:PART_OF]->(c)
         MATCH (comp:Entity)-[:BELONGS_TO]->(d)
         RETURN count(comp) as component_count
@@ -718,7 +746,7 @@ class ProjectMemoryManager:
         
         component_records, _ = self.base_manager.safe_execute_query(
             component_query,
-            {"container_id": container_id}
+            {"container_name": name}
         )
         
         component_count = 0
@@ -726,7 +754,6 @@ class ProjectMemoryManager:
             component_count = component_records[0]["component_count"]
         
         # Add counts to result
-        container = entity_result.get("entity", {})
         container["domain_count"] = domain_count
         container["component_count"] = component_count
         
@@ -744,35 +771,50 @@ class ProjectMemoryManager:
         Returns:
             Dictionary with the updated project container
         """
-        # Get entity by name and type
-        entity_json = self.base_manager.entity_manager.get_entity_by_name_and_type(
-            name, "ProjectContainer"
-        )
-        entity_result = json.loads(entity_json)
+        # Check if entity exists
+        query = """
+        MATCH (e:Entity {name: $name, entityType: 'ProjectContainer'})
+        RETURN e
+        """
         
-        if "error" in entity_result:
-            return {"error": entity_result["error"]}
+        records, _ = self.base_manager.safe_execute_query(query, {"name": name})
         
-        entity = entity_result.get("entity", {})
-        entity_id = entity.get("id")
-        
-        if not entity_id:
-            return {"error": f"Project container '{name}' found but has no ID"}
-        
-        # Update the entity
+        if not records or len(records) == 0:
+            return {"error": f"Project container '{name}' not found"}
+            
+        # Add lastUpdated timestamp
         updates["lastUpdated"] = time.time()
         
-        # Use entity manager to update
-        update_json = self.base_manager.entity_manager.update_entity(entity_id, updates)
-        update_result = json.loads(update_json)
+        # Build SET clause
+        set_clauses = []
+        params = {"name": name}
         
-        if "error" in update_result:
-            return {"error": update_result["error"]}
+        for key, value in updates.items():
+            set_clauses.append(f"e.{key} = ${key}")
+            params[key] = value
+            
+        set_clause = ", ".join(set_clauses)
+        
+        # Update query
+        update_query = f"""
+        MATCH (e:Entity {{name: $name, entityType: 'ProjectContainer'}})
+        SET {set_clause}
+        RETURN e
+        """
+        
+        update_records, _ = self.base_manager.safe_execute_query(update_query, params)
+        
+        if not update_records or len(update_records) == 0:
+            return {"error": f"Failed to update project container '{name}'"}
+            
+        # Extract updated entity
+        updated_entity = update_records[0].get("e")
+        updated_data = dict(updated_entity.items()) if updated_entity else {}
         
         return {
             "status": "success",
             "message": f"Project container '{name}' updated successfully",
-            "container": update_result.get("entity", {})
+            "container": updated_data
         }
     
     def delete_project_container(self, name: str, 
@@ -787,25 +829,24 @@ class ProjectMemoryManager:
         Returns:
             Dictionary with the deletion result
         """
-        # Get entity by name and type
-        entity_json = self.base_manager.entity_manager.get_entity_by_name_and_type(
-            name, "ProjectContainer"
-        )
-        entity_result = json.loads(entity_json)
+        # Check if entity exists
+        query = """
+        MATCH (e:Entity {name: $name, entityType: 'ProjectContainer'})
+        RETURN e
+        """
         
-        if "error" in entity_result:
-            return {"error": entity_result["error"]}
+        records, _ = self.base_manager.safe_execute_query(query, {"name": name})
         
-        entity = entity_result.get("entity", {})
-        entity_id = entity.get("id")
+        if not records or len(records) == 0:
+            return {"error": f"Project container '{name}' not found"}
         
-        if not entity_id:
-            return {"error": f"Project container '{name}' found but has no ID"}
+        deleted_domains = 0
+        deleted_components = 0
         
         if delete_contents:
             # Delete all components in domains
             delete_components_query = """
-            MATCH (c:Entity {id: $container_id})
+            MATCH (c:Entity {name: $container_name, entityType: 'ProjectContainer'})
             MATCH (d:Entity)-[:PART_OF]->(c)
             MATCH (comp:Entity)-[:BELONGS_TO]->(d)
             
@@ -825,16 +866,15 @@ class ProjectMemoryManager:
             
             comp_records, _ = self.base_manager.safe_execute_query(
                 delete_components_query,
-                {"container_id": entity_id}
+                {"container_name": name}
             )
             
-            deleted_components = 0
             if comp_records and len(comp_records) > 0:
                 deleted_components = comp_records[0]["deleted_count"]
             
             # Delete all domains
             delete_domains_query = """
-            MATCH (c:Entity {id: $container_id})
+            MATCH (c:Entity {name: $container_name, entityType: 'ProjectContainer'})
             MATCH (d:Entity)-[:PART_OF]->(c)
             
             // Delete domain relationships
@@ -849,19 +889,28 @@ class ProjectMemoryManager:
             
             domain_records, _ = self.base_manager.safe_execute_query(
                 delete_domains_query,
-                {"container_id": entity_id}
+                {"container_name": name}
             )
             
-            deleted_domains = 0
             if domain_records and len(domain_records) > 0:
                 deleted_domains = domain_records[0]["deleted_count"]
         
         # Delete the container entity
-        delete_json = self.base_manager.entity_manager.delete_entity(entity_id)
-        delete_result = json.loads(delete_json)
+        delete_query = """
+        MATCH (e:Entity {name: $name, entityType: 'ProjectContainer'})
+        OPTIONAL MATCH (e)-[r]-()
+        DELETE r, e
+        RETURN count(e) as deleted
+        """
         
-        if "error" in delete_result:
-            return {"error": delete_result["error"]}
+        delete_records, _ = self.base_manager.safe_execute_query(delete_query, {"name": name})
+        
+        deleted = 0
+        if delete_records and len(delete_records) > 0:
+            deleted = delete_records[0]["deleted"]
+            
+        if deleted == 0:
+            return {"error": f"Failed to delete project container '{name}'"}
         
         result = {
             "status": "success",
@@ -869,8 +918,8 @@ class ProjectMemoryManager:
         }
         
         if delete_contents:
-            result["deleted_domains"] = deleted_domains
-            result["deleted_components"] = deleted_components
+            result["deleted_domains"] = str(deleted_domains)
+            result["deleted_components"] = str(deleted_components)
         
         return result
     

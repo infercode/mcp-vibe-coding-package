@@ -58,7 +58,7 @@ class LessonRelation:
             
             # Validate relation type
             if relation_type not in self.LESSON_RELATION_TYPES:
-                self.logger.warning(f"Relation type '{relation_type}' is not a standard lesson relation type")
+                self.logger.error(f"Relation type '{relation_type}' is not a standard lesson relation type")
             
             # Check if source entity exists and is in the container
             if container_name:
@@ -172,13 +172,12 @@ class LessonRelation:
             
             # Add domain filter to get lesson-specific relations
             if direction == "both":
-                query_parts.append("AND (r.domain = 'lesson' OR type(r) IN $lesson_relation_types)")
+                query_parts.append("AND (r.domain = 'lesson' OR type(r) IN ['ORIGINATED_FROM', 'SOLVED_WITH', 'PREVENTS', 'BUILDS_ON', 'APPLIES_TO', 'SUPERSEDES', 'CONFLICTS_WITH', 'PRECEDED_BY', 'CONSOLIDATES', 'APPLIED_TO'])")
             else:
                 if relation_type:
-                    query_parts.append("AND (r.domain = 'lesson' OR type(r) IN $lesson_relation_types)")
+                    query_parts.append("AND (r.domain = 'lesson' OR type(r) IN ['ORIGINATED_FROM', 'SOLVED_WITH', 'PREVENTS', 'BUILDS_ON', 'APPLIES_TO', 'SUPERSEDES', 'CONFLICTS_WITH', 'PRECEDED_BY', 'CONSOLIDATES', 'APPLIED_TO'])")
                 else:
-                    query_parts.append("WHERE (r.domain = 'lesson' OR type(r) IN $lesson_relation_types)")
-            params["lesson_relation_types"] = self.LESSON_RELATION_TYPES
+                    query_parts.append("WHERE (r.domain = 'lesson' OR type(r) IN ['ORIGINATED_FROM', 'SOLVED_WITH', 'PREVENTS', 'BUILDS_ON', 'APPLIES_TO', 'SUPERSEDES', 'CONFLICTS_WITH', 'PRECEDED_BY', 'CONSOLIDATES', 'APPLIED_TO'])")
             
             # Complete query
             if direction == "both":
@@ -296,7 +295,7 @@ class LessonRelation:
                 # When no relation type is specified, only delete lesson relations
                 query = """
                 MATCH (from:Entity {name: $from_name})-[r]->(to:Entity {name: $to_name})
-                WHERE r.domain = 'lesson' OR type(r) IN $lesson_relation_types
+                WHERE r.domain = 'lesson' OR type(r) IN ['ORIGINATED_FROM', 'SOLVED_WITH', 'PREVENTS', 'BUILDS_ON', 'APPLIES_TO', 'SUPERSEDES', 'CONFLICTS_WITH', 'PRECEDED_BY', 'CONSOLIDATES', 'APPLIED_TO']
                 DELETE r
                 RETURN count(r) as deleted_count
                 """
@@ -305,8 +304,7 @@ class LessonRelation:
                     query,
                     {
                         "from_name": from_entity, 
-                        "to_name": to_entity,
-                        "lesson_relation_types": self.LESSON_RELATION_TYPES
+                        "to_name": to_entity
                     }
                 )
                 
@@ -375,7 +373,7 @@ class LessonRelation:
             relationships_query = f"""
             MATCH (c:LessonContainer {{name: $container_name}})-[:CONTAINS]->(e:Entity)
             MATCH path = (e)-[r*1..{depth}]-(related:Entity)
-            WHERE (r[0].domain = 'lesson' OR type(r[0]) IN $lesson_relation_types)
+            WHERE (r[0].domain = 'lesson' OR type(r[0]) IN ['ORIGINATED_FROM', 'SOLVED_WITH', 'PREVENTS', 'BUILDS_ON', 'APPLIES_TO', 'SUPERSEDES', 'CONFLICTS_WITH', 'PRECEDED_BY', 'CONSOLIDATES', 'APPLIED_TO'])
             UNWIND r as rel
             WITH DISTINCT rel
             RETURN startNode(rel).name as from, endNode(rel).name as to, type(rel) as type, properties(rel) as properties
@@ -389,7 +387,7 @@ class LessonRelation:
             
             relationships_records, _ = self.base_manager.safe_execute_query(
                 relationships_query,
-                {"container_name": container_name, "lesson_relation_types": self.LESSON_RELATION_TYPES}
+                {"container_name": container_name}
             )
             
             # Process results
@@ -520,7 +518,7 @@ class LessonRelation:
                 if 0.0 <= success_score <= 1.0:
                     relation_properties["success_score"] = success_score
                 else:
-                    self.logger.warning(f"Success score {success_score} outside valid range (0.0-1.0), clamping")
+                    self.logger.error(f"Success score {success_score} outside valid range (0.0-1.0), clamping")
                     relation_properties["success_score"] = max(0.0, min(1.0, success_score))
             
             # Use create_lesson_relation to create the relationship
@@ -598,8 +596,8 @@ class LessonRelation:
                 query_parts.append("WHERE type(r) = $relation_type")
                 params["relation_type"] = relation_type
             else:
-                query_parts.append("WHERE r.domain = 'lesson' OR type(r) IN $lesson_relation_types")
-                params["lesson_relation_types"] = self.LESSON_RELATION_TYPES
+                # Use a different approach that avoids list parameters in the WHERE clause
+                query_parts.append("WHERE r.domain = 'lesson' OR type(r) IN ['ORIGINATED_FROM', 'SOLVED_WITH', 'PREVENTS', 'BUILDS_ON', 'APPLIES_TO', 'SUPERSEDES', 'CONFLICTS_WITH', 'PRECEDED_BY', 'CONSOLIDATES', 'APPLIED_TO']")
             
             # Complete query
             query_parts.append("RETURN from.name as from, to.name as to, type(r) as type, properties(r) as properties")

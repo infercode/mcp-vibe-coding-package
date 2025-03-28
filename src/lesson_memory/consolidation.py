@@ -22,7 +22,7 @@ class LessonConsolidation:
         """
         self.base_manager = base_manager
         self.logger = base_manager.logger
-        self.embedding_adapter = EmbeddingAdapter(base_manager)
+        self.embedding_adapter = EmbeddingAdapter(logger=base_manager.logger)
     
     def identify_similar_lessons(self, min_similarity: float = 0.7, 
                               entity_type: Optional[str] = None,
@@ -118,7 +118,7 @@ class LessonConsolidation:
                         continue
                     
                     # Calculate similarity
-                    similarity = self.embedding_adapter.calculate_similarity(
+                    similarity = self.embedding_adapter.similarity_score(
                         lesson1["embedding"], lesson2["embedding"]
                     )
                     
@@ -307,7 +307,7 @@ class LessonConsolidation:
             
             # Create the merged lesson
             timestamp = time.time()
-            merged_id = generate_id(prefix="les")
+            merged_id = generate_id("les")
             
             create_query = """
             CREATE (e:Entity {
@@ -355,7 +355,7 @@ class LessonConsolidation:
             
             # Generate embedding for merged lesson
             embedding_text = f"{new_name} {merged_lesson['content']} {merged_lesson['context']}"
-            embedding = self.embedding_adapter.generate_embedding(embedding_text)
+            embedding = self.embedding_adapter.get_embedding(embedding_text)
             
             if embedding:
                 update_embedding_query = """
@@ -369,7 +369,7 @@ class LessonConsolidation:
             
             # Create observations for merged lesson
             for obs in merged_lesson["observations"]:
-                obs_id = generate_id(prefix="obs")
+                obs_id = generate_id("obs")
                 obs_query = """
                 MATCH (e:Entity {id: $lesson_id})
                 CREATE (o:Observation {
@@ -643,8 +643,10 @@ class LessonConsolidation:
                 newer_id = record.get("newer_id")
                 newer_name = record.get("newer_name")
                 
-                created_date = datetime.fromtimestamp(created).strftime('%Y-%m-%d')
-                days_old = int((current_time - created) / (24 * 60 * 60))
+                # Ensure created is a valid timestamp
+                created_timestamp = float(created) if created is not None else current_time
+                created_date = datetime.fromtimestamp(created_timestamp).strftime('%Y-%m-%d')
+                days_old = int((current_time - created_timestamp) / (24 * 60 * 60))
                 
                 candidate = {
                     "id": lesson_id,
