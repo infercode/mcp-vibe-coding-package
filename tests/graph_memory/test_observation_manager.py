@@ -1,291 +1,563 @@
-import unittest
-from unittest.mock import patch, MagicMock
+import pytest
+from unittest.mock import MagicMock, patch, call
+import json
 
-from src.graph_memory.observation_manager import ObservationManager
-from src.graph_memory.base_manager import BaseManager
+from src.graph_memory import ObservationManager
 
-class TestObservationManager(unittest.TestCase):
-    """Test suite for ObservationManager class responsible for entity observations."""
-    
-    def setUp(self):
-        """Set up test environment before each test."""
-        # Create a mock base manager
-        self.mock_base_manager = MagicMock(spec=BaseManager)
-        
-        # Create observation manager with mock base manager
-        self.observation_manager = ObservationManager(self.mock_base_manager)
-        
-        # Sample observation data for testing
-        self.sample_observation = {
-            "entity_name": "test_entity",
-            "observation_type": "DESCRIPTION",
-            "content": "This is a test observation description.",
-            "metadata": {
-                "confidence": 0.9,
-                "source": "unit_test"
-            }
-        }
-    
-    def test_add_observation(self):
-        """Test adding an observation to an entity."""
-        # Setup mock response
-        mock_result = {
-            "entity": {"name": "test_entity", "id": 123},
-            "observation": {
-                "id": 456,
-                "type": "DESCRIPTION",
-                "content": "This is a test observation description.",
-                "metadata": {"confidence": 0.9, "source": "unit_test"},
-                "timestamp": "2025-03-28T12:00:00"
-            }
-        }
-        self.mock_base_manager.execute_query.return_value = [mock_result]
-        
-        # Call method under test
-        result = self.observation_manager.add_observation(
-            entity_name="test_entity",
-            observation_type="DESCRIPTION",
-            content="This is a test observation description.",
-            metadata={"confidence": 0.9, "source": "unit_test"}
-        )
-        
-        # Assertions
-        self.assertIsNotNone(result)
-        self.assertEqual(result.get("entity_id"), 123)
-        self.assertEqual(result.get("observation_id"), 456)
-        self.assertEqual(result.get("type"), "DESCRIPTION")
-        self.assertEqual(result.get("content"), "This is a test observation description.")
-        
-        # Verify query execution
-        self.mock_base_manager.execute_query.assert_called_once()
-        # Verify that the query contains CREATE
-        call_args = self.mock_base_manager.execute_query.call_args[0]
-        self.assertTrue("CREATE" in call_args[0])
-    
-    def test_add_observation_entity_not_found(self):
-        """Test handling of observation addition when entity doesn't exist."""
-        # Setup mock response (empty result indicating entity not found)
-        self.mock_base_manager.execute_query.return_value = []
-        
-        # Call method under test
-        result = self.observation_manager.add_observation(
-            entity_name="nonexistent_entity",
-            observation_type="DESCRIPTION",
-            content="This observation won't be added"
-        )
-        
-        # Assertions
-        self.assertIsNone(result)
-        
-        # Verify query execution
-        self.mock_base_manager.execute_query.assert_called_once()
-    
-    def test_get_entity_observations(self):
-        """Test retrieving all observations for an entity."""
-        # Setup mock response
-        mock_results = [
-            {
-                "entity": {"name": "test_entity", "id": 123},
-                "observation": {
-                    "id": 456,
-                    "type": "DESCRIPTION",
-                    "content": "This is a test observation description.",
-                    "metadata": {"confidence": 0.9, "source": "unit_test"},
-                    "timestamp": "2025-03-28T12:00:00"
-                }
-            },
-            {
-                "entity": {"name": "test_entity", "id": 123},
-                "observation": {
-                    "id": 789,
-                    "type": "FEATURE",
-                    "content": "This is a feature observation.",
-                    "metadata": {"confidence": 0.8, "source": "unit_test"},
-                    "timestamp": "2025-03-28T12:30:00"
-                }
-            }
-        ]
-        self.mock_base_manager.execute_query.return_value = mock_results
-        
-        # Call method under test
-        results = self.observation_manager.get_entity_observations(entity_name="test_entity")
-        
-        # Assertions
-        self.assertEqual(len(results), 2)
-        self.assertEqual(results[0].get("entity_name"), "test_entity")
-        self.assertEqual(results[0].get("type"), "DESCRIPTION")
-        self.assertEqual(results[1].get("type"), "FEATURE")
-        
-        # Verify query execution
-        self.mock_base_manager.execute_query.assert_called_once()
-        # Verify that the query contains MATCH
-        call_args = self.mock_base_manager.execute_query.call_args[0]
-        self.assertTrue("MATCH" in call_args[0])
-    
-    def test_get_observation_by_type(self):
-        """Test retrieving entity observations by type."""
-        # Setup mock response
-        mock_results = [
-            {
-                "entity": {"name": "test_entity", "id": 123},
-                "observation": {
-                    "id": 456,
-                    "type": "DESCRIPTION",
-                    "content": "This is a test observation description.",
-                    "metadata": {"confidence": 0.9, "source": "unit_test"},
-                    "timestamp": "2025-03-28T12:00:00"
-                }
-            }
-        ]
-        self.mock_base_manager.execute_query.return_value = mock_results
-        
-        # Call method under test
-        results = self.observation_manager.get_observations_by_type(
-            entity_name="test_entity", 
-            observation_type="DESCRIPTION"
-        )
-        
-        # Assertions
-        self.assertEqual(len(results), 1)
-        self.assertEqual(results[0].get("type"), "DESCRIPTION")
-        
-        # Verify query execution
-        self.mock_base_manager.execute_query.assert_called_once()
-        # Verify that the query contains the observation type filter
-        call_args = self.mock_base_manager.execute_query.call_args[0]
-        self.assertTrue("DESCRIPTION" in call_args[0])
-    
-    def test_update_observation(self):
-        """Test updating an observation."""
-        # Setup mock response
-        updated_observation = {
-            "entity": {"name": "test_entity", "id": 123},
-            "observation": {
-                "id": 456,
-                "type": "DESCRIPTION",
-                "content": "This is an updated description.",
-                "metadata": {"confidence": 0.95, "source": "unit_test", "updated": True},
-                "timestamp": "2025-03-28T13:00:00"
-            }
-        }
-        self.mock_base_manager.execute_query.return_value = [updated_observation]
-        
-        # Call method under test
-        update_data = {
-            "content": "This is an updated description.",
-            "metadata": {"confidence": 0.95, "source": "unit_test", "updated": True}
-        }
-        result = self.observation_manager.update_observation(
-            entity_name="test_entity",
-            observation_id=456,
-            update_data=update_data
-        )
-        
-        # Assertions
-        self.assertIsNotNone(result)
-        self.assertEqual(result.get("content"), "This is an updated description.")
-        self.assertEqual(result.get("metadata").get("confidence"), 0.95)
-        self.assertTrue(result.get("metadata").get("updated"))
-        
-        # Verify query execution
-        self.mock_base_manager.execute_query.assert_called_once()
-        # Verify that the query contains SET for updates
-        call_args = self.mock_base_manager.execute_query.call_args[0]
-        self.assertTrue("SET" in call_args[0])
-    
-    def test_delete_observation(self):
-        """Test deleting an observation."""
-        # Setup mock response
-        self.mock_base_manager.execute_query.return_value = [{"deleted": True, "count": 1}]
-        
-        # Call method under test
-        result = self.observation_manager.delete_observation(
-            entity_name="test_entity",
-            observation_id=456
-        )
-        
-        # Assertions
-        self.assertTrue(result)
-        
-        # Verify query execution
-        self.mock_base_manager.execute_query.assert_called_once()
-        # Verify that the query contains DELETE
-        call_args = self.mock_base_manager.execute_query.call_args[0]
-        self.assertTrue("DELETE" in call_args[0])
-    
-    def test_delete_entity_observations(self):
-        """Test deleting all observations for an entity."""
-        # Setup mock response
-        self.mock_base_manager.execute_query.return_value = [{"deleted": True, "count": 5}]
-        
-        # Call method under test
-        result, count = self.observation_manager.delete_entity_observations("test_entity")
-        
-        # Assertions
-        self.assertTrue(result)
-        self.assertEqual(count, 5)
-        
-        # Verify query execution
-        self.mock_base_manager.execute_query.assert_called_once()
-        # Verify that the query contains DELETE
-        call_args = self.mock_base_manager.execute_query.call_args[0]
-        self.assertTrue("DELETE" in call_args[0])
-    
-    def test_get_observation_types(self):
-        """Test retrieving all observation types used in the graph."""
-        # Setup mock response
-        mock_results = [
-            {"observation_type": "DESCRIPTION", "count": 10},
-            {"observation_type": "FEATURE", "count": 5},
-            {"observation_type": "BEHAVIOR", "count": 3}
-        ]
-        self.mock_base_manager.execute_query.return_value = mock_results
-        
-        # Call method under test
-        results = self.observation_manager.get_observation_types()
-        
-        # Assertions
-        self.assertEqual(len(results), 3)
-        self.assertEqual(results[0].get("observation_type"), "DESCRIPTION")
-        self.assertEqual(results[0].get("count"), 10)
-        
-        # Verify query execution
-        self.mock_base_manager.execute_query.assert_called_once()
-        # Verify that the query is counting observation types
-        call_args = self.mock_base_manager.execute_query.call_args[0]
-        self.assertTrue("observation_type" in call_args[0].lower() or "observationType" in call_args[0])
-    
-    def test_get_latest_observation(self):
-        """Test retrieving the latest observation of a specific type for an entity."""
-        # Setup mock response
-        mock_result = {
-            "entity": {"name": "test_entity", "id": 123},
-            "observation": {
-                "id": 789,
-                "type": "DESCRIPTION",
-                "content": "This is the latest description.",
-                "metadata": {"confidence": 0.95},
-                "timestamp": "2025-03-28T14:00:00"
-            }
-        }
-        self.mock_base_manager.execute_query.return_value = [mock_result]
-        
-        # Call method under test
-        result = self.observation_manager.get_latest_observation(
-            entity_name="test_entity", 
-            observation_type="DESCRIPTION"
-        )
-        
-        # Assertions
-        self.assertIsNotNone(result)
-        self.assertEqual(result.get("content"), "This is the latest description.")
-        self.assertEqual(result.get("timestamp"), "2025-03-28T14:00:00")
-        
-        # Verify query execution
-        self.mock_base_manager.execute_query.assert_called_once()
-        # Verify that the query orders by timestamp
-        call_args = self.mock_base_manager.execute_query.call_args[0]
-        self.assertTrue("ORDER BY" in call_args[0] and "timestamp" in call_args[0].lower())
 
-if __name__ == '__main__':
-    unittest.main() 
+def test_init(mock_base_manager, mock_entity_manager, mock_logger):
+    """Test initialization of ObservationManager"""
+    manager = ObservationManager(mock_base_manager, mock_entity_manager, mock_logger)
+    
+    assert manager.base_manager == mock_base_manager
+    assert manager.entity_manager == mock_entity_manager
+    assert manager.logger == mock_logger
+
+
+def test_add_observation(mock_base_manager, mock_entity_manager, mock_logger, sample_entity):
+    """Test adding an observation to an entity"""
+    # Setup
+    manager = ObservationManager(mock_base_manager, mock_entity_manager, mock_logger)
+    entity_id = "entity-123"
+    
+    # Mock entity retrieval
+    mock_entity_manager.get_entity.return_value = json.dumps(sample_entity)
+    
+    # Mock query execution
+    mock_base_manager.execute_query.return_value = {"results": [{"observation_id": "obs-123"}]}
+    
+    # Execute
+    observation_data = {
+        "entity_id": entity_id,
+        "content": "This is a test observation",
+        "metadata": {"source": "test", "confidence": 0.95}
+    }
+    
+    result = manager.add_observation(observation_data)
+    
+    # Verify
+    result_obj = json.loads(result)
+    assert result_obj["status"] == "success"
+    assert "observation_id" in result_obj
+    
+    # Verify entity_manager was called for lookup
+    mock_entity_manager.get_entity.assert_called_once_with(entity_id)
+    
+    # Verify base_manager.execute_query was called with correct parameters
+    mock_base_manager.execute_query.assert_called_once()
+    # Extract the query from the call
+    query = mock_base_manager.execute_query.call_args[0][0]
+    assert "CREATE" in query
+    assert "Observation" in query
+    assert "content:" in query
+    assert "HAS_OBSERVATION" in query
+
+
+def test_add_observation_entity_not_found(mock_base_manager, mock_entity_manager, mock_logger):
+    """Test adding an observation to a non-existent entity"""
+    # Setup
+    manager = ObservationManager(mock_base_manager, mock_entity_manager, mock_logger)
+    entity_id = "nonexistent-entity"
+    
+    # Mock entity retrieval - not found
+    mock_entity_manager.get_entity.return_value = None
+    
+    # Execute
+    observation_data = {
+        "entity_id": entity_id,
+        "content": "This is a test observation"
+    }
+    
+    result = manager.add_observation(observation_data)
+    
+    # Verify
+    result_obj = json.loads(result)
+    assert result_obj["status"] == "error"
+    assert "not found" in result_obj["message"].lower()
+    
+    # Verify entity_manager was called for lookup
+    mock_entity_manager.get_entity.assert_called_once_with(entity_id)
+    
+    # Verify base_manager.execute_query was NOT called
+    mock_base_manager.execute_query.assert_not_called()
+
+
+def test_add_observations_batch(mock_base_manager, mock_entity_manager, mock_logger, sample_entity):
+    """Test adding multiple observations in a batch"""
+    # Setup
+    manager = ObservationManager(mock_base_manager, mock_entity_manager, mock_logger)
+    entity_id = "entity-123"
+    
+    # Mock entity retrieval
+    mock_entity_manager.get_entity.return_value = json.dumps(sample_entity)
+    
+    # Mock query execution for batch addition
+    mock_base_manager.execute_query.return_value = {"results": [
+        {"observation_id": "obs-1"}, 
+        {"observation_id": "obs-2"}
+    ]}
+    
+    # Execute
+    observations = [
+        {
+            "entity_id": entity_id,
+            "content": "First observation",
+            "metadata": {"order": 1}
+        },
+        {
+            "entity_id": entity_id,
+            "content": "Second observation",
+            "metadata": {"order": 2}
+        }
+    ]
+    
+    result = manager.add_observations_batch(observations)
+    
+    # Verify
+    result_obj = json.loads(result)
+    assert result_obj["status"] == "success"
+    assert "observation_ids" in result_obj
+    assert len(result_obj["observation_ids"]) == 2
+    
+    # Verify entity_manager was called for lookup
+    mock_entity_manager.get_entity.assert_called_once_with(entity_id)
+    
+    # Verify base_manager.execute_query was called with correct parameters
+    mock_base_manager.execute_query.assert_called_once()
+    # Extract the query from the call
+    query = mock_base_manager.execute_query.call_args[0][0]
+    assert "CREATE" in query
+    assert "Observation" in query
+    assert "UNWIND" in query  # Batch processing
+    assert "HAS_OBSERVATION" in query
+
+
+def test_add_observations_batch_mixed_entities(mock_base_manager, mock_entity_manager, mock_logger, sample_entities):
+    """Test adding observations to multiple different entities in a batch"""
+    # Setup
+    manager = ObservationManager(mock_base_manager, mock_entity_manager, mock_logger)
+    
+    # Mock entity retrieval for different entities
+    def get_entity_side_effect(entity_id):
+        if entity_id == "entity-1":
+            return json.dumps(sample_entities[0])
+        elif entity_id == "entity-2":
+            return json.dumps(sample_entities[1])
+        return None
+    
+    mock_entity_manager.get_entity.side_effect = get_entity_side_effect
+    
+    # Mock query execution for batch addition
+    mock_base_manager.execute_query.return_value = {"results": [
+        {"observation_id": "obs-1"}, 
+        {"observation_id": "obs-2"}
+    ]}
+    
+    # Execute
+    observations = [
+        {
+            "entity_id": "entity-1",
+            "content": "Observation for entity 1",
+            "metadata": {"source": "test1"}
+        },
+        {
+            "entity_id": "entity-2",
+            "content": "Observation for entity 2",
+            "metadata": {"source": "test2"}
+        }
+    ]
+    
+    result = manager.add_observations_batch(observations)
+    
+    # Verify
+    result_obj = json.loads(result)
+    assert result_obj["status"] == "success"
+    assert "observation_ids" in result_obj
+    assert len(result_obj["observation_ids"]) == 2
+    
+    # Verify entity_manager was called for both lookups
+    mock_entity_manager.get_entity.assert_has_calls([
+        call("entity-1"),
+        call("entity-2")
+    ])
+    
+    # Verify base_manager.execute_query was called
+    mock_base_manager.execute_query.assert_called_once()
+
+
+def test_get_observations(mock_base_manager, mock_entity_manager, mock_logger, sample_entity):
+    """Test retrieving observations for an entity"""
+    # Setup
+    manager = ObservationManager(mock_base_manager, mock_entity_manager, mock_logger)
+    entity_id = "entity-123"
+    
+    # Mock entity retrieval
+    mock_entity_manager.get_entity.return_value = json.dumps(sample_entity)
+    
+    # Mock observations retrieval
+    mock_observations = [
+        {
+            "observation": {
+                "id": "obs-1",
+                "content": "First observation",
+                "created_at": "2023-01-01T12:00:00",
+                "metadata": {"source": "test1"}
+            }
+        },
+        {
+            "observation": {
+                "id": "obs-2",
+                "content": "Second observation",
+                "created_at": "2023-01-02T12:00:00",
+                "metadata": {"source": "test2"}
+            }
+        }
+    ]
+    
+    mock_base_manager.execute_query.return_value = {"results": mock_observations}
+    
+    # Execute
+    result = manager.get_observations(entity_id)
+    
+    # Verify
+    result_list = json.loads(result)
+    assert len(result_list) == 2
+    assert result_list[0]["id"] == "obs-1"
+    assert result_list[1]["id"] == "obs-2"
+    
+    # Verify entity_manager was called for lookup
+    mock_entity_manager.get_entity.assert_called_once_with(entity_id)
+    
+    # Verify base_manager.execute_query was called with correct parameters
+    mock_base_manager.execute_query.assert_called_once()
+    # Extract the query from the call
+    query = mock_base_manager.execute_query.call_args[0][0]
+    assert "MATCH" in query
+    assert "HAS_OBSERVATION" in query
+    assert entity_id in query
+
+
+def test_get_observations_entity_not_found(mock_base_manager, mock_entity_manager, mock_logger):
+    """Test retrieving observations for a non-existent entity"""
+    # Setup
+    manager = ObservationManager(mock_base_manager, mock_entity_manager, mock_logger)
+    entity_id = "nonexistent-entity"
+    
+    # Mock entity retrieval - not found
+    mock_entity_manager.get_entity.return_value = None
+    
+    # Execute
+    result = manager.get_observations(entity_id)
+    
+    # Verify
+    result_obj = json.loads(result)
+    assert result_obj["status"] == "error"
+    assert "not found" in result_obj["message"].lower()
+    
+    # Verify entity_manager was called for lookup
+    mock_entity_manager.get_entity.assert_called_once_with(entity_id)
+    
+    # Verify base_manager.execute_query was NOT called
+    mock_base_manager.execute_query.assert_not_called()
+
+
+def test_get_observations_with_filter(mock_base_manager, mock_entity_manager, mock_logger, sample_entity):
+    """Test retrieving observations with specific filters"""
+    # Setup
+    manager = ObservationManager(mock_base_manager, mock_entity_manager, mock_logger)
+    entity_id = "entity-123"
+    
+    # Mock entity retrieval
+    mock_entity_manager.get_entity.return_value = json.dumps(sample_entity)
+    
+    # Mock filtered observations retrieval
+    mock_observations = [
+        {
+            "observation": {
+                "id": "obs-1",
+                "content": "Filtered observation",
+                "created_at": "2023-01-01T12:00:00",
+                "metadata": {"source": "test1", "importance": "high"}
+            }
+        }
+    ]
+    
+    mock_base_manager.execute_query.return_value = {"results": mock_observations}
+    
+    # Execute with filter
+    result = manager.get_observations(
+        entity_id,
+        filters={"metadata.importance": "high"}
+    )
+    
+    # Verify
+    result_list = json.loads(result)
+    assert len(result_list) == 1
+    assert result_list[0]["id"] == "obs-1"
+    assert result_list[0]["metadata"]["importance"] == "high"
+    
+    # Verify entity_manager was called for lookup
+    mock_entity_manager.get_entity.assert_called_once_with(entity_id)
+    
+    # Verify base_manager.execute_query was called with correct parameters
+    mock_base_manager.execute_query.assert_called_once()
+    # Extract the query from the call
+    query = mock_base_manager.execute_query.call_args[0][0]
+    assert "MATCH" in query
+    assert "HAS_OBSERVATION" in query
+    assert "importance:" in query or "importance =" in query
+    assert "high" in query
+
+
+def test_delete_observation(mock_base_manager, mock_entity_manager, mock_logger):
+    """Test deleting a specific observation"""
+    # Setup
+    manager = ObservationManager(mock_base_manager, mock_entity_manager, mock_logger)
+    entity_id = "entity-123"
+    observation_id = "obs-123"
+    
+    # Mock deletion query
+    mock_base_manager.execute_query.return_value = {"results": [{"deleted": True}]}
+    
+    # Execute
+    result = manager.delete_observation(entity_id, observation_id)
+    
+    # Verify
+    result_obj = json.loads(result)
+    assert result_obj["status"] == "success"
+    
+    # Verify base_manager.execute_query was called with correct parameters
+    mock_base_manager.execute_query.assert_called_once()
+    # Extract the query from the call
+    query = mock_base_manager.execute_query.call_args[0][0]
+    assert "MATCH" in query
+    assert "DETACH DELETE" in query
+    assert entity_id in query
+    assert observation_id in query
+
+
+def test_delete_observation_not_found(mock_base_manager, mock_entity_manager, mock_logger):
+    """Test deleting a non-existent observation"""
+    # Setup
+    manager = ObservationManager(mock_base_manager, mock_entity_manager, mock_logger)
+    entity_id = "entity-123"
+    observation_id = "nonexistent-obs"
+    
+    # Mock deletion query - not found
+    mock_base_manager.execute_query.return_value = {"results": []}
+    
+    # Execute
+    result = manager.delete_observation(entity_id, observation_id)
+    
+    # Verify
+    result_obj = json.loads(result)
+    assert result_obj["status"] == "error"
+    assert "not found" in result_obj["message"].lower()
+    
+    # Verify base_manager.execute_query was called
+    mock_base_manager.execute_query.assert_called_once()
+
+
+def test_delete_all_observations(mock_base_manager, mock_entity_manager, mock_logger, sample_entity):
+    """Test deleting all observations for an entity"""
+    # Setup
+    manager = ObservationManager(mock_base_manager, mock_entity_manager, mock_logger)
+    entity_id = "entity-123"
+    
+    # Mock entity retrieval
+    mock_entity_manager.get_entity.return_value = json.dumps(sample_entity)
+    
+    # Mock deletion query
+    mock_base_manager.execute_query.return_value = {"results": [{"deleted_count": 5}]}
+    
+    # Execute
+    result = manager.delete_all_observations(entity_id)
+    
+    # Verify
+    result_obj = json.loads(result)
+    assert result_obj["status"] == "success"
+    assert result_obj["deleted_count"] == 5
+    
+    # Verify entity_manager was called for lookup
+    mock_entity_manager.get_entity.assert_called_once_with(entity_id)
+    
+    # Verify base_manager.execute_query was called with correct parameters
+    mock_base_manager.execute_query.assert_called_once()
+    # Extract the query from the call
+    query = mock_base_manager.execute_query.call_args[0][0]
+    assert "MATCH" in query
+    assert "DETACH DELETE" in query
+    assert "HAS_OBSERVATION" in query
+    assert entity_id in query
+
+
+def test_delete_all_observations_entity_not_found(mock_base_manager, mock_entity_manager, mock_logger):
+    """Test deleting all observations for a non-existent entity"""
+    # Setup
+    manager = ObservationManager(mock_base_manager, mock_entity_manager, mock_logger)
+    entity_id = "nonexistent-entity"
+    
+    # Mock entity retrieval - not found
+    mock_entity_manager.get_entity.return_value = None
+    
+    # Execute
+    result = manager.delete_all_observations(entity_id)
+    
+    # Verify
+    result_obj = json.loads(result)
+    assert result_obj["status"] == "error"
+    assert "not found" in result_obj["message"].lower()
+    
+    # Verify entity_manager was called for lookup
+    mock_entity_manager.get_entity.assert_called_once_with(entity_id)
+    
+    # Verify base_manager.execute_query was NOT called
+    mock_base_manager.execute_query.assert_not_called()
+
+
+def test_update_observation(mock_base_manager, mock_entity_manager, mock_logger):
+    """Test updating an observation"""
+    # Setup
+    manager = ObservationManager(mock_base_manager, mock_entity_manager, mock_logger)
+    entity_id = "entity-123"
+    observation_id = "obs-123"
+    
+    # Mock update query
+    mock_base_manager.execute_query.return_value = {"results": [{"updated": True}]}
+    
+    # Execute
+    update_data = {
+        "content": "Updated observation content",
+        "metadata": {
+            "updated": True,
+            "importance": "high"
+        }
+    }
+    
+    result = manager.update_observation(entity_id, observation_id, update_data)
+    
+    # Verify
+    result_obj = json.loads(result)
+    assert result_obj["status"] == "success"
+    
+    # Verify base_manager.execute_query was called with correct parameters
+    mock_base_manager.execute_query.assert_called_once()
+    # Extract the query from the call
+    query = mock_base_manager.execute_query.call_args[0][0]
+    assert "MATCH" in query
+    assert "SET" in query
+    assert entity_id in query
+    assert observation_id in query
+    assert "Updated observation content" in query
+
+
+def test_update_observation_not_found(mock_base_manager, mock_entity_manager, mock_logger):
+    """Test updating a non-existent observation"""
+    # Setup
+    manager = ObservationManager(mock_base_manager, mock_entity_manager, mock_logger)
+    entity_id = "entity-123"
+    observation_id = "nonexistent-obs"
+    
+    # Mock update query - not found
+    mock_base_manager.execute_query.return_value = {"results": []}
+    
+    # Execute
+    update_data = {
+        "content": "Updated observation content"
+    }
+    
+    result = manager.update_observation(entity_id, observation_id, update_data)
+    
+    # Verify
+    result_obj = json.loads(result)
+    assert result_obj["status"] == "error"
+    assert "not found" in result_obj["message"].lower()
+    
+    # Verify base_manager.execute_query was called
+    mock_base_manager.execute_query.assert_called_once()
+
+
+def test_count_observations(mock_base_manager, mock_entity_manager, mock_logger, sample_entity):
+    """Test counting observations for an entity"""
+    # Setup
+    manager = ObservationManager(mock_base_manager, mock_entity_manager, mock_logger)
+    entity_id = "entity-123"
+    
+    # Mock entity retrieval
+    mock_entity_manager.get_entity.return_value = json.dumps(sample_entity)
+    
+    # Mock count query
+    mock_base_manager.execute_query.return_value = {"results": [{"count": 10}]}
+    
+    # Execute
+    result = manager.count_observations(entity_id)
+    
+    # Verify
+    result_obj = json.loads(result)
+    assert result_obj["count"] == 10
+    
+    # Verify entity_manager was called for lookup
+    mock_entity_manager.get_entity.assert_called_once_with(entity_id)
+    
+    # Verify base_manager.execute_query was called with correct parameters
+    mock_base_manager.execute_query.assert_called_once()
+    # Extract the query from the call
+    query = mock_base_manager.execute_query.call_args[0][0]
+    assert "MATCH" in query
+    assert "COUNT" in query
+    assert "HAS_OBSERVATION" in query
+    assert entity_id in query
+
+
+def test_get_recent_observations(mock_base_manager, mock_entity_manager, mock_logger, sample_entity):
+    """Test retrieving recent observations for an entity"""
+    # Setup
+    manager = ObservationManager(mock_base_manager, mock_entity_manager, mock_logger)
+    entity_id = "entity-123"
+    
+    # Mock entity retrieval
+    mock_entity_manager.get_entity.return_value = json.dumps(sample_entity)
+    
+    # Mock recent observations retrieval
+    mock_observations = [
+        {
+            "observation": {
+                "id": "obs-1",
+                "content": "Recent observation 1",
+                "created_at": "2023-01-02T12:00:00",
+                "metadata": {"source": "test1"}
+            }
+        },
+        {
+            "observation": {
+                "id": "obs-2",
+                "content": "Recent observation 2",
+                "created_at": "2023-01-01T12:00:00",
+                "metadata": {"source": "test2"}
+            }
+        }
+    ]
+    
+    mock_base_manager.execute_query.return_value = {"results": mock_observations}
+    
+    # Execute
+    result = manager.get_recent_observations(entity_id, limit=2)
+    
+    # Verify
+    result_list = json.loads(result)
+    assert len(result_list) == 2
+    assert result_list[0]["id"] == "obs-1"
+    assert result_list[1]["id"] == "obs-2"
+    
+    # Verify entity_manager was called for lookup
+    mock_entity_manager.get_entity.assert_called_once_with(entity_id)
+    
+    # Verify base_manager.execute_query was called with correct parameters
+    mock_base_manager.execute_query.assert_called_once()
+    # Extract the query from the call
+    query = mock_base_manager.execute_query.call_args[0][0]
+    assert "MATCH" in query
+    assert "HAS_OBSERVATION" in query
+    assert "ORDER BY" in query
+    assert "LIMIT 2" in query
+    assert entity_id in query 
