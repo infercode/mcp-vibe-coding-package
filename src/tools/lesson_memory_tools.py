@@ -32,7 +32,10 @@ def register_lesson_tools(server, graph_manager):
     @server.tool()
     async def create_lesson_container(lesson_data: Dict[str, Any]) -> str:
         """
-        Create a new lesson container in the knowledge graph.
+        Create a new lesson container in the knowledge graph. 
+        IMPORTANT: This tool should only be called ONCE and ONLY IF no lesson container 
+        already exists for this project in the graph database. Always check first using 
+        list_lesson_containers to verify no container exists with a similar title.
         
         Args:
             lesson_data: Dictionary containing lesson information

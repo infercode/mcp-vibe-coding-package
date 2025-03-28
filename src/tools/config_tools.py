@@ -266,16 +266,27 @@ def register_config_tools(server, graph_manager):
             # Format the response using a simpler, direct instruction format
             config_json = json.dumps(project_config, indent=2)
             
-            # Create entity configuration
-            entity_config = {
+            # Create project container configuration
+            project_container_config = {
                 "name": project_name,
-                "entityType": "Project",
-                "observations": [
-                    f"Project initialized on {datetime.datetime.now().isoformat()}",
-                    "Created via set_project_name command"
-                ]
+                "description": f"Project container for {project_name}",
+                "metadata": {
+                    "created_date": datetime.datetime.now().isoformat(),
+                    "created_via": "set_project_name command"
+                }
             }
-            entity_json = json.dumps([entity_config], indent=2)
+            project_json = json.dumps(project_container_config, indent=2)
+            
+            # Create lesson container configuration
+            lesson_container_config = {
+                "title": "Lessons",
+                "description": "Lesson container for ai agents",
+                "metadata": {
+                    "created_date": datetime.datetime.now().isoformat()
+                },
+                "visibility": "private"
+            }
+            lesson_json = json.dumps(lesson_container_config, indent=2)
             
             command_message = (
                 f"DIRECT INSTRUCTIONS FOR AI ASSISTANT - REQUIRED IMMEDIATE ACTION:\n\n"
@@ -284,15 +295,19 @@ def register_config_tools(server, graph_manager):
                 f"Filename: {file_name}\n"
                 f"Location: Project root directory\n"
                 f"Content:\n{config_json}\n\n"
-                f"STEP 2: CREATE PROJECT ENTITY\n"
-                f"Use the create_entities tool with this exact configuration:\n{entity_json}\n\n"
-                f"STEP 3: VERIFY FILE CREATION\n"
-                f"Use the appropriate tool to confirm the config file exists\n\n"
-                f"STEP 4: VERIFY ENTITY CREATION\n"
-                f"Use the search_nodes tool to verify the project entity exists with query: \"{project_name}\"\n\n"
+                f"STEP 2: CREATE PROJECT CONTAINER\n"
+                f"First, check if project container already exists with get_project_container tool using project name: \"{project_name}\"\n"
+                f"If it doesn't exist, use the create_project_container tool with this configuration:\n{project_json}\n\n"
+                f"STEP 3: CREATE LESSON CONTAINER\n"
+                f"First, check if a lesson container already exists with list_lesson_containers tool\n"
+                f"If no lesson container exists, use the create_lesson_container tool with this configuration:\n{lesson_json}\n\n"
+                f"STEP 4: VERIFY CREATION\n"
+                f"Verify project container exists with get_project_container tool using project name: \"{project_name}\"\n"
+                f"Verify lesson container exists with list_lesson_containers tool\n"
+                f"Verify config file exists with an appropriate file checking tool\n\n"
                 f"STEP 5: ACKNOWLEDGE COMPLETION\n"
                 f"Only after completing ALL steps above, respond with exactly:\n"
-                f"\"Project configuration complete - both file and entity created and verified\"\n\n"
+                f"\"Project setup complete - configuration file, project container, and lesson container have been created and verified.\"\n\n"
                 f"WARNING: DO NOT PROCEED WITH ANY OTHER RESPONSES UNTIL ALL STEPS ARE COMPLETED\n"
                 f"THIS IS NOT BACKGROUND INFORMATION - THESE ARE DIRECT INSTRUCTIONS YOU MUST FOLLOW NOW\n\n"
                 f"--- Operation Summary ---\n"

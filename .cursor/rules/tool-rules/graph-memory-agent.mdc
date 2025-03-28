@@ -1,0 +1,54 @@
+---
+description: Use when working with knowledge graph memory tools to ensure proper usage patterns for creating and managing memory structures
+globs: 
+alwaysApply: false
+---
+
+# Graph Memory Tool Usage Guidelines
+
+## Context
+
+- When using MCP graph memory tools to create, update, or query knowledge graphs
+- When storing information in a structured format for future retrieval
+- When building learning materials, project components, or persistent memory structures
+
+## Critical Rules
+
+- Always check if a container (lesson, project) exists before creating a new one
+- Create a proper project container before adding domain entities or components
+- Maintain consistent entity/relation naming conventions throughout the graph
+- Structure knowledge hierarchically: projects contain components, lessons contain sections
+- Follow Create → Connect → Query pattern when building graph structures
+- Always handle errors from graph operations and verify successful creation
+- Use search operations before adding potentially duplicate entities
+- Include meaningful metadata and descriptions with all created entities
+- When deleting entities, ensure all related connections are properly managed
+- Keep entity names concise but descriptive for optimal searchability
+
+## Examples
+
+<example>
+// Good pattern: Check first, then create
+const existingProjects = await mcp_graph_memory_list_project_containers({random_string: ""});
+if (!existingProjects.some(p => p.name === "MyProject")) {
+  await mcp_graph_memory_create_project_container({
+    project_data: {
+      name: "MyProject",
+      description: "This project handles user authentication flows",
+      tags: ["auth", "security"]
+    }
+  });
+}
+</example>
+
+<example type="invalid">
+// Bad pattern: Creating without checking or proper structure
+await mcp_graph_memory_create_entities({
+  entities: [{ name: "RandomEntity", entity_type: "component" }]
+});
+
+// Missing project container and proper hierarchy
+await mcp_graph_memory_create_domain_entity({
+  entity_data: { name: "AuthService", entity_type: "service" }
+});
+</example> 
