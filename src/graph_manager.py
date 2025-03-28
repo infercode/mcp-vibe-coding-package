@@ -2,6 +2,7 @@ import os
 import json
 import time
 import traceback
+import datetime
 from typing import List, Dict, Any, Optional, Union, cast, TYPE_CHECKING
 from neo4j import GraphDatabase
 
@@ -711,13 +712,13 @@ class GraphMemoryManager:
         
         try:
             query = """
-            MATCH (e:Entity {name: $entity_name})-[r:HAS_OBSERVATION]->(o:Observation {content: $content})
+            MATCH (e:Entity {name: $entity_name})-[r:HAS_OBSERVATION]->(o:Observation {content: $obs_content})
             DELETE r, o
             """
             self.neo4j_driver.execute_query(
                 query,
                 entity_name=entity_name,
-                content=content,
+                obs_content=content,
                 database_=self.neo4j_database
             )
             self.logger.info(f"Deleted observation from Neo4j for {entity_name}")
@@ -1735,4 +1736,1132 @@ class GraphMemoryManager:
         except Exception as e:
             error_msg = f"Failed to reinitialize memory manager: {str(e)}"
             self.logger.error(error_msg)
-            return {"status": "error", "message": error_msg} 
+            return {"status": "error", "message": error_msg}
+
+    def create_lesson_container(self) -> str:
+        """
+        Create the global lessons container if it doesn't exist yet.
+        
+        Returns:
+            JSON string with result information
+        """
+        try:
+            self._ensure_initialized()
+            
+            if not self.neo4j_driver:
+                return dict_to_json({
+                    "status": "error",
+                    "message": "Neo4j driver not initialized"
+                })
+            
+            query = """
+            MERGE (lc:MemoryContainer {name: "Lessons", type: "LessonsContainer"})
+            ON CREATE SET lc.created = datetime(), 
+                          lc.description = "Global container for all lessons learned"
+            RETURN lc
+            """
+            
+            result = self.neo4j_driver.execute_query(
+                query,
+                database_=self.neo4j_database
+            )
+            
+            self.logger.info("Created or found Lessons Container in Neo4j")
+            
+            return dict_to_json({
+                "status": "success",
+                "message": "Lessons container created or found successfully"
+            })
+            
+        except Exception as e:
+            error_info = extract_error(e)
+            self.logger.error(f"Error creating lessons container: {error_info}")
+            return dict_to_json({
+                "status": "error",
+                "message": f"Failed to create lessons container: {error_info}"
+            })
+
+    def create_lesson(
+        self,
+        name: str,
+        problem_description: str,
+        context: Optional[str] = None,
+        impact: str = "Medium",
+        resolution: Optional[str] = None,
+        what_was_learned: Optional[str] = None,
+        why_it_matters: Optional[str] = None,
+        how_to_apply: Optional[str] = None,
+        root_cause: Optional[str] = None,
+        evidence: Optional[str] = None,
+        originated_from: Optional[str] = None,
+        solved_with: Optional[str] = None,
+        prevents: Optional[str] = None,
+        builds_on: Optional[str] = None,
+        applies_to: Optional[str] = None,
+        confidence: float = 0.8,
+        source: str = "Manual"
+    ) -> str:
+        """
+        Create a comprehensive lesson with all relevant information.
+        
+        Args:
+            name: Unique identifier for the lesson
+            problem_description: Description of the problem that led to the lesson
+            context: Where/when the lesson was encountered
+            impact: Severity/impact of the problem (High/Medium/Low)
+            resolution: Summary of how the problem was resolved
+            what_was_learned: Factual knowledge gained
+            why_it_matters: Consequences and benefits
+            how_to_apply: Step-by-step application guidance
+            root_cause: Underlying causes of the problem
+            evidence: Concrete examples demonstrating the lesson
+            originated_from: Entity the lesson originated from
+            solved_with: Pattern/technique/tool that solved the problem
+            prevents: Problem/anti-pattern the lesson helps prevent
+            builds_on: Prior lesson this one builds upon
+            applies_to: Domain/technology/context where lesson applies
+            confidence: Confidence level (0.0-1.0) in the lesson's validity
+            source: Source of the lesson (Manual, Automated, Inferred)
+            
+        Returns:
+            JSON string with result information
+        """
+        try:
+            self._ensure_initialized()
+            
+            if not self.neo4j_driver:
+                return dict_to_json({
+                    "status": "error",
+                    "message": "Neo4j driver not initialized"
+                })
+            
+            # First, ensure the Lessons container exists
+            container_result = self.create_lesson_container()
+            container_data = json.loads(container_result)
+            if container_data.get("status") != "success":
+                self.logger.error(f"Failed to create lessons container: {container_data.get('message')}")
+                return dict_to_json({
+                    "status": "error",
+                    "message": f"Failed to create lesson due to container error: {container_data.get('message')}"
+                })
+            
+            # Create the lesson entity
+            lesson_query = """
+            MERGE (l:Entity:Lesson {name: $name})
+            ON CREATE SET 
+                l.entityType = 'Lesson',
+                l.created = datetime(),
+                l.problemDescription = $problem_description,
+                l.impact = $impact,
+                l.status = 'Active',
+                l.version = 1,
+                l.confidence = $confidence,
+                l.source = $source,
+                l.lastRefreshed = datetime()
+            """
+            
+            params = {
+                "name": name,
+                "problem_description": problem_description,
+                "impact": impact,
+                "confidence": confidence,
+                "source": source
+            }
+            
+            # Add optional parameters
+            if context:
+                lesson_query += ", l.context = $context"
+                params["context"] = context
+                
+            if resolution:
+                lesson_query += ", l.resolution = $resolution"
+                params["resolution"] = resolution
+                
+            lesson_query += " RETURN l"
+            
+            # Create the lesson
+            result = self.neo4j_driver.execute_query(
+                lesson_query,
+                parameters_=params,
+                database_=self.neo4j_database
+            )
+            
+            # Add lesson to the Lessons container
+            container_query = """
+            MATCH (lc:MemoryContainer {name: 'Lessons', type: 'LessonsContainer'})
+            MATCH (l:Lesson {name: $name})
+            MERGE (lc)-[r:CONTAINS]->(l)
+            ON CREATE SET r.since = datetime()
+            RETURN lc, l
+            """
+            
+            self.neo4j_driver.execute_query(
+                container_query,
+                name=name,
+                database_=self.neo4j_database
+            )
+            
+            # Add observations if provided
+            observations = []
+            
+            if what_was_learned:
+                observations.append({
+                    "type": "WhatWasLearned",
+                    "content": what_was_learned
+                })
+                
+            if why_it_matters:
+                observations.append({
+                    "type": "WhyItMatters",
+                    "content": why_it_matters
+                })
+                
+            if how_to_apply:
+                observations.append({
+                    "type": "HowToApply",
+                    "content": how_to_apply
+                })
+                
+            if root_cause:
+                observations.append({
+                    "type": "RootCause",
+                    "content": root_cause
+                })
+                
+            if evidence:
+                observations.append({
+                    "type": "Evidence",
+                    "content": evidence
+                })
+            
+            # Add all observations
+            for obs in observations:
+                obs_query = """
+                MATCH (l:Lesson {name: $name})
+                CREATE (o:Observation {
+                    id: $obs_id,
+                    type: $obs_type,
+                    content: $obs_content,
+                    created: datetime()
+                })
+                CREATE (l)-[r:HAS_OBSERVATION]->(o)
+                RETURN o
+                """
+                
+                self.neo4j_driver.execute_query(
+                    obs_query,
+                    name=name,
+                    obs_id=generate_id(),
+                    obs_type=obs["type"],
+                    obs_content=obs["content"],
+                    database_=self.neo4j_database
+                )
+            
+            # Create relationships if provided
+            if originated_from:
+                self._create_relationship(name, originated_from, "ORIGINATED_FROM")
+                
+            if solved_with:
+                self._create_relationship(name, solved_with, "SOLVED_WITH")
+                
+            if prevents:
+                self._create_relationship(name, prevents, "PREVENTS")
+                
+            if builds_on:
+                self._create_relationship(name, builds_on, "BUILDS_ON")
+                
+            if applies_to:
+                self._create_relationship(name, applies_to, "APPLIES_TO")
+            
+            self.logger.info(f"Created lesson: {name}")
+            
+            return dict_to_json({
+                "status": "success",
+                "message": f"Lesson '{name}' created successfully",
+                "data": {
+                    "name": name,
+                    "version": 1,
+                    "status": "Active",
+                    "observation_count": len(observations),
+                    "relationship_count": sum(1 for r in [originated_from, solved_with, prevents, builds_on, applies_to] if r)
+                }
+            })
+            
+        except Exception as e:
+            error_info = extract_error(e)
+            self.logger.error(f"Error creating lesson: {error_info}")
+            return dict_to_json({
+                "status": "error",
+                "message": f"Failed to create lesson: {error_info}"
+            })
+
+    def _create_relationship(self, from_entity: str, to_entity: str, relationship_type: str) -> None:
+        """
+        Create a relationship between two entities.
+        
+        Args:
+            from_entity: Source entity name
+            to_entity: Target entity name
+            relationship_type: Type of relationship
+        """
+        if not self.neo4j_driver:
+            return
+            
+        # Ensure the target entity exists
+        create_entity_query = """
+        MERGE (e:Entity {name: $name})
+        ON CREATE SET e.created = datetime()
+        RETURN e
+        """
+        
+        self.neo4j_driver.execute_query(
+            create_entity_query,
+            name=to_entity,
+            database_=self.neo4j_database
+        )
+        
+        # Create the relationship
+        rel_query = """
+        MATCH (from:Entity {name: $from_name})
+        MATCH (to:Entity {name: $to_name})
+        CALL apoc.merge.relationship(from, $rel_type, {since: datetime()}, {}, to)
+        YIELD rel
+        RETURN rel
+        """
+        
+        try:
+            self.neo4j_driver.execute_query(
+                rel_query,
+                from_name=from_entity,
+                to_name=to_entity,
+                rel_type=relationship_type,
+                database_=self.neo4j_database
+            )
+        except Exception as e:
+            # Fall back to basic relationship creation if APOC is not available
+            self.logger.warn(f"APOC procedure not available, using basic relationship creation: {str(e)}")
+            
+            basic_rel_query = """
+            MATCH (from:Entity {name: $from_name})
+            MATCH (to:Entity {name: $to_name})
+            MERGE (from)-[r:$rel_type]->(to)
+            ON CREATE SET r.since = datetime()
+            RETURN r
+            """
+            
+            self.neo4j_driver.execute_query(
+                basic_rel_query,
+                from_name=from_entity,
+                to_name=to_entity,
+                rel_type=relationship_type,
+                database_=self.neo4j_database
+            ) 
+
+    def get_lessons(
+        self,
+        filter_criteria: Optional[Dict[str, Any]] = None,
+        related_to: Optional[str] = None,
+        applies_to: Optional[str] = None,
+        limit: int = 50,
+        include_superseded: bool = False,
+        min_confidence: float = 0.0,
+        sort_by: str = "relevance",
+        include_observations: bool = True
+    ) -> str:
+        """
+        Retrieve lessons based on various criteria.
+        
+        Args:
+            filter_criteria: Dictionary of property filters to apply
+            related_to: Entity name that lessons should be related to
+            applies_to: Domain/context that lessons should apply to
+            limit: Maximum number of lessons to return
+            include_superseded: Whether to include superseded lesson versions
+            min_confidence: Minimum confidence score for returned lessons
+            sort_by: Field to sort results by ("relevance", "date", "confidence")
+            include_observations: Whether to include lesson observations
+            
+        Returns:
+            JSON string with lesson results
+        """
+        try:
+            self._ensure_initialized()
+            
+            if not self.neo4j_driver:
+                return dict_to_json({
+                    "status": "error",
+                    "message": "Neo4j driver not initialized"
+                })
+            
+            # Base query starts with the lessons container
+            base_query = """
+            MATCH (lc:MemoryContainer {name: 'Lessons', type: 'LessonsContainer'})-[:CONTAINS]->(l:Lesson)
+            WHERE l.confidence >= $min_confidence
+            """
+            
+            params: Dict[str, Any] = {
+                "min_confidence": min_confidence
+            }
+            
+            # Add status filter
+            if not include_superseded:
+                base_query += " AND (l.status = 'Active' OR l.status IS NULL)"
+            
+            # Add any additional filter criteria
+            if filter_criteria:
+                for key, value in filter_criteria.items():
+                    if key and value:
+                        safe_key = key.replace(".", "_") # Sanitize key for parameter naming
+                        base_query += f" AND l.{key} = ${safe_key}"
+                        params[safe_key] = value
+            
+            # Add relationship filters
+            rel_conditions = []
+            
+            if related_to:
+                rel_conditions.append("""
+                EXISTS (
+                    MATCH (l)-[rel]-(related:Entity {name: $related_to})
+                    RETURN rel
+                )
+                """)
+                params["related_to"] = related_to
+            
+            if applies_to:
+                rel_conditions.append("""
+                EXISTS (
+                    MATCH (l)-[:APPLIES_TO]->(domain:Entity {name: $applies_to})
+                    RETURN domain
+                )
+                """)
+                params["applies_to"] = applies_to
+            
+            # Add relationship conditions to query
+            for condition in rel_conditions:
+                base_query += f" AND {condition}"
+            
+            # Add sorting
+            if sort_by == "date":
+                base_query += " ORDER BY l.created DESC"
+            elif sort_by == "confidence":
+                base_query += " ORDER BY l.confidence DESC"
+            else:  # Default to relevance/lastRefreshed
+                base_query += " ORDER BY l.lastRefreshed DESC"
+            
+            # Add limit
+            base_query += " LIMIT $limit"
+            params["limit"] = limit
+            
+            # Complete the query with lesson return
+            if include_observations:
+                query = base_query + """
+                OPTIONAL MATCH (l)-[:HAS_OBSERVATION]->(o:Observation)
+                RETURN l, collect(o) as observations
+                """
+            else:
+                query = base_query + """
+                RETURN l
+                """
+            
+            # Execute the query
+            result = self.neo4j_driver.execute_query(
+                query,
+                parameters_=params,
+                database_=self.neo4j_database
+            )
+            
+            # Process results
+            lessons = []
+            records = result[0] if result and len(result) > 0 else []
+            
+            for record in records:
+                lesson_node = record["l"]
+                
+                # Convert Neo4j node to Python dict
+                lesson_data = {k: v for k, v in lesson_node.items()}
+                
+                # Process datetime objects
+                for key, value in lesson_data.items():
+                    if hasattr(value, 'iso_format'):  # Check if it's a datetime
+                        lesson_data[key] = value.iso_format()
+                
+                # Add observations if included
+                if include_observations and "observations" in record:
+                    observations = []
+                    for obs in record["observations"]:
+                        if obs:  # Ensure observation is not None
+                            obs_data = {k: v for k, v in obs.items()}
+                            # Process datetime objects in observations
+                            for key, value in obs_data.items():
+                                if hasattr(value, 'iso_format'):
+                                    obs_data[key] = value.iso_format()
+                            observations.append(obs_data)
+                    
+                    lesson_data["observations"] = observations
+                
+                lessons.append(lesson_data)
+            
+            self.logger.info(f"Retrieved {len(lessons)} lessons matching criteria")
+            
+            return dict_to_json({
+                "status": "success",
+                "count": len(lessons),
+                "lessons": lessons
+            })
+            
+        except Exception as e:
+            error_info = extract_error(e)
+            self.logger.error(f"Error retrieving lessons: {error_info}")
+            return dict_to_json({
+                "status": "error",
+                "message": f"Failed to retrieve lessons: {error_info}"
+            })
+
+    def update_lesson(
+        self,
+        lesson_name: str,
+        updated_properties: Optional[Dict[str, Any]] = None,
+        updated_observations: Optional[Dict[str, str]] = None,
+        new_relationships: Optional[Dict[str, List[str]]] = None,
+        update_confidence: bool = True
+    ) -> str:
+        """
+        Update a lesson, creating a new version that supersedes the old one.
+        
+        Args:
+            lesson_name: Name of the lesson to update
+            updated_properties: Dictionary of properties to update
+            updated_observations: Dictionary of observations to update (type -> content)
+            new_relationships: Dictionary of relationships to add (type -> list of target entities)
+            update_confidence: Whether to adjust confidence based on repeated reinforcement
+            
+        Returns:
+            JSON string with result information
+        """
+        try:
+            self._ensure_initialized()
+            
+            if not self.neo4j_driver:
+                return dict_to_json({
+                    "status": "error",
+                    "message": "Neo4j driver not initialized"
+                })
+            
+            # First, get the existing lesson
+            old_lesson_query = """
+            MATCH (l:Lesson {name: $name})
+            WHERE l.status = 'Active' OR l.status IS NULL
+            RETURN l
+            """
+            
+            result = self.neo4j_driver.execute_query(
+                old_lesson_query,
+                name=lesson_name,
+                database_=self.neo4j_database
+            )
+            
+            records = result[0] if result and len(result) > 0 else []
+            
+            if not records:
+                return dict_to_json({
+                    "status": "error",
+                    "message": f"Lesson '{lesson_name}' not found or not active"
+                })
+            
+            old_lesson = records[0]["l"]
+            
+            # Get the current version number
+            current_version = old_lesson.get("version", 1)
+            new_version = current_version + 1
+            
+            # Create the new version with incremented version number
+            # Start by copying properties from the old lesson
+            new_properties = {k: v for k, v in old_lesson.items() if k != "status"}
+            new_properties["version"] = new_version
+            new_properties["created"] = datetime.datetime.now()
+            new_properties["lastRefreshed"] = datetime.datetime.now()
+            
+            # Apply updated properties if provided
+            if updated_properties:
+                for key, value in updated_properties.items():
+                    if key not in ["name", "version", "created"]:  # Protect key fields
+                        new_properties[key] = value
+            
+            # Adjust confidence if requested
+            if update_confidence and "confidence" in new_properties:
+                # Increase confidence slightly with each reinforcement, capped at 0.99
+                current_confidence = float(new_properties["confidence"])
+                new_confidence = min(current_confidence + 0.05, 0.99)
+                new_properties[f"confidence"] = new_confidence
+            
+            # Create the new lesson version
+            new_lesson_name = f"{lesson_name}_v{new_version}"
+            
+            create_new_version_query = """
+            CREATE (l:Entity:Lesson {name: $name})
+            SET l += $properties
+            RETURN l
+            """
+            
+            self.neo4j_driver.execute_query(
+                create_new_version_query,
+                name=new_lesson_name,
+                properties=new_properties,
+                database_=self.neo4j_database
+            )
+            
+            # Create SUPERSEDES relationship between new and old versions
+            supersedes_query = """
+            MATCH (new:Lesson {name: $new_name})
+            MATCH (old:Lesson {name: $old_name})
+            MERGE (new)-[r:SUPERSEDES]->(old)
+            ON CREATE SET r.since = datetime()
+            RETURN r
+            """
+            
+            self.neo4j_driver.execute_query(
+                supersedes_query,
+                new_name=new_lesson_name,
+                old_name=lesson_name,
+                database_=self.neo4j_database
+            )
+            
+            # Update status of old version to "Superseded"
+            update_status_query = """
+            MATCH (l:Lesson {name: $name})
+            SET l.status = 'Superseded'
+            """
+            
+            self.neo4j_driver.execute_query(
+                update_status_query,
+                name=lesson_name,
+                database_=self.neo4j_database
+            )
+            
+            # Add the new lesson to the Lessons container
+            container_query = """
+            MATCH (lc:MemoryContainer {name: 'Lessons', type: 'LessonsContainer'})
+            MATCH (l:Lesson {name: $name})
+            MERGE (lc)-[r:CONTAINS]->(l)
+            ON CREATE SET r.since = datetime()
+            RETURN lc, l
+            """
+            
+            self.neo4j_driver.execute_query(
+                container_query,
+                name=new_lesson_name,
+                database_=self.neo4j_database
+            )
+            
+            # Copy existing observations from old lesson to new one
+            copy_observations_query = """
+            MATCH (old:Lesson {name: $old_name})-[:HAS_OBSERVATION]->(o:Observation)
+            MATCH (new:Lesson {name: $new_name})
+            CREATE (new)-[:HAS_OBSERVATION]->(o)
+            RETURN count(o) as observation_count
+            """
+            
+            copy_result = self.neo4j_driver.execute_query(
+                copy_observations_query,
+                old_name=lesson_name,
+                new_name=new_lesson_name,
+                database_=self.neo4j_database
+            )
+            
+            observation_count = 0
+            if copy_result and copy_result[0]:
+                observation_count = copy_result[0][0].get("observation_count", 0)
+            
+            # Update observations if provided
+            if updated_observations:
+                for obs_type, content in updated_observations.items():
+                    # First, try to find existing observation of this type
+                    find_obs_query = """
+                    MATCH (l:Lesson {name: $name})-[:HAS_OBSERVATION]->(o:Observation)
+                    WHERE o.type = $type
+                    RETURN o
+                    """
+                    
+                    obs_result = self.neo4j_driver.execute_query(
+                        find_obs_query,
+                        name=new_lesson_name,
+                        type=obs_type,
+                        database_=self.neo4j_database
+                    )
+                    
+                    obs_records = obs_result[0] if obs_result and len(obs_result[0]) > 0 else []
+                    
+                    if obs_records:
+                        # Update existing observation
+                        update_obs_query = """
+                        MATCH (l:Lesson {name: $name})-[:HAS_OBSERVATION]->(o:Observation)
+                        WHERE o.type = $type
+                        SET o.content = $content, o.updated = datetime()
+                        RETURN o
+                        """
+                        
+                        self.neo4j_driver.execute_query(
+                            update_obs_query,
+                            name=new_lesson_name,
+                            type=obs_type,
+                            content=content,
+                            database_=self.neo4j_database
+                        )
+                    else:
+                        # Create new observation
+                        new_obs_query = """
+                        MATCH (l:Lesson {name: $name})
+                        CREATE (o:Observation {
+                            id: $obs_id,
+                            type: $type,
+                            content: $content,
+                            created: datetime()
+                        })
+                        CREATE (l)-[r:HAS_OBSERVATION]->(o)
+                        RETURN o
+                        """
+                        
+                        self.neo4j_driver.execute_query(
+                            new_obs_query,
+                            name=new_lesson_name,
+                            obs_id=generate_id(),
+                            type=obs_type,
+                            content=content,
+                            database_=self.neo4j_database
+                        )
+                        
+                        observation_count += 1
+            
+            # Copy existing relationships (except SUPERSEDES) from old lesson to new one
+            copy_relations_query = """
+            MATCH (old:Lesson {name: $old_name})-[r]->(target)
+            WHERE type(r) <> 'SUPERSEDES' AND type(r) <> 'HAS_OBSERVATION'
+            MATCH (new:Lesson {name: $new_name})
+            CALL apoc.create.relationship(new, type(r), {since: datetime()}, target)
+            YIELD rel
+            RETURN count(rel) as relation_count
+            """
+            
+            try:
+                # Try to use APOC procedure first
+                copy_rel_result = self.neo4j_driver.execute_query(
+                    copy_relations_query,
+                    old_name=lesson_name,
+                    new_name=new_lesson_name,
+                    database_=self.neo4j_database
+                )
+                
+                relation_count = 0
+                if copy_rel_result and copy_rel_result[0]:
+                    relation_count = copy_rel_result[0][0].get("relation_count", 0)
+                    
+            except Exception as e:
+                # Fall back to simpler relationship copying if APOC is not available
+                self.logger.warn(f"APOC procedure not available for relationship copying: {str(e)}")
+                
+                # Get existing relationships
+                get_rels_query = """
+                MATCH (old:Lesson {name: $old_name})-[r]->(target)
+                WHERE type(r) <> 'SUPERSEDES' AND type(r) <> 'HAS_OBSERVATION'
+                RETURN type(r) as rel_type, target.name as target_name
+                """
+                
+                rels_result = self.neo4j_driver.execute_query(
+                    get_rels_query,
+                    old_name=lesson_name,
+                    database_=self.neo4j_database
+                )
+                
+                relation_count = 0
+                if rels_result and rels_result[0]:
+                    for record in rels_result[0]:
+                        rel_type = record.get("rel_type")
+                        target_name = record.get("target_name")
+                        
+                        if rel_type and target_name:
+                            # Create the relationship
+                            self._create_relationship(new_lesson_name, target_name, rel_type)
+                            relation_count += 1
+            
+            # Add new relationships if provided
+            if new_relationships:
+                for rel_type, targets in new_relationships.items():
+                    for target in targets:
+                        self._create_relationship(new_lesson_name, target, rel_type)
+                        relation_count += 1
+            
+            self.logger.info(f"Updated lesson '{lesson_name}' to version {new_version} as '{new_lesson_name}'")
+            
+            return dict_to_json({
+                "status": "success",
+                "message": f"Lesson '{lesson_name}' updated successfully to version {new_version}",
+                "data": {
+                    "name": new_lesson_name,
+                    "old_name": lesson_name,
+                    "version": new_version,
+                    "status": "Active",
+                    "observation_count": observation_count,
+                    "relationship_count": relation_count
+                }
+            })
+            
+        except Exception as e:
+            error_info = extract_error(e)
+            self.logger.error(f"Error updating lesson: {error_info}")
+            return dict_to_json({
+                "status": "error",
+                "message": f"Failed to update lesson: {error_info}"
+            })
+
+    def apply_lesson_to_context(
+        self,
+        lesson_name: str,
+        context_entity: str,
+        application_notes: Optional[str] = None,
+        success_score: Optional[float] = None
+    ) -> str:
+        """
+        Record that a lesson was applied to a specific context.
+        
+        Args:
+            lesson_name: Name of the lesson that was applied
+            context_entity: Name of the entity where the lesson was applied
+            application_notes: Optional notes about the application
+            success_score: Optional score (0.0-1.0) indicating how successful the application was
+            
+        Returns:
+            JSON string with result information
+        """
+        try:
+            self._ensure_initialized()
+            
+            if not self.neo4j_driver:
+                return dict_to_json({
+                    "status": "error",
+                    "message": "Neo4j driver not initialized"
+                })
+            
+            # First, ensure the lesson exists
+            lesson_query = """
+            MATCH (l:Lesson {name: $name})
+            WHERE l.status = 'Active' OR l.status IS NULL
+            RETURN l
+            """
+            
+            lesson_result = self.neo4j_driver.execute_query(
+                lesson_query,
+                name=lesson_name,
+                database_=self.neo4j_database
+            )
+            
+            lesson_records = lesson_result[0] if lesson_result and len(lesson_result[0]) > 0 else []
+            
+            if not lesson_records:
+                return dict_to_json({
+                    "status": "error",
+                    "message": f"Active lesson '{lesson_name}' not found"
+                })
+            
+            # Next, ensure the context entity exists
+            context_query = """
+            MERGE (e:Entity {name: $name})
+            ON CREATE SET e.created = datetime()
+            RETURN e
+            """
+            
+            self.neo4j_driver.execute_query(
+                context_query,
+                name=context_entity,
+                database_=self.neo4j_database
+            )
+            
+            # Create application relationship with metadata
+            application_query = """
+            MATCH (l:Lesson {name: $lesson_name})
+            MATCH (c:Entity {name: $context_name})
+            MERGE (l)-[r:APPLIED_TO]->(c)
+            ON CREATE SET r.first_applied = datetime()
+            SET r.last_applied = datetime(),
+                r.application_count = COALESCE(r.application_count, 0) + 1
+            """
+            
+            # Add optional parameters if provided
+            params = {
+                "lesson_name": lesson_name,
+                "context_name": context_entity
+            }
+            
+            if application_notes:
+                application_query += ", r.notes = $notes"
+                params["notes"] = application_notes
+                
+            if success_score is not None:
+                application_query += ", r.success_score = $score"
+                params["score"] = success_score
+                
+            application_query += " RETURN r"
+            
+            # Create the relationship
+            application_result = self.neo4j_driver.execute_query(
+                application_query,
+                parameters_=params,
+                database_=self.neo4j_database
+            )
+            
+            # Update lesson's lastRefreshed and relevance score
+            update_lesson_query = """
+            MATCH (l:Lesson {name: $name})
+            SET l.lastRefreshed = datetime()
+            """
+            
+            # If success score provided, adjust relevance score
+            if success_score is not None:
+                update_lesson_query += """
+                , l.relevanceScore = CASE 
+                    WHEN l.relevanceScore IS NULL THEN $score
+                    ELSE (l.relevanceScore * 0.7) + ($score * 0.3)
+                  END
+                """
+            
+            update_lesson_query += " RETURN l"
+            
+            update_params = {
+                "name": lesson_name
+            }
+            
+            if success_score is not None:
+                update_params["score"] = success_score
+                
+            self.neo4j_driver.execute_query(
+                update_lesson_query,
+                parameters_=update_params,
+                database_=self.neo4j_database
+            )
+            
+            self.logger.info(f"Applied lesson '{lesson_name}' to context '{context_entity}'")
+            
+            return dict_to_json({
+                "status": "success",
+                "message": f"Lesson '{lesson_name}' applied to '{context_entity}' successfully",
+                "data": {
+                    "lesson_name": lesson_name,
+                    "context_entity": context_entity,
+                    "application_time": datetime.datetime.now().isoformat()
+                }
+            })
+            
+        except Exception as e:
+            error_info = extract_error(e)
+            self.logger.error(f"Error applying lesson to context: {error_info}")
+            return dict_to_json({
+                "status": "error",
+                "message": f"Failed to apply lesson to context: {error_info}"
+            })
+
+    def extract_potential_lessons(
+        self,
+        conversation_text: Optional[str] = None,
+        code_diff: Optional[str] = None,
+        issue_description: Optional[str] = None,
+        error_logs: Optional[str] = None,
+        min_confidence: float = 0.6
+    ) -> str:
+        """
+        Analyze various inputs to automatically extract potential lessons.
+        
+        Args:
+            conversation_text: Text of a conversation to analyze
+            code_diff: Code changes to analyze
+            issue_description: Description of an issue to analyze
+            error_logs: Error logs to analyze
+            min_confidence: Minimum confidence threshold for extracted lessons
+            
+        Returns:
+            JSON string with extracted lesson candidates and confidence scores
+        """
+        try:
+            self._ensure_initialized()
+            
+            if not self.neo4j_driver:
+                return dict_to_json({
+                    "status": "error",
+                    "message": "Neo4j driver not initialized"
+                })
+            
+            # Collect all input sources
+            sources = []
+            if conversation_text:
+                sources.append(("conversation", conversation_text))
+            if code_diff:
+                sources.append(("code_diff", code_diff))
+            if issue_description:
+                sources.append(("issue", issue_description))
+            if error_logs:
+                sources.append(("error_logs", error_logs))
+                
+            if not sources:
+                return dict_to_json({
+                    "status": "error",
+                    "message": "No input sources provided for lesson extraction"
+                })
+            
+            # In a production system, this would use NLP or LLM to extract lessons
+            # For this implementation, we'll use a simplified rule-based approach
+            
+            extracted_lessons = []
+            
+            for source_type, source_text in sources:
+                # Look for problem-solution patterns in the text
+                lessons_from_source = self._extract_lessons_from_text(source_type, source_text, min_confidence)
+                extracted_lessons.extend(lessons_from_source)
+            
+            # Filter lessons by confidence threshold
+            filtered_lessons = [lesson for lesson in extracted_lessons if lesson["confidence"] >= min_confidence]
+            
+            # Sort by confidence score
+            filtered_lessons.sort(key=lambda x: x["confidence"], reverse=True)
+            
+            self.logger.info(f"Extracted {len(filtered_lessons)} potential lessons with confidence >= {min_confidence}")
+            
+            return dict_to_json({
+                "status": "success",
+                "count": len(filtered_lessons),
+                "extracted_lessons": filtered_lessons
+            })
+            
+        except Exception as e:
+            error_info = extract_error(e)
+            self.logger.error(f"Error extracting potential lessons: {error_info}")
+            return dict_to_json({
+                "status": "error",
+                "message": f"Failed to extract potential lessons: {error_info}"
+            })
+    
+    def _extract_lessons_from_text(self, source_type: str, text: str, min_confidence: float) -> List[Dict[str, Any]]:
+        """
+        Extract potential lessons from a text source.
+        
+        Args:
+            source_type: Type of the source (conversation, code_diff, issue, error_logs)
+            text: The text to analyze
+            min_confidence: Minimum confidence threshold
+            
+        Returns:
+            List of extracted lesson candidates with metadata
+        """
+        lessons = []
+        
+        # Split the text into paragraphs for analysis
+        paragraphs = text.split("\n\n")
+        
+        # Common problem indicators
+        problem_indicators = [
+            "error", "bug", "issue", "problem", "fail", "exception",
+            "incorrect", "unexpected", "wrong", "broken", "crash",
+            "critical", "warning"
+        ]
+        
+        # Common solution indicators
+        solution_indicators = [
+            "fix", "solv", "resolv", "solution", "implement",
+            "correct", "update", "change", "modify", "adjustment",
+            "approach", "technique", "pattern", "best practice"
+        ]
+        
+        # Common lesson indicators
+        lesson_indicators = [
+            "learn", "lesson", "takeaway", "insight", "understand",
+            "realize", "discover", "found out", "important to note"
+        ]
+        
+        # Analyze each paragraph for problem-solution patterns
+        for i, paragraph in enumerate(paragraphs):
+            paragraph = paragraph.lower()
+            
+            # Calculate indicator presence scores
+            problem_score = sum(1 for indicator in problem_indicators if indicator in paragraph)
+            solution_score = sum(1 for indicator in solution_indicators if indicator in paragraph)
+            lesson_score = sum(1 for indicator in lesson_indicators if indicator in paragraph)
+            
+            # Check context in surrounding paragraphs
+            context_paragraphs = []
+            if i > 0:
+                context_paragraphs.append(paragraphs[i-1])
+            if i < len(paragraphs) - 1:
+                context_paragraphs.append(paragraphs[i+1])
+            
+            context_text = " ".join(context_paragraphs).lower()
+            context_problem_score = sum(1 for indicator in problem_indicators if indicator in context_text)
+            context_solution_score = sum(1 for indicator in solution_indicators if indicator in context_text)
+            
+            # Calculate a confidence score based on indicators
+            # This is a simplified heuristic - a real system would use more sophisticated NLP
+            base_confidence = 0.0
+            
+            # If it has both problem and solution aspects, it's likely a lesson
+            if problem_score > 0 and solution_score > 0:
+                base_confidence = 0.5 + (min(problem_score, solution_score) * 0.05)
+            
+            # If it explicitly mentions being a lesson, increase confidence
+            if lesson_score > 0:
+                base_confidence += (lesson_score * 0.1)
+            
+            # Context from surrounding paragraphs adds confidence
+            if context_problem_score > 0 or context_solution_score > 0:
+                base_confidence += 0.1
+            
+            # Cap at 0.95 - leaving room for human verification
+            confidence = min(base_confidence, 0.95)
+            
+            # If confidence is above threshold, extract a potential lesson
+            if confidence >= min_confidence:
+                # Generate a suitable lesson name (simplified)
+                words = paragraph.split()
+                # Take first 5-10 significant words for the name
+                name_words = [word for word in words[:20] 
+                              if len(word) > 3 and word not in ["with", "that", "this", "from", "when", "what"]][:5]
+                
+                if not name_words:
+                    name_words = ["Extracted", "Lesson"]
+                
+                lesson_name = "Lesson_" + "_".join(name_words).title().replace(".", "").replace(",", "")
+                
+                # Extract problem and solution parts (very simplified)
+                problem = None
+                solution = None
+                
+                for sentence in paragraph.split("."):
+                    sentence = sentence.strip()
+                    if not sentence:
+                        continue
+                        
+                    sentence_problem_score = sum(1 for indicator in problem_indicators if indicator in sentence.lower())
+                    sentence_solution_score = sum(1 for indicator in solution_indicators if indicator in sentence.lower())
+                    
+                    if sentence_problem_score > sentence_solution_score and not problem:
+                        problem = sentence
+                    elif sentence_solution_score > sentence_problem_score and not solution:
+                        solution = sentence
+                
+                # Add extracted lesson
+                lesson = {
+                    "name": lesson_name,
+                    "source_type": source_type,
+                    "confidence": confidence,
+                    "problem_description": problem or paragraph[:100],
+                    "resolution": solution or "",
+                    "raw_text": paragraph,
+                    "context": "\n".join(context_paragraphs)
+                }
+                
+                # Add source-specific metadata
+                if source_type == "code_diff":
+                    lesson["impact"] = "Medium"  # Default for code changes
+                elif source_type == "error_logs":
+                    lesson["impact"] = "High"  # Errors typically have higher impact
+                else:
+                    lesson["impact"] = "Low"  # Default for other sources
+                
+                lessons.append(lesson)
+        
+        return lessons
