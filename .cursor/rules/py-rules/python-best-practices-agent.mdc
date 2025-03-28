@@ -1,0 +1,128 @@
+---
+description: Apply this rule when creating, updating or refactoring Python code to ensure adherence to best practices, readability, and maintainability
+globs: 
+alwaysApply: false
+---
+
+# Python Best Practices Guidelines
+
+## Context
+
+- Apply when writing, reviewing, or refactoring Python code
+- Ensures consistent style, readability, and maintainability
+- Promotes modern Python idioms and patterns
+- Essential for collaboration, code reviews, and long-term project maintenance
+
+## Critical Rules
+
+- Follow PEP 8 style guide for consistent formatting (line length ≤88 chars, 4 spaces for indentation)
+- Use descriptive variable/function names in snake_case, classes in PascalCase, and constants in UPPER_SNAKE_CASE
+- Include type hints on function parameters and return values using Python's typing module
+- Document functions, classes, and modules with docstrings using Google or NumPy docstring format
+- Implement error handling with specific exceptions, avoid generic `except:` blocks
+- Use context managers (`with` statements) for resource management
+- Favor composition over inheritance to promote code reusability and flexibility
+- Apply SOLID principles, particularly Single Responsibility and Interface Segregation
+- Prefer asyncio for I/O-bound operations (network, file, database) to improve application concurrency
+- Implement async/await patterns consistently throughout the codebase when using asyncio
+- Prefer standard library solutions over third-party packages when functionality is equivalent
+- Use f-strings for string formatting instead of older methods (`.format()` or `%`)
+- Create unit tests that validate functionality and edge cases
+- Avoid mutable default arguments in function definitions
+- Organize imports in standard order: standard library, third-party, local application
+
+## Examples
+
+<example>
+# Bad Python Code
+
+def process(data, config={}):
+    """Process data"""
+    try:
+        if type(data) == list:
+            result = []
+            for i in range(len(data)):
+                item = data[i]
+                result.append(item * 2)
+            return result
+    except:
+        print("Error processing data")
+        return None
+
+
+# Good Python Code with Best Practices
+
+from typing import List, Dict, Optional, Any
+import logging
+import asyncio
+from contextlib import contextmanager
+
+logger = logging.getLogger(__name__)
+
+@contextmanager
+def data_processor(config: Dict[str, Any]) -> None:
+    """Context manager for data processing setup and teardown.
+    
+    Args:
+        config: Configuration dictionary for processing
+        
+    Yields:
+        None
+    """
+    try:
+        # Setup processing environment
+        yield
+    except Exception as e:
+        logger.error(f"Processing environment error: {e}")
+        raise
+    finally:
+        # Cleanup resources
+        pass
+
+
+async def process_data(data: List[int], config: Optional[Dict[str, Any]] = None) -> List[int]:
+    """Process data by applying transformations based on configuration.
+    
+    Args:
+        data: List of integers to process
+        config: Optional configuration dictionary
+            
+    Returns:
+        Processed list of integers
+        
+    Raises:
+        ValueError: If data is empty or contains invalid items
+        ConfigError: If configuration is invalid
+    """
+    if config is None:
+        config = {}
+        
+    if not data:
+        raise ValueError("Input data cannot be empty")
+    
+    try:
+        # Simulate I/O-bound operation that benefits from asyncio
+        await asyncio.sleep(0.01)
+        
+        # Process items - in real code, this could use asyncio.gather for parallel processing
+        result = [item * 2 for item in data]
+        return result
+    except TypeError as e:
+        logger.error(f"Invalid data type in input: {e}")
+        raise ValueError(f"All items must be numeric: {e}") from e
+</example>
+
+<example type="invalid">
+# Poorly Written Python Code
+
+def do_stuff(d, c = []):
+    # does stuff with data
+    for i in range(0, len(d)):
+        try:
+            x = d[i]
+            x = x + 10
+            c.append(x)
+        except:
+            pass
+    return c
+</example> 
