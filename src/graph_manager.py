@@ -3635,7 +3635,7 @@ class GraphMemoryManager:
             **kwargs: Additional parameters to pass to execute_query
             
         Returns:
-            Query result from Neo4j driver
+            Query result from Neo4j driver, processed to be more consistent for record access
         """
         if not self.neo4j_driver:
             self.logger.error("Neo4j driver not initialized")
@@ -3651,4 +3651,3005 @@ class GraphMemoryManager:
                 if isinstance(value, float):
                     params[key] = str(value)
         
-        return self.neo4j_driver.execute_query(typed_query, **kwargs)
+        try:
+            result = self.neo4j_driver.execute_query(typed_query, **kwargs)
+            
+            # Process the Neo4j result to make it more consistent and accessible
+            # Neo4j driver returns a tuple with (records, summary, keys)
+            if result and len(result) > 0:
+                records = result[0]  # Get the records part
+                
+                # Return the records directly - they have both index access and attribute access
+                return records
+            else:
+                return []
+                
+        except Exception as e:
+            self.logger.error(f"Error executing Neo4j query: {str(e)}")
+            return []
+    
+    # Project Memory System Implementation
+    
+    def create_project_container(
+        self,
+        project_name: str,
+        description: Optional[str] = None,
+        start_date: Optional[str] = None,
+        team: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        confidence: float = 0.9,
+        tags: Optional[List[str]] = None
+    ) -> str:
+        """
+        Create a project container for organizing project knowledge.
+        
+        Args:
+            project_name: Name of the project
+            description: Optional description of the project
+            start_date: Optional start date in ISO format
+            team: Optional team name or description
+            metadata: Optional additional metadata as key-value pairs
+            confidence: Confidence level for this container (0.0-1.0)
+            tags: Optional list of tags for categorization
+            
+        Returns:
+            JSON string with result information
+        """
+        try:
+            self._ensure_initialized()
+            
+            if not self.neo4j_driver:
+                return dict_to_json({
+                    "status": "error",
+                    "message": "Neo4j driver not initialized"
+                })
+            
+            # Create project container
+            container_query = """
+            MERGE (pc:MemoryContainer {name: $project_name, type: "ProjectContainer"})
+            ON CREATE SET pc.created = datetime(),
+                          pc.description = $description,
+                          pc.startDate = $start_date,
+                          pc.team = $team,
+                          pc.confidence = $confidence,
+                          pc.tags = $tags,
+                          pc.lastUpdated = datetime()
+            RETURN pc
+            """
+            
+            container_params = {
+                "project_name": project_name,
+                "description": description or f"Knowledge container for {project_name}",
+                "start_date": start_date,
+                "team": team,
+                "confidence": confidence,
+                "tags": tags
+            }
+            
+            self._safe_execute_query(
+                container_query,
+                parameters_=container_params,
+                database_=self.neo4j_database
+            )
+            
+            # Create project entity
+            project_query = """
+            MERGE (p:Entity {name: $project_name, entityType: "Project"})
+            ON CREATE SET p.created = datetime(),
+                          p.description = $description,
+                          p.startDate = $start_date,
+                          p.team = $team,
+                          p.confidence = $confidence,
+                          p.status = "Active",
+                          p.lastUpdated = datetime()
+            RETURN p
+            """
+            
+            project_params = {
+                "project_name": project_name,
+                "description": description or f"Project: {project_name}",
+                "start_date": start_date,
+                "team": team,
+                "confidence": confidence
+            }
+            
+            self._safe_execute_query(
+                project_query,
+                parameters_=project_params,
+                database_=self.neo4j_database
+            )
+            
+            # Link project to container
+            link_query = """
+            MATCH (pc:MemoryContainer {name: $project_name, type: "ProjectContainer"})
+            MATCH (p:Entity {name: $project_name, entityType: "Project"})
+            MERGE (pc)-[r:CONTAINS]->(p)
+            ON CREATE SET r.since = datetime()
+            RETURN p, pc
+            """
+            
+            self._safe_execute_query(
+                link_query,
+                project_name=project_name,
+                database_=self.neo4j_database
+            )
+            
+            # Add metadata if provided
+            if metadata and isinstance(metadata, dict):
+                self._add_metadata_to_project(project_name, metadata)
+            
+            self.logger.info(f"Created project container and entity for: {project_name}")
+            
+            return dict_to_json({
+                "status": "success",
+                "message": f"Project container '{project_name}' created successfully",
+                "data": {
+                    "project_name": project_name,
+                    "created": datetime.datetime.now().isoformat()
+                }
+            })
+            
+        except Exception as e:
+            error_info = extract_error(e)
+            self.logger.error(f"Error creating project container: {error_info}")
+            return dict_to_json({
+                "status": "error",
+                "message": f"Failed to create project container: {error_info}"
+            })
+    
+    def _add_metadata_to_project(self, project_name: str, metadata: Dict[str, Any]) -> None:
+        """
+        Add metadata to a project as properties.
+        
+        Args:
+            project_name: Name of the project
+            metadata: Dictionary of metadata to add
+        """
+        try:
+            # Filter out None values and convert to properties
+            filtered_metadata = {k: v for k, v in metadata.items() if v is not None}
+            
+            if not filtered_metadata:
+                return
+                
+            # Build dynamic property setting
+            props = []
+            params = {"project_name": project_name}
+            
+            for i, (key, value) in enumerate(filtered_metadata.items()):
+                param_name = f"meta_{i}"
+                props.append(f"p.{key} = ${param_name}")
+                params[param_name] = value
+            
+            if not props:
+                return
+                
+            # Update project entity with metadata
+            metadata_query = f"""
+            MATCH (p:Entity {{name: $project_name, entityType: "Project"}})
+            SET {', '.join(props)},
+                p.lastUpdated = datetime()
+            RETURN p
+            """
+            
+            self._safe_execute_query(
+                metadata_query,
+                parameters_=params,
+                database_=self.neo4j_database
+            )
+            
+        except Exception as e:
+            self.logger.error(f"Error adding metadata to project: {str(e)}")
+            
+    def add_domain(
+        self,
+        project_name: str,
+        domain_name: str,
+        description: Optional[str] = None,
+        purpose: Optional[str] = None,
+        confidence: float = 0.9,
+        status: str = "Active",
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> str:
+        """
+        Add a domain (logical subdivision) to a project.
+        
+        Args:
+            project_name: Name of the project
+            domain_name: Name of the domain to add
+            description: Optional description of the domain
+            purpose: Optional purpose or function of this domain
+            confidence: Confidence level for this domain (0.0-1.0)
+            status: Status of the domain (Active, Planned, Deprecated)
+            metadata: Optional additional metadata as key-value pairs
+            
+        Returns:
+            JSON string with result information
+        """
+        try:
+            self._ensure_initialized()
+            
+            if not self.neo4j_driver:
+                return dict_to_json({
+                    "status": "error",
+                    "message": "Neo4j driver not initialized"
+                })
+            
+            # Create domain entity
+            domain_query = """
+            MERGE (d:Entity {name: $domain_name, entityType: "Domain"})
+            ON CREATE SET d.created = datetime(),
+                          d.description = $description,
+                          d.purpose = $purpose,
+                          d.confidence = $confidence,
+                          d.status = $status,
+                          d.lastUpdated = datetime()
+            RETURN d
+            """
+            
+            domain_params = {
+                "domain_name": domain_name,
+                "description": description or f"Domain: {domain_name}",
+                "purpose": purpose,
+                "confidence": confidence,
+                "status": status
+            }
+            
+            self._safe_execute_query(
+                domain_query,
+                parameters_=domain_params,
+                database_=self.neo4j_database
+            )
+            
+            # Link to project entity
+            project_link_query = """
+            MATCH (p:Entity {name: $project_name, entityType: "Project"})
+            MATCH (d:Entity {name: $domain_name, entityType: "Domain"})
+            MERGE (p)-[r:CONTAINS]->(d)
+            ON CREATE SET r.since = datetime(),
+                          r.confidence = $confidence
+            RETURN p, d
+            """
+            
+            project_link_params = {
+                "project_name": project_name,
+                "domain_name": domain_name,
+                "confidence": confidence
+            }
+            
+            project_result = self._safe_execute_query(
+                project_link_query,
+                parameters_=project_link_params,
+                database_=self.neo4j_database
+            )
+            
+            # Check if the project exists
+            if not project_result or not project_result[0]:
+                self.logger.warn(f"Project '{project_name}' not found when adding domain")
+                return dict_to_json({
+                    "status": "error",
+                    "message": f"Project '{project_name}' not found. Please create the project first."
+                })
+            
+            # Link to project container
+            container_link_query = """
+            MATCH (pc:MemoryContainer {name: $project_name, type: "ProjectContainer"})
+            MATCH (d:Entity {name: $domain_name, entityType: "Domain"})
+            MERGE (pc)-[r:CONTAINS]->(d)
+            ON CREATE SET r.since = datetime(),
+                          r.confidence = $confidence
+            RETURN pc, d
+            """
+            
+            container_link_params = {
+                "project_name": project_name,
+                "domain_name": domain_name,
+                "confidence": confidence
+            }
+            
+            container_result = self._safe_execute_query(
+                container_link_query,
+                parameters_=container_link_params,
+                database_=self.neo4j_database
+            )
+            
+            # Check if the project container exists
+            if not container_result or not container_result[0]:
+                self.logger.warn(f"Project container '{project_name}' not found when adding domain")
+                
+                # Create project container if it doesn't exist
+                container_creation = self.create_project_container(project_name)
+                container_data = json.loads(container_creation)
+                
+                if container_data.get("status") != "success":
+                    self.logger.error(f"Failed to create missing project container: {container_data.get('message')}")
+                    return dict_to_json({
+                        "status": "warning",
+                        "message": f"Domain created but project container could not be created: {container_data.get('message')}",
+                        "data": {
+                            "domain_name": domain_name,
+                            "project_name": project_name
+                        }
+                    })
+                    
+                # Try linking again
+                self._safe_execute_query(
+                    container_link_query,
+                    parameters_=container_link_params,
+                    database_=self.neo4j_database
+                )
+            
+            # Add metadata if provided
+            if metadata and isinstance(metadata, dict):
+                self._add_metadata_to_domain(domain_name, metadata)
+            
+            self.logger.info(f"Added domain '{domain_name}' to project '{project_name}'")
+            
+            return dict_to_json({
+                "status": "success",
+                "message": f"Domain '{domain_name}' added to project '{project_name}' successfully",
+                "data": {
+                    "project_name": project_name,
+                    "domain_name": domain_name,
+                    "created": datetime.datetime.now().isoformat()
+                }
+            })
+            
+        except Exception as e:
+            error_info = extract_error(e)
+            self.logger.error(f"Error adding domain to project: {error_info}")
+            return dict_to_json({
+                "status": "error",
+                "message": f"Failed to add domain to project: {error_info}"
+            })
+    
+    def _add_metadata_to_domain(self, domain_name: str, metadata: Dict[str, Any]) -> None:
+        """
+        Add metadata to a domain as properties.
+        
+        Args:
+            domain_name: Name of the domain
+            metadata: Dictionary of metadata to add
+        """
+        try:
+            # Filter out None values and convert to properties
+            filtered_metadata = {k: v for k, v in metadata.items() if v is not None}
+            
+            if not filtered_metadata:
+                return
+                
+            # Build dynamic property setting
+            props = []
+            params = {"domain_name": domain_name}
+            
+            for i, (key, value) in enumerate(filtered_metadata.items()):
+                param_name = f"meta_{i}"
+                props.append(f"d.{key} = ${param_name}")
+                params[param_name] = value
+            
+            if not props:
+                return
+                
+            # Update domain entity with metadata
+            metadata_query = f"""
+            MATCH (d:Entity {{name: $domain_name, entityType: "Domain"}})
+            SET {', '.join(props)},
+                d.lastUpdated = datetime()
+            RETURN d
+            """
+            
+            self._safe_execute_query(
+                metadata_query,
+                parameters_=params,
+                database_=self.neo4j_database
+            )
+            
+        except Exception as e:
+            self.logger.error(f"Error adding metadata to domain: {str(e)}")
+    
+    def add_component(
+        self,
+        project_name: str,
+        component_name: str,
+        domain_name: Optional[str] = None,
+        component_type: Optional[str] = None,
+        responsibility: Optional[str] = None,
+        status: str = "Planned",
+        confidence: float = 0.8,
+        maturity: str = "Emerging",
+        dependencies: Optional[List[Dict[str, Any]]] = None,
+        evolution_history: Optional[List[Dict[str, Any]]] = None,
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> str:
+        """
+        Add a technical component to a project or domain.
+        
+        Args:
+            project_name: Name of the project
+            component_name: Name of the component to add
+            domain_name: Optional domain to which the component belongs
+            component_type: Optional type of component (e.g., "Frontend", "Service", "Database")
+            responsibility: Optional description of what the component does
+            status: Status of the component (Planned, InDevelopment, Active, Deprecated)
+            confidence: Confidence level for this component (0.0-1.0)
+            maturity: Maturity level (Emerging, Stable, Mature)
+            dependencies: Optional list of component dependencies with format 
+                          [{"name": "ComponentName", "criticality": "High", "type": "Requires"}]
+            evolution_history: Optional list of predecessor components with format
+                              [{"predecessor_name": "OldComponent", "date": "2023-01-01", 
+                                "change_type": "Refactor", "significance": "Major"}]
+            metadata: Optional additional metadata as key-value pairs
+            
+        Returns:
+            JSON string with result information
+        """
+        try:
+            self._ensure_initialized()
+            
+            if not self.neo4j_driver:
+                return dict_to_json({
+                    "status": "error",
+                    "message": "Neo4j driver not initialized"
+                })
+            
+            # Create component entity
+            component_query = """
+            MERGE (c:Entity {name: $component_name, entityType: "Component"})
+            ON CREATE SET c.created = datetime(),
+                          c.type = $component_type,
+                          c.responsibility = $responsibility,
+                          c.status = $status,
+                          c.confidence = $confidence,
+                          c.maturity = $maturity,
+                          c.lastUpdated = datetime()
+            RETURN c
+            """
+            
+            component_params = {
+                "component_name": component_name,
+                "component_type": component_type,
+                "responsibility": responsibility or f"Component: {component_name}",
+                "status": status,
+                "confidence": confidence,
+                "maturity": maturity
+            }
+            
+            self._safe_execute_query(
+                component_query,
+                parameters_=component_params,
+                database_=self.neo4j_database
+            )
+            
+            # Link to domain if provided
+            if domain_name:
+                domain_link_query = """
+                MATCH (d:Entity {name: $domain_name, entityType: "Domain"})
+                MATCH (c:Entity {name: $component_name, entityType: "Component"})
+                MERGE (d)-[r:CONTAINS]->(c)
+                ON CREATE SET r.since = datetime(),
+                              r.confidence = $confidence
+                RETURN d, c
+                """
+                
+                domain_link_params = {
+                    "domain_name": domain_name,
+                    "component_name": component_name,
+                    "confidence": confidence
+                }
+                
+                domain_result = self._safe_execute_query(
+                    domain_link_query,
+                    parameters_=domain_link_params,
+                    database_=self.neo4j_database
+                )
+                
+                # Check if the domain exists
+                if not domain_result or not domain_result[0]:
+                    self.logger.warn(f"Domain '{domain_name}' not found when adding component")
+                    return dict_to_json({
+                        "status": "error",
+                        "message": f"Domain '{domain_name}' not found. Please create the domain first."
+                    })
+            
+            # Link to project container
+            container_link_query = """
+            MATCH (pc:MemoryContainer {name: $project_name, type: "ProjectContainer"})
+            MATCH (c:Entity {name: $component_name, entityType: "Component"})
+            MERGE (pc)-[r:CONTAINS]->(c)
+            ON CREATE SET r.since = datetime(),
+                          r.confidence = $confidence
+            RETURN pc, c
+            """
+            
+            container_link_params = {
+                "project_name": project_name,
+                "component_name": component_name,
+                "confidence": confidence
+            }
+            
+            container_result = self._safe_execute_query(
+                container_link_query,
+                parameters_=container_link_params,
+                database_=self.neo4j_database
+            )
+            
+            # Check if the project container exists
+            if not container_result or not container_result[0]:
+                self.logger.warn(f"Project container '{project_name}' not found when adding component")
+                
+                # Create project container if it doesn't exist
+                container_creation = self.create_project_container(project_name)
+                container_data = json.loads(container_creation)
+                
+                if container_data.get("status") != "success":
+                    self.logger.error(f"Failed to create missing project container: {container_data.get('message')}")
+                    return dict_to_json({
+                        "status": "warning",
+                        "message": f"Component created but project container could not be created: {container_data.get('message')}",
+                        "data": {
+                            "component_name": component_name,
+                            "project_name": project_name
+                        }
+                    })
+                    
+                # Try linking again
+                self._safe_execute_query(
+                    container_link_query,
+                    parameters_=container_link_params,
+                    database_=self.neo4j_database
+                )
+            
+            # Create dependencies if provided
+            if dependencies and isinstance(dependencies, list):
+                self._create_component_dependencies(component_name, dependencies)
+            
+            # Record evolution history if provided
+            if evolution_history and isinstance(evolution_history, list):
+                self._record_component_evolution(component_name, evolution_history)
+            
+            # Add metadata if provided
+            if metadata and isinstance(metadata, dict):
+                self._add_metadata_to_component(component_name, metadata)
+            
+            self.logger.info(f"Added component '{component_name}' to project '{project_name}'")
+            
+            result_data = {
+                "project_name": project_name,
+                "component_name": component_name,
+                "created": datetime.datetime.now().isoformat()
+            }
+            
+            if domain_name:
+                result_data["domain_name"] = domain_name
+            
+            return dict_to_json({
+                "status": "success",
+                "message": f"Component '{component_name}' added successfully",
+                "data": result_data
+            })
+            
+        except Exception as e:
+            error_info = extract_error(e)
+            self.logger.error(f"Error adding component to project: {error_info}")
+            return dict_to_json({
+                "status": "error",
+                "message": f"Failed to add component to project: {error_info}"
+            })
+    
+    def _create_component_dependencies(self, component_name: str, dependencies: List[Dict[str, Any]]) -> None:
+        """
+        Create dependency relationships between components.
+        
+        Args:
+            component_name: Name of the component
+            dependencies: List of dependencies with format:
+                         [{"name": "ComponentName", "criticality": "High", "type": "Requires"}]
+        """
+        try:
+            for dependency in dependencies:
+                dep_name = dependency.get("name")
+                
+                if not dep_name:
+                    self.logger.warn("Skipping dependency with missing name")
+                    continue
+                
+                # Get dependency properties
+                criticality = dependency.get("criticality", "Medium")
+                dep_type = dependency.get("type", "Requires")
+                confidence = dependency.get("confidence", 0.8)
+                
+                # Create dependency relationship
+                dependency_query = """
+                MATCH (c:Entity {name: $component_name, entityType: "Component"})
+                MATCH (dep:Entity {name: $dep_name, entityType: "Component"})
+                MERGE (c)-[r:DEPENDS_ON]->(dep)
+                ON CREATE SET r.created = datetime(),
+                              r.criticality = $criticality,
+                              r.type = $dep_type,
+                              r.confidence = $confidence
+                ON MATCH SET r.lastUpdated = datetime(),
+                             r.criticality = $criticality,
+                             r.type = $dep_type,
+                             r.confidence = $confidence
+                RETURN c, r, dep
+                """
+                
+                dependency_params = {
+                    "component_name": component_name,
+                    "dep_name": dep_name,
+                    "criticality": criticality,
+                    "dep_type": dep_type,
+                    "confidence": confidence
+                }
+                
+                result = self._safe_execute_query(
+                    dependency_query,
+                    parameters_=dependency_params,
+                    database_=self.neo4j_database
+                )
+                
+                if not result or not result[0]:
+                    self.logger.warn(f"Could not create dependency to '{dep_name}' - component may not exist")
+                else:
+                    self.logger.debug(f"Created dependency from '{component_name}' to '{dep_name}'")
+                
+        except Exception as e:
+            self.logger.error(f"Error creating component dependencies: {str(e)}")
+    
+    def _record_component_evolution(self, component_name: str, evolution_history: List[Dict[str, Any]]) -> None:
+        """
+        Record the evolution history of a component.
+        
+        Args:
+            component_name: Name of the component
+            evolution_history: List of predecessor components with format:
+                              [{"predecessor_name": "OldComponent", "date": "2023-01-01", 
+                                "change_type": "Refactor", "significance": "Major"}]
+        """
+        try:
+            for history_item in evolution_history:
+                predecessor_name = history_item.get("predecessor_name")
+                
+                if not predecessor_name:
+                    self.logger.warn("Skipping evolution record with missing predecessor name")
+                    continue
+                
+                # Get evolution properties
+                date_str = history_item.get("date")
+                change_type = history_item.get("change_type", "Refactor")
+                significance = history_item.get("significance", "Medium")
+                confidence = history_item.get("confidence", 0.8)
+                
+                # Validate and format date
+                date_param = None
+                if date_str:
+                    try:
+                        # Convert to Neo4j datetime format
+                        date_param = datetime.datetime.fromisoformat(date_str).isoformat()
+                    except ValueError:
+                        self.logger.warn(f"Invalid date format: {date_str}, using current date")
+                        date_param = datetime.datetime.now().isoformat()
+                else:
+                    date_param = datetime.datetime.now().isoformat()
+                
+                # Create evolution relationship
+                evolution_query = """
+                MATCH (c:Entity {name: $component_name, entityType: "Component"})
+                MATCH (pred:Entity {name: $predecessor_name})
+                MERGE (c)-[r:EVOLVED_FROM]->(pred)
+                ON CREATE SET r.date = datetime($date),
+                              r.changeType = $change_type,
+                              r.significance = $significance,
+                              r.confidence = $confidence
+                ON MATCH SET r.lastUpdated = datetime(),
+                             r.changeType = $change_type,
+                             r.significance = $significance,
+                             r.confidence = $confidence
+                RETURN c, r, pred
+                """
+                
+                evolution_params = {
+                    "component_name": component_name,
+                    "predecessor_name": predecessor_name,
+                    "date": date_param,
+                    "change_type": change_type,
+                    "significance": significance,
+                    "confidence": confidence
+                }
+                
+                result = self._safe_execute_query(
+                    evolution_query,
+                    parameters_=evolution_params,
+                    database_=self.neo4j_database
+                )
+                
+                if not result or not result[0]:
+                    self.logger.warn(f"Could not create evolution link to '{predecessor_name}' - entity may not exist")
+                else:
+                    self.logger.debug(f"Recorded evolution from '{predecessor_name}' to '{component_name}'")
+                
+        except Exception as e:
+            self.logger.error(f"Error recording component evolution: {str(e)}")
+    
+    def _add_metadata_to_component(self, component_name: str, metadata: Dict[str, Any]) -> None:
+        """
+        Add metadata to a component as properties.
+        
+        Args:
+            component_name: Name of the component
+            metadata: Dictionary of metadata to add
+        """
+        try:
+            # Filter out None values and convert to properties
+            filtered_metadata = {k: v for k, v in metadata.items() if v is not None}
+            
+            if not filtered_metadata:
+                return
+                
+            # Build dynamic property setting
+            props = []
+            params = {"component_name": component_name}
+            
+            for i, (key, value) in enumerate(filtered_metadata.items()):
+                param_name = f"meta_{i}"
+                props.append(f"c.{key} = ${param_name}")
+                params[param_name] = value
+            
+            if not props:
+                return
+                
+            # Update component entity with metadata
+            metadata_query = f"""
+            MATCH (c:Entity {{name: $component_name, entityType: "Component"}})
+            SET {', '.join(props)},
+                c.lastUpdated = datetime()
+            RETURN c
+            """
+            
+            self._safe_execute_query(
+                metadata_query,
+                parameters_=params,
+                database_=self.neo4j_database
+            )
+            
+        except Exception as e:
+            self.logger.error(f"Error adding metadata to component: {str(e)}")
+    
+    def add_feature(
+        self,
+        project_name: str,
+        feature_name: str,
+        domain_name: Optional[str] = None,
+        description: Optional[str] = None,
+        priority: str = "Medium",
+        status: str = "Planned",
+        requirements: Optional[List[Dict[str, Any]]] = None,
+        confidence: float = 0.8,
+        complexity: str = "Medium",
+        implementing_components: Optional[List[str]] = None,
+        metrics: Optional[Dict[str, Any]] = None,
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> str:
+        """
+        Add a feature to a project or domain.
+        
+        Args:
+            project_name: Name of the project
+            feature_name: Name of the feature to add
+            domain_name: Optional domain to which the feature belongs
+            description: Optional description of the feature
+            priority: Priority level (Low, Medium, High, Critical)
+            status: Status of the feature (Planned, InDevelopment, Completed, Deprecated)
+            requirements: Optional list of requirements with format:
+                         [{"description": "Req description", "priority": "High", "source": "Customer"}]
+            confidence: Confidence level for this feature (0.0-1.0)
+            complexity: Complexity level (Low, Medium, High, Very High)
+            implementing_components: Optional list of component names that implement this feature
+            metrics: Optional metrics to track for this feature as key-value pairs
+            metadata: Optional additional metadata as key-value pairs
+            
+        Returns:
+            JSON string with result information
+        """
+        try:
+            self._ensure_initialized()
+            
+            if not self.neo4j_driver:
+                return dict_to_json({
+                    "status": "error",
+                    "message": "Neo4j driver not initialized"
+                })
+            
+            # Create feature entity
+            feature_query = """
+            MERGE (f:Entity {name: $feature_name, entityType: "Feature"})
+            ON CREATE SET f.created = datetime(),
+                          f.description = $description,
+                          f.priority = $priority,
+                          f.status = $status,
+                          f.confidence = $confidence,
+                          f.complexity = $complexity,
+                          f.lastUpdated = datetime()
+            RETURN f
+            """
+            
+            feature_params = {
+                "feature_name": feature_name,
+                "description": description or f"Feature: {feature_name}",
+                "priority": priority,
+                "status": status,
+                "confidence": confidence,
+                "complexity": complexity
+            }
+            
+            self._safe_execute_query(
+                feature_query,
+                parameters_=feature_params,
+                database_=self.neo4j_database
+            )
+            
+            # Link to domain if provided
+            if domain_name:
+                domain_link_query = """
+                MATCH (d:Entity {name: $domain_name, entityType: "Domain"})
+                MATCH (f:Entity {name: $feature_name, entityType: "Feature"})
+                MERGE (d)-[r:CONTAINS]->(f)
+                ON CREATE SET r.since = datetime(),
+                              r.confidence = $confidence
+                RETURN d, f
+                """
+                
+                domain_link_params = {
+                    "domain_name": domain_name,
+                    "feature_name": feature_name,
+                    "confidence": confidence
+                }
+                
+                domain_result = self._safe_execute_query(
+                    domain_link_query,
+                    parameters_=domain_link_params,
+                    database_=self.neo4j_database
+                )
+                
+                # Check if the domain exists
+                if not domain_result or not domain_result[0]:
+                    self.logger.warn(f"Domain '{domain_name}' not found when adding feature")
+                    return dict_to_json({
+                        "status": "error",
+                        "message": f"Domain '{domain_name}' not found. Please create the domain first."
+                    })
+            
+            # Link to project container
+            container_link_query = """
+            MATCH (pc:MemoryContainer {name: $project_name, type: "ProjectContainer"})
+            MATCH (f:Entity {name: $feature_name, entityType: "Feature"})
+            MERGE (pc)-[r:CONTAINS]->(f)
+            ON CREATE SET r.since = datetime(),
+                          r.confidence = $confidence
+            RETURN pc, f
+            """
+            
+            container_link_params = {
+                "project_name": project_name,
+                "feature_name": feature_name,
+                "confidence": confidence
+            }
+            
+            container_result = self._safe_execute_query(
+                container_link_query,
+                parameters_=container_link_params,
+                database_=self.neo4j_database
+            )
+            
+            # Check if the project container exists
+            if not container_result or not container_result[0]:
+                self.logger.warn(f"Project container '{project_name}' not found when adding feature")
+                
+                # Create project container if it doesn't exist
+                container_creation = self.create_project_container(project_name)
+                container_data = json.loads(container_creation)
+                
+                if container_data.get("status") != "success":
+                    self.logger.error(f"Failed to create missing project container: {container_data.get('message')}")
+                    return dict_to_json({
+                        "status": "warning",
+                        "message": f"Feature created but project container could not be created: {container_data.get('message')}",
+                        "data": {
+                            "feature_name": feature_name,
+                            "project_name": project_name
+                        }
+                    })
+                    
+                # Try linking again
+                self._safe_execute_query(
+                    container_link_query,
+                    parameters_=container_link_params,
+                    database_=self.neo4j_database
+                )
+            
+            # Create requirements if provided
+            if requirements and isinstance(requirements, list):
+                self._create_feature_requirements(feature_name, requirements)
+            
+            # Link implementing components if provided
+            if implementing_components and isinstance(implementing_components, list):
+                self._link_implementing_components(feature_name, implementing_components, confidence)
+            
+            # Add metrics if provided
+            if metrics and isinstance(metrics, dict):
+                self._add_metrics_to_feature(feature_name, metrics)
+            
+            # Add metadata if provided
+            if metadata and isinstance(metadata, dict):
+                self._add_metadata_to_feature(feature_name, metadata)
+            
+            self.logger.info(f"Added feature '{feature_name}' to project '{project_name}'")
+            
+            result_data = {
+                "project_name": project_name,
+                "feature_name": feature_name,
+                "created": datetime.datetime.now().isoformat()
+            }
+            
+            if domain_name:
+                result_data["domain_name"] = domain_name
+            
+            return dict_to_json({
+                "status": "success",
+                "message": f"Feature '{feature_name}' added successfully",
+                "data": result_data
+            })
+            
+        except Exception as e:
+            error_info = extract_error(e)
+            self.logger.error(f"Error adding feature to project: {error_info}")
+            return dict_to_json({
+                "status": "error",
+                "message": f"Failed to add feature to project: {error_info}"
+            })
+    
+    def _create_feature_requirements(self, feature_name: str, requirements: List[Dict[str, Any]]) -> None:
+        """
+        Create requirements for a feature.
+        
+        Args:
+            feature_name: Name of the feature
+            requirements: List of requirements with format:
+                         [{"description": "Req description", "priority": "High", "source": "Customer"}]
+        """
+        try:
+            for i, req in enumerate(requirements):
+                description = req.get("description")
+                
+                if not description:
+                    self.logger.warn("Skipping requirement with missing description")
+                    continue
+                
+                # Create a unique name for the requirement if not provided
+                req_name = req.get("name", f"{feature_name}_Req_{i+1}")
+                priority = req.get("priority", "Medium")
+                source = req.get("source", "Unspecified")
+                status = req.get("status", "Proposed")
+                confidence = req.get("confidence", 0.8)
+                
+                # Create requirement entity
+                req_query = """
+                MERGE (r:Entity {name: $req_name, entityType: "Requirement"})
+                ON CREATE SET r.created = datetime(),
+                              r.description = $description,
+                              r.priority = $priority,
+                              r.source = $source,
+                              r.status = $status,
+                              r.confidence = $confidence,
+                              r.lastUpdated = datetime()
+                RETURN r
+                """
+                
+                req_params = {
+                    "req_name": req_name,
+                    "description": description,
+                    "priority": priority,
+                    "source": source,
+                    "status": status,
+                    "confidence": confidence
+                }
+                
+                self._safe_execute_query(
+                    req_query,
+                    parameters_=req_params,
+                    database_=self.neo4j_database
+                )
+                
+                # Link requirement to feature
+                link_query = """
+                MATCH (f:Entity {name: $feature_name, entityType: "Feature"})
+                MATCH (r:Entity {name: $req_name, entityType: "Requirement"})
+                MERGE (f)-[rel:HAS_REQUIREMENT]->(r)
+                ON CREATE SET rel.created = datetime(),
+                              rel.confidence = $confidence
+                RETURN f, rel, r
+                """
+                
+                link_params = {
+                    "feature_name": feature_name,
+                    "req_name": req_name,
+                    "confidence": confidence
+                }
+                
+                self._safe_execute_query(
+                    link_query,
+                    parameters_=link_params,
+                    database_=self.neo4j_database
+                )
+                
+                self.logger.debug(f"Created requirement '{req_name}' for feature '{feature_name}'")
+                
+        except Exception as e:
+            self.logger.error(f"Error creating feature requirements: {str(e)}")
+    
+    def _link_implementing_components(self, feature_name: str, component_names: List[str], confidence: float) -> None:
+        """
+        Link components that implement a feature.
+        
+        Args:
+            feature_name: Name of the feature
+            component_names: List of component names that implement this feature
+            confidence: Confidence level for the implementation relationships
+        """
+        try:
+            for component_name in component_names:
+                # Create implementation relationship
+                impl_query = """
+                MATCH (c:Entity {name: $component_name, entityType: "Component"})
+                MATCH (f:Entity {name: $feature_name, entityType: "Feature"})
+                MERGE (c)-[r:IMPLEMENTS]->(f)
+                ON CREATE SET r.created = datetime(),
+                              r.confidence = $confidence,
+                              r.coverage = "Full"
+                ON MATCH SET r.lastUpdated = datetime(),
+                             r.confidence = $confidence
+                RETURN c, r, f
+                """
+                
+                impl_params = {
+                    "component_name": component_name,
+                    "feature_name": feature_name,
+                    "confidence": confidence
+                }
+                
+                result = self._safe_execute_query(
+                    impl_query,
+                    parameters_=impl_params,
+                    database_=self.neo4j_database
+                )
+                
+                if not result or not result[0]:
+                    self.logger.warn(f"Could not link component '{component_name}' as implementing '{feature_name}' - component may not exist")
+                else:
+                    self.logger.debug(f"Linked component '{component_name}' as implementing feature '{feature_name}'")
+                
+        except Exception as e:
+            self.logger.error(f"Error linking implementing components: {str(e)}")
+    
+    def _add_metrics_to_feature(self, feature_name: str, metrics: Dict[str, Any]) -> None:
+        """
+        Add metrics to a feature.
+        
+        Args:
+            feature_name: Name of the feature
+            metrics: Dictionary of metrics as key-value pairs
+        """
+        try:
+            # Create metrics nodes for the feature
+            for metric_name, metric_value in metrics.items():
+                if metric_name and metric_value is not None:
+                    # Create a unique name for the metric
+                    unique_metric_name = f"{feature_name}_{metric_name}"
+                    
+                    # Determine metric type
+                    metric_type = "Numeric"
+                    if isinstance(metric_value, str):
+                        metric_type = "Text"
+                    elif isinstance(metric_value, bool):
+                        metric_type = "Boolean"
+                    
+                    # Convert value to string for storage
+                    string_value = str(metric_value)
+                    
+                    # Create metric entity
+                    metric_query = """
+                    MERGE (m:Metric {name: $unique_name})
+                    ON CREATE SET m.created = datetime(),
+                                  m.type = $metric_type,
+                                  m.metricName = $metric_name,
+                                  m.value = $metric_value,
+                                  m.timestamp = datetime()
+                    ON MATCH SET m.value = $metric_value,
+                                 m.timestamp = datetime(),
+                                 m.lastUpdated = datetime()
+                    RETURN m
+                    """
+                    
+                    metric_params = {
+                        "unique_name": unique_metric_name,
+                        "metric_type": metric_type,
+                        "metric_name": metric_name,
+                        "metric_value": string_value
+                    }
+                    
+                    self._safe_execute_query(
+                        metric_query,
+                        parameters_=metric_params,
+                        database_=self.neo4j_database
+                    )
+                    
+                    # Link metric to feature
+                    link_query = """
+                    MATCH (f:Entity {name: $feature_name, entityType: "Feature"})
+                    MATCH (m:Metric {name: $unique_name})
+                    MERGE (f)-[r:HAS_METRIC]->(m)
+                    ON CREATE SET r.created = datetime()
+                    RETURN f, r, m
+                    """
+                    
+                    link_params = {
+                        "feature_name": feature_name,
+                        "unique_name": unique_metric_name
+                    }
+                    
+                    self._safe_execute_query(
+                        link_query,
+                        parameters_=link_params,
+                        database_=self.neo4j_database
+                    )
+                    
+                    self.logger.debug(f"Added metric '{metric_name}' to feature '{feature_name}'")
+                
+        except Exception as e:
+            self.logger.error(f"Error adding metrics to feature: {str(e)}")
+    
+    def _add_metadata_to_feature(self, feature_name: str, metadata: Dict[str, Any]) -> None:
+        """
+        Add metadata to a feature as properties.
+        
+        Args:
+            feature_name: Name of the feature
+            metadata: Dictionary of metadata to add
+        """
+        try:
+            # Filter out None values and convert to properties
+            filtered_metadata = {k: v for k, v in metadata.items() if v is not None}
+            
+            if not filtered_metadata:
+                return
+                
+            # Build dynamic property setting
+            props = []
+            params = {"feature_name": feature_name}
+            
+            for i, (key, value) in enumerate(filtered_metadata.items()):
+                param_name = f"meta_{i}"
+                props.append(f"f.{key} = ${param_name}")
+                params[param_name] = value
+            
+            if not props:
+                return
+                
+            # Update feature entity with metadata
+            metadata_query = f"""
+            MATCH (f:Entity {{name: $feature_name, entityType: "Feature"}})
+            SET {', '.join(props)},
+                f.lastUpdated = datetime()
+            RETURN f
+            """
+            
+            self._safe_execute_query(
+                metadata_query,
+                parameters_=params,
+                database_=self.neo4j_database
+            )
+            
+        except Exception as e:
+            self.logger.error(f"Error adding metadata to feature: {str(e)}")
+
+    def record_decision(
+        self,
+        project_name: str,
+        decision_name: str,
+        description: str,
+        alternatives: Optional[List[str]] = None,
+        rationale: Optional[str] = None,
+        constraints: Optional[str] = None,
+        affects: Optional[List[Dict[str, Any]]] = None,
+        confidence: float = 0.8,
+        impact: str = "Medium",
+        decision_date: Optional[str] = None,
+        review_date: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> str:
+        """
+        Record a design/architecture decision for a project.
+        
+        Args:
+            project_name: Name of the project
+            decision_name: Name of the decision to record
+            description: Description of the decision
+            alternatives: Optional list of alternative options considered
+            rationale: Optional explanation of why this decision was made
+            constraints: Optional constraints that influenced the decision
+            affects: Optional list of entities affected by this decision with format:
+                   [{"name": "EntityName", "impact": "High", "direction": "Positive"}]
+            confidence: Confidence level for this decision (0.0-1.0)
+            impact: Impact level of the decision (Low, Medium, High, Critical)
+            decision_date: Optional date when the decision was made (ISO format)
+            review_date: Optional date when the decision should be reviewed (ISO format)
+            metadata: Optional additional metadata as key-value pairs
+            
+        Returns:
+            JSON string with result information
+        """
+        try:
+            self._ensure_initialized()
+            
+            if not self.neo4j_driver:
+                return dict_to_json({
+                    "status": "error",
+                    "message": "Neo4j driver not initialized"
+                })
+            
+            # Format alternatives as a string
+            alternatives_str = None
+            if alternatives and isinstance(alternatives, list):
+                alternatives_str = json.dumps(alternatives)
+                
+            # Validate and format dates
+            decision_date_param = None
+            if decision_date:
+                try:
+                    # Validate date format
+                    datetime.datetime.fromisoformat(decision_date)
+                    decision_date_param = decision_date
+                except ValueError:
+                    self.logger.warn(f"Invalid decision date format: {decision_date}, using current date")
+                    decision_date_param = datetime.datetime.now().isoformat()
+            else:
+                decision_date_param = datetime.datetime.now().isoformat()
+                
+            review_date_param = None
+            if review_date:
+                try:
+                    # Validate date format
+                    datetime.datetime.fromisoformat(review_date)
+                    review_date_param = review_date
+                except ValueError:
+                    self.logger.warn(f"Invalid review date format: {review_date}, ignoring")
+            
+            # Create decision entity
+            decision_query = """
+            MERGE (d:Entity {name: $decision_name, entityType: "Decision"})
+            ON CREATE SET d.created = datetime(),
+                          d.description = $description,
+                          d.alternatives = $alternatives,
+                          d.confidence = $confidence,
+                          d.impact = $impact,
+                          d.decisionDate = datetime($decision_date),
+                          d.status = "Active",
+                          d.lastUpdated = datetime()
+            """
+            
+            if review_date_param:
+                decision_query += ", d.reviewDate = datetime($review_date)"
+                
+            decision_query += " RETURN d"
+            
+            decision_params = {
+                "decision_name": decision_name,
+                "description": description,
+                "alternatives": alternatives_str,
+                "confidence": confidence,
+                "impact": impact,
+                "decision_date": decision_date_param
+            }
+            
+            if review_date_param:
+                decision_params["review_date"] = review_date_param
+            
+            decision_result = self._safe_execute_query(
+                decision_query,
+                parameters_=decision_params,
+                database_=self.neo4j_database
+            )
+            
+            # Create rationale entity if provided
+            if rationale:
+                rationale_name = f"{decision_name}_Rationale"
+                
+                rationale_query = """
+                MERGE (r:Entity {name: $rationale_name, entityType: "Rationale"})
+                ON CREATE SET r.created = datetime(),
+                              r.description = $rationale,
+                              r.confidence = $confidence,
+                              r.lastUpdated = datetime()
+                """
+                
+                if constraints:
+                    rationale_query += ", r.constraints = $constraints"
+                    
+                rationale_query += " RETURN r"
+                
+                rationale_params = {
+                    "rationale_name": rationale_name,
+                    "rationale": rationale,
+                    "confidence": confidence
+                }
+                
+                if constraints:
+                    rationale_params["constraints"] = constraints
+                
+                rationale_result = self._safe_execute_query(
+                    rationale_query,
+                    parameters_=rationale_params,
+                    database_=self.neo4j_database
+                )
+                
+                # Link decision to rationale
+                link_query = """
+                MATCH (d:Entity {name: $decision_name, entityType: "Decision"})
+                MATCH (r:Entity {name: $rationale_name, entityType: "Rationale"})
+                MERGE (d)-[rel:HAS_RATIONALE]->(r)
+                ON CREATE SET rel.created = datetime(),
+                              rel.strength = "Strong",
+                              rel.confidence = $confidence
+                RETURN d, rel, r
+                """
+                
+                link_params = {
+                    "decision_name": decision_name,
+                    "rationale_name": rationale_name,
+                    "confidence": confidence
+                }
+                
+                self._safe_execute_query(
+                    link_query,
+                    parameters_=link_params,
+                    database_=self.neo4j_database
+                )
+            
+            # Link to project container
+            container_link_query = """
+            MATCH (pc:MemoryContainer {name: $project_name, type: "ProjectContainer"})
+            MATCH (d:Entity {name: $decision_name, entityType: "Decision"})
+            MERGE (pc)-[r:CONTAINS]->(d)
+            ON CREATE SET r.since = datetime(),
+                          r.confidence = $confidence
+            RETURN pc, d
+            """
+            
+            container_link_params = {
+                "project_name": project_name,
+                "decision_name": decision_name,
+                "confidence": confidence
+            }
+            
+            container_result = self._safe_execute_query(
+                container_link_query,
+                parameters_=container_link_params,
+                database_=self.neo4j_database
+            )
+            
+            # Check if the project container exists
+            if not container_result or not container_result[0]:
+                self.logger.warn(f"Project container '{project_name}' not found when recording decision")
+                
+                # Create project container if it doesn't exist
+                container_creation = self.create_project_container(project_name)
+                container_data = json.loads(container_creation)
+                
+                if container_data.get("status") != "success":
+                    self.logger.error(f"Failed to create missing project container: {container_data.get('message')}")
+                    return dict_to_json({
+                        "status": "warning",
+                        "message": f"Decision recorded but project container could not be created: {container_data.get('message')}",
+                        "data": {
+                            "decision_name": decision_name,
+                            "project_name": project_name
+                        }
+                    })
+                    
+                # Try linking again
+                self._safe_execute_query(
+                    container_link_query,
+                    parameters_=container_link_params,
+                    database_=self.neo4j_database
+                )
+                
+            # Link to rationale container as well if created
+            if rationale:
+                rationale_name = f"{decision_name}_Rationale"
+                
+                rationale_container_query = """
+                MATCH (pc:MemoryContainer {name: $project_name, type: "ProjectContainer"})
+                MATCH (r:Entity {name: $rationale_name, entityType: "Rationale"})
+                MERGE (pc)-[rel:CONTAINS]->(r)
+                ON CREATE SET rel.since = datetime(),
+                              rel.confidence = $confidence
+                RETURN pc, r
+                """
+                
+                rationale_container_params = {
+                    "project_name": project_name,
+                    "rationale_name": rationale_name,
+                    "confidence": confidence
+                }
+                
+                self._safe_execute_query(
+                    rationale_container_query,
+                    parameters_=rationale_container_params,
+                    database_=self.neo4j_database
+                )
+            
+            # Create affects relationships if provided
+            if affects and isinstance(affects, list):
+                self._create_affects_relationships(decision_name, affects, confidence)
+            
+            # Add metadata if provided
+            if metadata and isinstance(metadata, dict):
+                self._add_metadata_to_decision(decision_name, metadata)
+            
+            self.logger.info(f"Recorded decision '{decision_name}' for project '{project_name}'")
+            
+            result_data = {
+                "project_name": project_name,
+                "decision_name": decision_name,
+                "created": datetime.datetime.now().isoformat()
+            }
+            
+            if rationale:
+                result_data["rationale_name"] = f"{decision_name}_Rationale"
+            
+            return dict_to_json({
+                "status": "success",
+                "message": f"Decision '{decision_name}' recorded successfully",
+                "data": result_data
+            })
+            
+        except Exception as e:
+            error_info = extract_error(e)
+            self.logger.error(f"Error recording decision: {error_info}")
+            return dict_to_json({
+                "status": "error",
+                "message": f"Failed to record decision: {error_info}"
+            })
+    
+    def _create_affects_relationships(self, decision_name: str, affects: List[Dict[str, Any]], confidence: float) -> None:
+        """
+        Create relationships between a decision and entities it affects.
+        
+        Args:
+            decision_name: Name of the decision
+            affects: List of entities affected by this decision with format:
+                   [{"name": "EntityName", "impact": "High", "direction": "Positive"}]
+            confidence: Confidence level for the relationship
+        """
+        try:
+            for affected in affects:
+                entity_name = affected.get("name")
+                
+                if not entity_name:
+                    self.logger.warn("Skipping affected entity with missing name")
+                    continue
+                
+                # Get affect properties
+                impact = affected.get("impact", "Medium")
+                direction = affected.get("direction", "Neutral")
+                affect_confidence = affected.get("confidence", confidence)
+                
+                # Create affects relationship
+                affects_query = """
+                MATCH (d:Entity {name: $decision_name, entityType: "Decision"})
+                MATCH (e:Entity {name: $entity_name})
+                MERGE (d)-[r:AFFECTS]->(e)
+                ON CREATE SET r.created = datetime(),
+                              r.impact = $impact,
+                              r.direction = $direction,
+                              r.confidence = $affect_confidence
+                ON MATCH SET r.lastUpdated = datetime(),
+                             r.impact = $impact,
+                             r.direction = $direction,
+                             r.confidence = $affect_confidence
+                RETURN d, r, e
+                """
+                
+                affects_params = {
+                    "decision_name": decision_name,
+                    "entity_name": entity_name,
+                    "impact": impact,
+                    "direction": direction,
+                    "affect_confidence": affect_confidence
+                }
+                
+                result = self._safe_execute_query(
+                    affects_query,
+                    parameters_=affects_params,
+                    database_=self.neo4j_database
+                )
+                
+                if not result or not result[0]:
+                    self.logger.warn(f"Could not create affects relationship to '{entity_name}' - entity may not exist")
+                else:
+                    self.logger.debug(f"Created affects relationship from decision '{decision_name}' to entity '{entity_name}'")
+                
+        except Exception as e:
+            self.logger.error(f"Error creating affects relationships: {str(e)}")
+    
+    def _add_metadata_to_decision(self, decision_name: str, metadata: Dict[str, Any]) -> None:
+        """
+        Add metadata to a decision as properties.
+        
+        Args:
+            decision_name: Name of the decision
+            metadata: Dictionary of metadata to add
+        """
+        try:
+            # Filter out None values and convert to properties
+            filtered_metadata = {k: v for k, v in metadata.items() if v is not None}
+            
+            if not filtered_metadata:
+                return
+                
+            # Build dynamic property setting
+            props = []
+            params = {"decision_name": decision_name}
+            
+            for i, (key, value) in enumerate(filtered_metadata.items()):
+                param_name = f"meta_{i}"
+                props.append(f"d.{key} = ${param_name}")
+                params[param_name] = value
+            
+            if not props:
+                return
+                
+            # Update decision entity with metadata
+            metadata_query = f"""
+            MATCH (d:Entity {{name: $decision_name, entityType: "Decision"}})
+            SET {', '.join(props)},
+                d.lastUpdated = datetime()
+            RETURN d
+            """
+            
+            self._safe_execute_query(
+                metadata_query,
+                parameters_=params,
+                database_=self.neo4j_database
+            )
+            
+        except Exception as e:
+            self.logger.error(f"Error adding metadata to decision: {str(e)}")
+            
+    def create_project_relationship(
+        self,
+        from_entity: str,
+        to_entity: str,
+        relationship_type: str,
+        properties: Optional[Dict[str, Any]] = None,
+        confidence: float = 0.9,
+        evidence: Optional[str] = None,
+        project_name: Optional[str] = None
+    ) -> str:
+        """
+        Create a relationship between two project entities.
+        
+        Args:
+            from_entity: Name of the source entity
+            to_entity: Name of the target entity
+            relationship_type: Type of relationship to create (e.g., DEPENDS_ON, RELATES_TO)
+            properties: Optional additional properties for the relationship
+            confidence: Confidence level for this relationship (0.0-1.0)
+            evidence: Optional evidence or justification for this relationship
+            project_name: Optional project name for validation
+            
+        Returns:
+            JSON string with result information
+        """
+        try:
+            self._ensure_initialized()
+            
+            if not self.neo4j_driver:
+                return dict_to_json({
+                    "status": "error",
+                    "message": "Neo4j driver not initialized"
+                })
+            
+            # Validate relationship type - convert to uppercase and ensure no spaces
+            valid_relationship_type = relationship_type.upper().replace(" ", "_")
+            
+            # Prepare properties for the relationship
+            rel_properties = {
+                "created": datetime.datetime.now().isoformat(),
+                "confidence": confidence
+            }
+            
+            # Add evidence if provided
+            if evidence:
+                rel_properties["evidence"] = evidence
+                
+            # Add additional properties if provided
+            if properties and isinstance(properties, dict):
+                for key, value in properties.items():
+                    if key and value is not None and key not in rel_properties:
+                        rel_properties[key] = value
+            
+            # Build parameters
+            params = {
+                "from_entity": from_entity,
+                "to_entity": to_entity,
+                "rel_properties": rel_properties
+            }
+            
+            # Create relationship query
+            relationship_query = """
+            MATCH (from:Entity {name: $from_entity})
+            MATCH (to:Entity {name: $to_entity})
+            """
+            
+            # Add optional project validation
+            if project_name:
+                relationship_query += """
+                MATCH (pc:MemoryContainer {name: $project_name, type: "ProjectContainer"})
+                WHERE (pc)-[:CONTAINS]->(from) AND (pc)-[:CONTAINS]->(to)
+                """
+                params["project_name"] = project_name
+            
+            # Complete the query
+            relationship_query += f"""
+            MERGE (from)-[r:{valid_relationship_type}]->(to)
+            ON CREATE SET r += $rel_properties
+            ON MATCH SET r.lastUpdated = datetime(),
+                         r.confidence = $rel_properties.confidence
+            """
+            
+            # Add evidence update if provided
+            if evidence:
+                relationship_query += ", r.evidence = $rel_properties.evidence"
+                
+            # Add property updates for additional properties
+            if properties and isinstance(properties, dict):
+                for key in properties.keys():
+                    if key and key not in ["created", "lastUpdated"]:
+                        relationship_query += f", r.{key} = $rel_properties.{key}"
+            
+            relationship_query += " RETURN from, r, to"
+            
+            # Execute the query
+            result = self._safe_execute_query(
+                relationship_query,
+                parameters_=params,
+                database_=self.neo4j_database
+            )
+            
+            # Check if the entities exist and relationship was created
+            if not result or not result[0]:
+                entity_check_query = """
+                OPTIONAL MATCH (from:Entity {name: $from_entity})
+                OPTIONAL MATCH (to:Entity {name: $to_entity})
+                RETURN from IS NOT NULL as from_exists, to IS NOT NULL as to_exists
+                """
+                
+                entity_check_params = {
+                    "from_entity": from_entity,
+                    "to_entity": to_entity
+                }
+                
+                check_result = self._safe_execute_query(
+                    entity_check_query,
+                    parameters_=entity_check_params,
+                    database_=self.neo4j_database
+                )
+                
+                if check_result and check_result[0]:
+                    record = check_result[0][0]
+                    from_exists = record.get("from_exists", False)
+                    to_exists = record.get("to_exists", False)
+                    
+                    if not from_exists and not to_exists:
+                        return dict_to_json({
+                            "status": "error",
+                            "message": f"Both source entity '{from_entity}' and target entity '{to_entity}' do not exist"
+                        })
+                    elif not from_exists:
+                        return dict_to_json({
+                            "status": "error",
+                            "message": f"Source entity '{from_entity}' does not exist"
+                        })
+                    elif not to_exists:
+                        return dict_to_json({
+                            "status": "error",
+                            "message": f"Target entity '{to_entity}' does not exist"
+                        })
+                    elif project_name:
+                        return dict_to_json({
+                            "status": "error",
+                            "message": f"One or both entities are not part of project '{project_name}'"
+                        })
+                
+                return dict_to_json({
+                    "status": "error",
+                    "message": "Failed to create relationship for unknown reason"
+                })
+            
+            self.logger.info(f"Created relationship {from_entity} -[{valid_relationship_type}]-> {to_entity}")
+            
+            result_data = {
+                "from_entity": from_entity,
+                "to_entity": to_entity,
+                "relationship_type": valid_relationship_type,
+                "confidence": confidence,
+                "created": datetime.datetime.now().isoformat()
+            }
+            
+            if project_name:
+                result_data["project_name"] = project_name
+            
+            return dict_to_json({
+                "status": "success",
+                "message": f"Relationship from '{from_entity}' to '{to_entity}' created successfully",
+                "data": result_data
+            })
+            
+        except Exception as e:
+            error_info = extract_error(e)
+            self.logger.error(f"Error creating project relationship: {error_info}")
+            return dict_to_json({
+                "status": "error",
+                "message": f"Failed to create relationship: {error_info}"
+            })
+
+    def get_project_structure(
+        self,
+        project_name: str,
+        include_types: Optional[List[str]] = None,
+        exclude_types: Optional[List[str]] = None,
+        format: str = "hierarchical"
+    ) -> str:
+        """
+        Retrieves the structure of a project, including domains, components, and other entities.
+        
+        Args:
+            project_name: Name of the project
+            include_types: Optional list of entity types to include (if None, include all)
+            exclude_types: Optional list of entity types to exclude
+            format: Output format - 'hierarchical' (tree) or 'flat' (list)
+            
+        Returns:
+            JSON string with project structure information
+        """
+        try:
+            self._ensure_initialized()
+            
+            if not self.neo4j_driver:
+                return dict_to_json({
+                    "status": "error",
+                    "message": "Neo4j driver not initialized"
+                })
+                
+            # Build entity type filter
+            entity_filter = ""
+            params = {"project_name": project_name}
+            
+            if include_types and isinstance(include_types, list):
+                valid_types = [t for t in include_types if t and isinstance(t, str)]
+                if valid_types:
+                    entity_filter = "AND e.entityType IN $include_types"
+                    params["include_types"] = valid_types
+                    
+            if exclude_types and isinstance(exclude_types, list):
+                valid_excludes = [t for t in exclude_types if t and isinstance(t, str)]
+                if valid_excludes:
+                    if entity_filter:
+                        entity_filter += " AND e.entityType NOT IN $exclude_types"
+                    else:
+                        entity_filter = "AND e.entityType NOT IN $exclude_types"
+                    params["exclude_types"] = valid_excludes
+            
+            # Check if project exists
+            project_check_query = """
+            MATCH (p:MemoryContainer {name: $project_name, type: "ProjectContainer"})
+            RETURN count(p) > 0 as exists
+            """
+            
+            check_result = self._safe_execute_query(
+                project_check_query,
+                parameters_={"project_name": project_name},
+                database_=self.neo4j_database
+            )
+            
+            project_exists = False
+            if check_result and isinstance(check_result, list) and check_result:
+                try:
+                    project_exists = bool(check_result[0].get("exists", False))
+                except Exception:
+                    # If we can't access the result properly, assume the project doesn't exist
+                    pass
+            
+            if not project_exists:
+                return dict_to_json({
+                    "status": "error",
+                    "message": f"Project '{project_name}' does not exist"
+                })
+                
+            # Different queries based on format
+            if format.lower() == "hierarchical":
+                # Get project hierarchy with relationships between entities
+                hierarchy_query = f"""
+                MATCH (p:MemoryContainer {{name: $project_name, type: "ProjectContainer"}})-[:CONTAINS]->(e:Entity) {entity_filter}
+                OPTIONAL MATCH (e)-[r]->(other:Entity)
+                WHERE (p)-[:CONTAINS]->(other)
+                RETURN e.name as name, e.entityType as type, e.description as description, 
+                       e.status as status, e.confidence as confidence, e.dateCreated as dateCreated,
+                       collect(DISTINCT {{
+                           type: type(r), 
+                           target: other.name, 
+                           targetType: other.entityType
+                       }}) as relationships
+                """
+                
+                result = self._safe_execute_query(
+                    hierarchy_query,
+                    parameters_=params,
+                    database_=self.neo4j_database
+                )
+                
+                # Construct tree
+                entities = {}
+                relationships = []
+                
+                # First pass: create all entity nodes
+                if result and isinstance(result, list) and result:
+                    for record in result:
+                        try:
+                            # Access values by field name from Neo4j record
+                            entity_name = record.get("name")
+                            entity_type = record.get("type")
+                            description = record.get("description", "")
+                            status = record.get("status", "Unknown")
+                            confidence = record.get("confidence", 0.0)
+                            date_created = record.get("dateCreated", "")
+                            record_relationships = record.get("relationships", [])
+                            
+                            if entity_name and entity_type:
+                                entities[entity_name] = {
+                                    "name": entity_name,
+                                    "type": entity_type,
+                                    "description": description or "",
+                                    "status": status or "Unknown",
+                                    "confidence": confidence or 0.0,
+                                    "dateCreated": date_created or "",
+                                    "children": []
+                                }
+                                
+                                # Extract relationships
+                                if record_relationships:
+                                    for rel in record_relationships:
+                                        if isinstance(rel, dict):
+                                            rel_type = rel.get("type")
+                                            target = rel.get("target")
+                                            if rel_type and target:
+                                                relationships.append({
+                                                    "source": entity_name,
+                                                    "type": rel_type,
+                                                    "target": target
+                                                })
+                        except Exception as e:
+                            self.logger.warn(f"Error processing record: {str(e)}")
+                            continue
+                
+                # Second pass: build hierarchy
+                # First collect all entities that are targets (children)
+                children = set()
+                for rel in relationships:
+                    children.add(rel["target"])
+                
+                # Root entities are those that are not children of any other entity
+                root_entities = [name for name in entities.keys() if name not in children]
+                
+                # Build tree starting from roots
+                tree = []
+                
+                for root in root_entities:
+                    if root in entities:
+                        tree.append(self._build_entity_tree(root, entities, relationships))
+                
+                # Sort tree by entity type and name
+                tree.sort(key=lambda x: (x.get("type", ""), x.get("name", "")))
+                
+                return dict_to_json({
+                    "status": "success",
+                    "project_name": project_name,
+                    "structure": tree,
+                    "entity_count": len(entities),
+                    "format": "hierarchical"
+                })
+                
+            else:  # flat format
+                flat_query = f"""
+                MATCH (p:MemoryContainer {{name: $project_name, type: "ProjectContainer"}})-[:CONTAINS]->(e:Entity) {entity_filter}
+                RETURN e.name as name, e.entityType as type, e.description as description, 
+                       e.status as status, e.confidence as confidence, e.dateCreated as dateCreated
+                ORDER BY e.entityType, e.name
+                """
+                
+                result = self._safe_execute_query(
+                    flat_query,
+                    parameters_=params,
+                    database_=self.neo4j_database
+                )
+                
+                entities = []
+                if result and isinstance(result, list) and result:
+                    for record in result:
+                        try:
+                            # Access values by field name from Neo4j record
+                            entity_name = record.get("name")
+                            entity_type = record.get("type")
+                            description = record.get("description", "")
+                            status = record.get("status", "Unknown")
+                            confidence = record.get("confidence", 0.0)
+                            date_created = record.get("dateCreated", "")
+                            
+                            if entity_name and entity_type:
+                                entities.append({
+                                    "name": entity_name,
+                                    "type": entity_type,
+                                    "description": description or "",
+                                    "status": status or "Unknown",
+                                    "confidence": confidence or 0.0,
+                                    "dateCreated": date_created or ""
+                                })
+                        except Exception as e:
+                            self.logger.warn(f"Error processing record: {str(e)}")
+                            continue
+                
+                return dict_to_json({
+                    "status": "success",
+                    "project_name": project_name,
+                    "entities": entities,
+                    "entity_count": len(entities),
+                    "format": "flat"
+                })
+                
+        except Exception as e:
+            error_info = extract_error(e)
+            self.logger.error(f"Error getting project structure: {error_info}")
+            return dict_to_json({
+                "status": "error",
+                "message": f"Failed to get project structure: {error_info}"
+            })
+    
+    def _build_entity_tree(self, entity_name: str, entities: Dict[str, Dict], relationships: List[Dict]) -> Dict:
+        """
+        Helper method to recursively build entity tree from flat relationship data.
+        
+        Args:
+            entity_name: Name of the current entity
+            entities: Dictionary of all entities
+            relationships: List of all relationships
+            
+        Returns:
+            Dictionary representing the entity and its children
+        """
+        if entity_name not in entities:
+            return {}
+            
+        entity = entities[entity_name].copy()
+        
+        # Find all direct children (entities that this entity has a relationship to)
+        children = []
+        for rel in relationships:
+            if rel["source"] == entity_name:
+                child_name = rel["target"]
+                if child_name in entities and child_name != entity_name:  # Avoid self-references
+                    child = self._build_entity_tree(child_name, entities, relationships)
+                    if child:
+                        # Add relationship type to child
+                        child["relationshipType"] = rel["type"]
+                        children.append(child)
+        
+        if children:
+            # Sort children by type and name
+            children.sort(key=lambda x: (x.get("type", ""), x.get("name", "")))
+            entity["children"] = children
+        
+        return entity
+        
+    def track_entity_evolution(
+        self,
+        entity_name: str,
+        changes: Dict[str, Any],
+        reason: Optional[str] = None,
+        confidence: float = 0.9,
+        user: Optional[str] = None,
+        change_type: str = "Update"
+    ) -> str:
+        """
+        Track changes to an entity over time, creating a historical record.
+        
+        Args:
+            entity_name: Name of the entity to track
+            changes: Dictionary of changes (property name -> new value)
+            reason: Optional reason for the change
+            confidence: Confidence level for this change (0.0-1.0)
+            user: Optional user who made the change
+            change_type: Type of change (Update, Create, Delete, etc.)
+            
+        Returns:
+            JSON string with result information
+        """
+        try:
+            self._ensure_initialized()
+            
+            if not self.neo4j_driver:
+                return dict_to_json({
+                    "status": "error",
+                    "message": "Neo4j driver not initialized"
+                })
+                
+            # Check if entity exists
+            entity_query = """
+            MATCH (e:Entity {name: $entity_name})
+            RETURN e.entityType as entityType
+            """
+            
+            result = self._safe_execute_query(
+                entity_query,
+                entity_name=entity_name,
+                database_=self.neo4j_database
+            )
+            
+            entity_type = None
+            if result and len(result) > 0:
+                for record in result:
+                    if "entityType" in record:
+                        entity_type = record["entityType"]
+                        break
+            
+            if not entity_type:
+                return dict_to_json({
+                    "status": "error",
+                    "message": f"Entity '{entity_name}' not found"
+                })
+            
+            # Create evolution node to track the change
+            change_id = generate_id()
+            timestamp = datetime.datetime.now().isoformat()
+            
+            # Filter out None values
+            filtered_changes = {k: v for k, v in changes.items() if v is not None}
+            
+            # Convert changes to JSON string
+            changes_json = json.dumps(filtered_changes)
+            
+            evolution_query = """
+            MATCH (e:Entity {name: $entity_name})
+            CREATE (c:Change {
+                id: $change_id,
+                timestamp: $timestamp,
+                type: $change_type,
+                changes: $changes,
+                reason: $reason,
+                confidence: $confidence,
+                user: $user
+            })
+            CREATE (e)-[r:HAS_CHANGE]->(c)
+            SET e.lastUpdated = $timestamp
+            """
+            
+            for key, value in filtered_changes.items():
+                # Update the entity properties with changes
+                evolution_query += f", e.{key} = $change_{key}"
+            
+            evolution_query += " RETURN c.id as changeId"
+            
+            # Prepare parameters
+            params = {
+                "entity_name": entity_name,
+                "change_id": change_id,
+                "timestamp": timestamp,
+                "change_type": change_type,
+                "changes": changes_json,
+                "reason": reason,
+                "confidence": confidence,
+                "user": user
+            }
+            
+            # Add change values as parameters
+            for key, value in filtered_changes.items():
+                params[f"change_{key}"] = value
+            
+            result = self._safe_execute_query(
+                evolution_query,
+                parameters_=params,
+                database_=self.neo4j_database
+            )
+            
+            self.logger.info(f"Tracked evolution for entity '{entity_name}': {change_type}")
+            
+            return dict_to_json({
+                "status": "success",
+                "message": f"Evolution tracked for entity '{entity_name}'",
+                "data": {
+                    "entity_name": entity_name,
+                    "entity_type": entity_type,
+                    "change_id": change_id,
+                    "timestamp": timestamp,
+                    "change_type": change_type
+                }
+            })
+            
+        except Exception as e:
+            error_info = extract_error(e)
+            self.logger.error(f"Error tracking entity evolution: {error_info}")
+            return dict_to_json({
+                "status": "error",
+                "message": f"Failed to track entity evolution: {error_info}"
+            })
+
+    def discover_project_structure(
+        self,
+        project_name: str,
+        content: str,
+        content_type: str = "text",
+        confidence: float = 0.7,
+        auto_create: bool = False
+    ) -> str:
+        """
+        Analyze content to discover project structure like domains, components, and relationships.
+        
+        Args:
+            project_name: Name of the project
+            content: Text content to analyze (documentation, code summary, etc.)
+            content_type: Type of content ('text', 'json', 'code')
+            confidence: Confidence level for discovered items (0.0-1.0)
+            auto_create: Whether to automatically create discovered entities
+            
+        Returns:
+            JSON string with discovered structure information
+        """
+        try:
+            self._ensure_initialized()
+            
+            if not self.neo4j_driver:
+                return dict_to_json({
+                    "status": "error",
+                    "message": "Neo4j driver not initialized"
+                })
+                
+            # Check if project exists
+            project_check_query = """
+            MATCH (p:MemoryContainer {name: $project_name, type: "ProjectContainer"})
+            RETURN count(p) > 0 as exists
+            """
+            
+            check_result = self._safe_execute_query(
+                project_check_query,
+                parameters_={"project_name": project_name},
+                database_=self.neo4j_database
+            )
+            
+            # Create project if it doesn't exist and auto_create is enabled
+            if (not check_result or not check_result[0] or not check_result[0][0]) and auto_create:
+                self.create_project_container(
+                    project_name=project_name,
+                    description=f"Auto-discovered project: {project_name}",
+                    confidence=confidence
+                )
+                
+            # Simple text-based extraction logic
+            discovered = {
+                "domains": [],
+                "components": [],
+                "features": [],
+                "relationships": []
+            }
+            
+            # Different parsing logic based on content_type
+            if content_type.lower() == "json":
+                try:
+                    # Try to parse JSON structure directly
+                    parsed = json.loads(content)
+                    
+                    # Extract domains
+                    if "domains" in parsed and isinstance(parsed["domains"], list):
+                        for domain in parsed["domains"]:
+                            if isinstance(domain, dict) and "name" in domain:
+                                domain_name = domain.get("name")
+                                description = domain.get("description", "")
+                                
+                                discovered["domains"].append({
+                                    "name": domain_name,
+                                    "description": description
+                                })
+                    
+                    # Extract components
+                    if "components" in parsed and isinstance(parsed["components"], list):
+                        for component in parsed["components"]:
+                            if isinstance(component, dict) and "name" in component:
+                                component_name = component.get("name")
+                                description = component.get("description", "")
+                                domain = component.get("domain", "")
+                                
+                                discovered["components"].append({
+                                    "name": component_name,
+                                    "description": description,
+                                    "domain": domain
+                                })
+                    
+                    # Extract features
+                    if "features" in parsed and isinstance(parsed["features"], list):
+                        for feature in parsed["features"]:
+                            if isinstance(feature, dict) and "name" in feature:
+                                feature_name = feature.get("name")
+                                description = feature.get("description", "")
+                                
+                                discovered["features"].append({
+                                    "name": feature_name,
+                                    "description": description
+                                })
+                    
+                    # Extract relationships
+                    if "relationships" in parsed and isinstance(parsed["relationships"], list):
+                        for rel in parsed["relationships"]:
+                            if isinstance(rel, dict) and "from" in rel and "to" in rel and "type" in rel:
+                                discovered["relationships"].append({
+                                    "from": rel.get("from"),
+                                    "to": rel.get("to"),
+                                    "type": rel.get("type")
+                                })
+                                
+                except json.JSONDecodeError:
+                    self.logger.warn("Failed to parse content as JSON, falling back to text analysis")
+                    content_type = "text"
+            
+            # Text-based analysis (simplistic)
+            if content_type.lower() == "text":
+                # Simple pattern matching
+                domain_pattern = r"(?:Domain|Module):\s*([A-Za-z0-9_-]+)(?:\s*\(([^)]+)\))?"
+                component_pattern = r"(?:Component|Service|Class):\s*([A-Za-z0-9_-]+)(?:\s*\(([^)]+)\))?"
+                feature_pattern = r"(?:Feature|Functionality):\s*([A-Za-z0-9_-]+)(?:\s*\(([^)]+)\))?"
+                relationship_pattern = r"([A-Za-z0-9_-]+)\s+(depends on|uses|calls|includes|contains)\s+([A-Za-z0-9_-]+)"
+                
+                import re
+                
+                # Find domains
+                for match in re.finditer(domain_pattern, content):
+                    name = match.group(1)
+                    description = match.group(2) if match.group(2) else ""
+                    
+                    # Check if already discovered
+                    if not any(d["name"] == name for d in discovered["domains"]):
+                        discovered["domains"].append({
+                            "name": name,
+                            "description": description
+                        })
+                
+                # Find components
+                for match in re.finditer(component_pattern, content):
+                    name = match.group(1)
+                    description = match.group(2) if match.group(2) else ""
+                    
+                    # Check if already discovered
+                    if not any(c["name"] == name for c in discovered["components"]):
+                        discovered["components"].append({
+                            "name": name,
+                            "description": description
+                        })
+                
+                # Find features
+                for match in re.finditer(feature_pattern, content):
+                    name = match.group(1)
+                    description = match.group(2) if match.group(2) else ""
+                    
+                    # Check if already discovered
+                    if not any(f["name"] == name for f in discovered["features"]):
+                        discovered["features"].append({
+                            "name": name,
+                            "description": description
+                        })
+                
+                # Find relationships
+                for match in re.finditer(relationship_pattern, content):
+                    from_entity = match.group(1)
+                    rel_type = match.group(2).replace(" ", "_").upper()
+                    to_entity = match.group(3)
+                    
+                    # Check if already discovered
+                    if not any(r["from"] == from_entity and r["to"] == to_entity and r["type"] == rel_type 
+                              for r in discovered["relationships"]):
+                        discovered["relationships"].append({
+                            "from": from_entity,
+                            "to": to_entity,
+                            "type": rel_type
+                        })
+                    
+            # Auto-create discovered entities if enabled
+            if auto_create:
+                # Create domains
+                for domain in discovered["domains"]:
+                    self.add_domain(
+                        project_name=project_name,
+                        domain_name=domain["name"],
+                        description=domain["description"],
+                        confidence=confidence
+                    )
+                
+                # Create components
+                for component in discovered["components"]:
+                    # Find potential domain for this component
+                    domain = component.get("domain")
+                    
+                    # If no explicit domain, try to infer based on relationships
+                    if not domain:
+                        for rel in discovered["relationships"]:
+                            if rel["to"] == component["name"] and rel["type"] == "CONTAINS":
+                                for d in discovered["domains"]:
+                                    if d["name"] == rel["from"]:
+                                        domain = d["name"]
+                                        break
+                                if domain:
+                                    break
+                    
+                    self.add_component(
+                        project_name=project_name,
+                        component_name=component["name"],
+                        domain_name=domain,
+                        responsibility=component.get("description", ""),
+                        confidence=confidence
+                    )
+                
+                # Create features
+                for feature in discovered["features"]:
+                    self.add_feature(
+                        project_name=project_name,
+                        feature_name=feature["name"],
+                        description=feature["description"],
+                        confidence=confidence
+                    )
+                
+                # Create relationships
+                for rel in discovered["relationships"]:
+                    self.create_project_relationship(
+                        from_entity=rel["from"],
+                        to_entity=rel["to"],
+                        relationship_type=rel["type"],
+                        confidence=confidence,
+                        project_name=project_name
+                    )
+            
+            return dict_to_json({
+                "status": "success",
+                "message": "Project structure discovered",
+                "data": {
+                    "project_name": project_name,
+                    "discovered": discovered,
+                    "auto_created": auto_create,
+                    "counts": {
+                        "domains": len(discovered["domains"]),
+                        "components": len(discovered["components"]),
+                        "features": len(discovered["features"]),
+                        "relationships": len(discovered["relationships"])
+                    }
+                }
+            })
+            
+        except Exception as e:
+            error_info = extract_error(e)
+            self.logger.error(f"Error discovering project structure: {error_info}")
+            return dict_to_json({
+                "status": "error",
+                "message": f"Failed to discover project structure: {error_info}"
+            })
+
+    def transfer_knowledge(
+        self,
+        from_project: str,
+        to_project: str,
+        entity_types: Optional[List[str]] = None,
+        entity_names: Optional[List[str]] = None,
+        include_relationships: bool = True,
+        confidence: float = 0.8
+    ) -> str:
+        """
+        Transfer knowledge entities and relationships from one project to another.
+        
+        Args:
+            from_project: Source project name
+            to_project: Target project name
+            entity_types: Optional list of entity types to transfer (if None, transfer all)
+            entity_names: Optional list of specific entity names to transfer
+            include_relationships: Whether to also transfer relationships between entities
+            confidence: Confidence level for the transferred entities (0.0-1.0)
+            
+        Returns:
+            JSON string with transfer results
+        """
+        try:
+            self._ensure_initialized()
+            
+            if not self.neo4j_driver:
+                return dict_to_json({
+                    "status": "error",
+                    "message": "Neo4j driver not initialized"
+                })
+                
+            # Verify both projects exist
+            projects_query = """
+            MATCH (p1:MemoryContainer {name: $from_project, type: "ProjectContainer"})
+            MATCH (p2:MemoryContainer {name: $to_project, type: "ProjectContainer"})
+            RETURN count(p1) > 0 as from_exists, count(p2) > 0 as to_exists
+            """
+            
+            projects_result = self._safe_execute_query(
+                projects_query,
+                parameters_={"from_project": from_project, "to_project": to_project},
+                database_=self.neo4j_database
+            )
+            
+            from_exists = False
+            to_exists = False
+            
+            if projects_result and len(projects_result) > 0:
+                for record in projects_result:
+                    from_exists = record[0] if len(record) > 0 else False
+                    to_exists = record[1] if len(record) > 1 else False
+                    break
+            
+            if not from_exists:
+                return dict_to_json({
+                    "status": "error",
+                    "message": f"Source project '{from_project}' does not exist"
+                })
+                
+            if not to_exists:
+                return dict_to_json({
+                    "status": "error",
+                    "message": f"Target project '{to_project}' does not exist"
+                })
+            
+            # Build entity filter
+            entity_filter = ""
+            query_params = {
+                "from_project": from_project,
+                "to_project": to_project,
+                "confidence": confidence
+            }
+            
+            if entity_types and isinstance(entity_types, list):
+                valid_types = [t for t in entity_types if t and isinstance(t, str)]
+                if valid_types:
+                    entity_filter += "AND e.entityType IN $entity_types"
+                    query_params["entity_types"] = valid_types
+            
+            if entity_names and isinstance(entity_names, list):
+                valid_names = [n for n in entity_names if n and isinstance(n, str)]
+                if valid_names:
+                    if entity_filter:
+                        entity_filter += " AND e.name IN $entity_names"
+                    else:
+                        entity_filter += "AND e.name IN $entity_names"
+                    query_params["entity_names"] = valid_names
+            
+            # Get entities to transfer
+            entities_query = f"""
+            MATCH (from_pc:MemoryContainer {{name: $from_project, type: "ProjectContainer"}})-[:CONTAINS]->(e:Entity) {entity_filter}
+            RETURN e.name as name, e.entityType as type, e.description as description,
+                   e.status as status, e.dateCreated as dateCreated
+            """
+            
+            entities_result = self._safe_execute_query(
+                entities_query,
+                parameters_=query_params,
+                database_=self.neo4j_database
+            )
+            
+            # Process and transfer entities
+            transferred_entities = []
+            entity_mapping = {}  # Map original names to new names if renamed
+            
+            if entities_result and len(entities_result) > 0:
+                for record in entities_result:
+                    entity_name = record[0] if len(record) > 0 else None
+                    entity_type = record[1] if len(record) > 1 else None
+                    description = record[2] if len(record) > 2 else ""
+                    status = record[3] if len(record) > 3 else "Unknown"
+                    
+                    if entity_name and entity_type:
+                        # Check if entity already exists in target project
+                        check_query = """
+                        MATCH (to_pc:MemoryContainer {name: $to_project, type: "ProjectContainer"})
+                        MATCH (e:Entity {name: $entity_name})
+                        RETURN exists((to_pc)-[:CONTAINS]->(e)) as exists
+                        """
+                        
+                        check_result = self._safe_execute_query(
+                            check_query,
+                            parameters_={"to_project": to_project, "entity_name": entity_name},
+                            database_=self.neo4j_database
+                        )
+                        
+                        entity_exists = False
+                        if check_result and len(check_result) > 0:
+                            for check_record in check_result:
+                                entity_exists = check_record[0] if len(check_record) > 0 else False
+                                break
+                        
+                        # If entity exists, generate a new name
+                        target_name = entity_name
+                        if entity_exists:
+                            target_name = f"{entity_name}_from_{from_project}"
+                            entity_mapping[entity_name] = target_name
+                        
+                        # Create entity in target project
+                        transfer_query = """
+                        MATCH (to_pc:MemoryContainer {name: $to_project, type: "ProjectContainer"})
+                        MERGE (e:Entity {name: $target_name})
+                        ON CREATE SET e.entityType = $entity_type,
+                                      e.description = $description,
+                                      e.status = $status,
+                                      e.confidence = $confidence,
+                                      e.dateCreated = datetime(),
+                                      e.transferredFrom = $from_project
+                        ON MATCH SET e.description = $description,
+                                     e.confidence = $confidence,
+                                     e.lastUpdated = datetime(),
+                                     e.transferredFrom = $from_project
+                        MERGE (to_pc)-[:CONTAINS]->(e)
+                        RETURN e.name as name
+                        """
+                        
+                        transfer_result = self._safe_execute_query(
+                            transfer_query,
+                            parameters_={
+                                "to_project": to_project,
+                                "target_name": target_name,
+                                "entity_type": entity_type,
+                                "description": description,
+                                "status": status,
+                                "confidence": confidence,
+                                "from_project": from_project
+                            },
+                            database_=self.neo4j_database
+                        )
+                        
+                        transferred_entities.append({
+                            "original_name": entity_name,
+                            "target_name": target_name,
+                            "type": entity_type,
+                            "renamed": entity_name != target_name
+                        })
+            
+            # Transfer relationships if needed
+            transferred_relationships = []
+            
+            if include_relationships and transferred_entities:
+                # Get names of all transferred entities
+                original_names = [e["original_name"] for e in transferred_entities]
+                
+                # Find relationships between transferred entities
+                rels_query = """
+                MATCH (from_pc:MemoryContainer {name: $from_project, type: "ProjectContainer"})
+                MATCH (from_pc)-[:CONTAINS]->(e1:Entity)
+                MATCH (from_pc)-[:CONTAINS]->(e2:Entity)
+                MATCH (e1)-[r]->(e2)
+                WHERE e1.name IN $entity_names AND e2.name IN $entity_names
+                RETURN e1.name as from_name, type(r) as rel_type, e2.name as to_name
+                """
+                
+                rels_result = self._safe_execute_query(
+                    rels_query,
+                    parameters_={"from_project": from_project, "entity_names": original_names},
+                    database_=self.neo4j_database
+                )
+                
+                if rels_result and len(rels_result) > 0:
+                    for record in rels_result:
+                        from_name = record[0] if len(record) > 0 else None
+                        rel_type = record[1] if len(record) > 1 else None
+                        to_name = record[2] if len(record) > 2 else None
+                        
+                        if from_name and rel_type and to_name:
+                            # Map to target names if renamed
+                            target_from = entity_mapping.get(from_name, from_name)
+                            target_to = entity_mapping.get(to_name, to_name)
+                            
+                            # Create relationship in target project
+                            rel_transfer_result = self.create_project_relationship(
+                                from_entity=target_from,
+                                to_entity=target_to,
+                                relationship_type=str(rel_type) if rel_type is not None else "RELATED_TO",
+                                confidence=confidence,
+                                project_name=to_project,
+                                evidence=f"Transferred from {from_project}"
+                            )
+                            
+                            transferred_relationships.append({
+                                "from": target_from,
+                                "to": target_to,
+                                "type": rel_type
+                            })
+            
+            return dict_to_json({
+                "status": "success",
+                "message": f"Successfully transferred knowledge from '{from_project}' to '{to_project}'",
+                "data": {
+                    "from_project": from_project,
+                    "to_project": to_project,
+                    "transferred_entities": transferred_entities,
+                    "transferred_relationships": transferred_relationships,
+                    "counts": {
+                        "entities": len(transferred_entities),
+                        "relationships": len(transferred_relationships)
+                    }
+                }
+            })
+            
+        except Exception as e:
+            error_info = extract_error(e)
+            self.logger.error(f"Error transferring knowledge: {error_info}")
+            return dict_to_json({
+                "status": "error",
+                "message": f"Failed to transfer knowledge: {error_info}"
+            })
+            
+    def consolidate_project_entities(
+        self,
+        project_name: str,
+        entity_names: List[str],
+        primary_entity: str,
+        reason: Optional[str] = None,
+        preserve_originals: bool = False
+    ) -> str:
+        """
+        Consolidate (merge) multiple related or duplicate entities in a project.
+        
+        Args:
+            project_name: Name of the project
+            entity_names: List of entity names to consolidate
+            primary_entity: Name of the primary entity to keep/create
+            reason: Optional reason for consolidation
+            preserve_originals: Whether to preserve original entities or delete them
+            
+        Returns:
+            JSON string with consolidation results
+        """
+        try:
+            self._ensure_initialized()
+            
+            if not self.neo4j_driver:
+                return dict_to_json({
+                    "status": "error",
+                    "message": "Neo4j driver not initialized"
+                })
+                
+            # Check if project exists
+            project_query = """
+            MATCH (pc:MemoryContainer {name: $project_name, type: "ProjectContainer"})
+            RETURN count(pc) > 0 as exists
+            """
+            
+            project_result = self._safe_execute_query(
+                project_query,
+                parameters_={"project_name": project_name},
+                database_=self.neo4j_database
+            )
+            
+            project_exists = False
+            if project_result and project_result[0]:
+                project_exists = bool(project_result[0][0])
+                
+            if not project_exists:
+                return dict_to_json({
+                    "status": "error",
+                    "message": f"Project '{project_name}' does not exist"
+                })
+                
+            # Validate entity list
+            if not entity_names or not isinstance(entity_names, list) or len(entity_names) < 2:
+                return dict_to_json({
+                    "status": "error",
+                    "message": "At least two entity names must be provided for consolidation"
+                })
+                
+            if primary_entity and primary_entity not in entity_names:
+                entity_names.append(primary_entity)
+                
+            # Get details of entities to consolidate
+            entities_query = """
+            MATCH (pc:MemoryContainer {name: $project_name, type: "ProjectContainer"})
+            MATCH (pc)-[:CONTAINS]->(e:Entity)
+            WHERE e.name IN $entity_names
+            RETURN e.name as name, e.entityType as type, e.description as description,
+                   e.confidence as confidence
+            """
+            
+            entities_result = self._safe_execute_query(
+                entities_query,
+                parameters_={"project_name": project_name, "entity_names": entity_names},
+                database_=self.neo4j_database
+            )
+            
+            # Process entity information
+            found_entities = []
+            entity_types = set()
+            primary_type = None
+            best_description = ""
+            max_confidence = 0.0
+            
+            if entities_result and isinstance(entities_result, list) and len(entities_result) > 0:
+                for record in entities_result:
+                    # When accessing record data, ensure we're accessing the right values
+                    # from the Neo4j records (which are tuples or have a get method)
+                    try:
+                        # Try to access by index first (tuple-like records)
+                        if isinstance(record, (list, tuple)):
+                            entity_name = record[0] if len(record) > 0 else None
+                            entity_type = record[1] if len(record) > 1 else None
+                            description = record[2] if len(record) > 2 else ""
+                            confidence = record[3] if len(record) > 3 else 0.0
+                        # Try to access by key (dict-like records)
+                        elif hasattr(record, "get"):
+                            entity_name = record.get("name")
+                            entity_type = record.get("type")
+                            description = record.get("description", "")
+                            confidence = record.get("confidence", 0.0)
+                        else:
+                            # Skip records we can't process
+                            continue
+                        
+                        if entity_name and entity_type:
+                            found_entities.append(entity_name)
+                            entity_types.add(entity_type)
+                            
+                            # If this is the primary entity, use its type
+                            if entity_name == primary_entity:
+                                primary_type = entity_type
+                            
+                            # Keep track of best description (non-empty)
+                            if description and isinstance(description, str) and len(description) > len(best_description):
+                                best_description = description
+                                
+                            # Track highest confidence - safely convert to float
+                            try:
+                                conf_value = float(confidence) if confidence is not None else 0.0
+                                if conf_value > max_confidence:
+                                    max_confidence = conf_value
+                            except (ValueError, TypeError):
+                                # If confidence isn't convertible to float, skip it
+                                pass
+                    except Exception as e:
+                        self.logger.warn(f"Error processing entity record: {str(e)}")
+                        continue
+                        
+            # Check if we found all entities
+            missing_entities = set(entity_names) - set(found_entities)
+            if missing_entities:
+                return dict_to_json({
+                    "status": "error",
+                    "message": f"The following entities were not found in project '{project_name}': {', '.join(missing_entities)}"
+                })
+                
+            # If no entities of the same type, warn about type mixing
+            if len(entity_types) > 1:
+                # If primary entity specified, use its type
+                if not primary_type:
+                    # Otherwise use most common type
+                    type_counts = {}
+                    # Ensure we're iterating over a valid sequence
+                    if entities_result and isinstance(entities_result, list) and len(entities_result) > 0:
+                        for e in entities_result:
+                            try:
+                                # Try tuple-like access
+                                if isinstance(e, (list, tuple)) and len(e) > 1:
+                                    e_type = e[1]
+                                # Try dict-like access
+                                elif hasattr(e, "get"):
+                                    e_type = e.get("type")
+                                else:
+                                    continue
+                                    
+                                if e_type:
+                                    type_counts[e_type] = type_counts.get(e_type, 0) + 1
+                            except Exception:
+                                continue
+                        
+                        # Only try to find max if we have types
+                        if type_counts:
+                            try:
+                                primary_type = max(type_counts.items(), key=lambda x: x[1])[0]
+                            except ValueError:
+                                # Fallback if we can't determine max
+                                if entity_types:
+                                    primary_type = next(iter(entity_types))
+                        elif entity_types:
+                            # If counting failed but we have entity_types, just use the first one
+                            primary_type = next(iter(entity_types))
+            elif entity_types:
+                # Only one type, use it
+                primary_type = next(iter(entity_types))
+                
+            # Create consolidated entity
+            consolidated_query = """
+            MATCH (pc:MemoryContainer {name: $project_name, type: "ProjectContainer"})
+            MERGE (ce:Entity {name: $primary_entity})
+            ON CREATE SET ce.entityType = $entity_type,
+                          ce.description = $description,
+                          ce.confidence = $confidence,
+                          ce.dateCreated = datetime(),
+                          ce.isConsolidated = true,
+                          ce.consolidationReason = $reason,
+                          ce.consolidatedEntities = $entity_names
+            ON MATCH SET ce.description = CASE WHEN ce.description = '' THEN $description ELSE ce.description END,
+                         ce.confidence = $confidence,
+                         ce.lastUpdated = datetime(),
+                         ce.isConsolidated = true,
+                         ce.consolidationReason = $reason,
+                         ce.consolidatedEntities = $entity_names
+            MERGE (pc)-[:CONTAINS]->(ce)
+            RETURN ce.name as name
+            """
+            
+            consolidation_params = {
+                "project_name": project_name,
+                "primary_entity": primary_entity,
+                "entity_type": primary_type,
+                "description": best_description,
+                "confidence": max_confidence,
+                "reason": reason or "Manual entity consolidation",
+                "entity_names": entity_names
+            }
+            
+            self._safe_execute_query(
+                consolidated_query,
+                parameters_=consolidation_params,
+                database_=self.neo4j_database
+            )
+            
+            # Copy relationships from all entities to the primary entity
+            relationships_copied = 0
+            for entity_name in entity_names:
+                if entity_name == primary_entity:
+                    continue
+                    
+                # Copy incoming relationships
+                incoming_query = """
+                MATCH (pc:MemoryContainer {name: $project_name, type: "ProjectContainer"})
+                MATCH (pc)-[:CONTAINS]->(source:Entity)
+                MATCH (pc)-[:CONTAINS]->(target:Entity {name: $entity_name})
+                MATCH (source)-[r]->(target)
+                WHERE source.name <> $primary_entity
+                MATCH (pc)-[:CONTAINS]->(primary:Entity {name: $primary_entity})
+                MERGE (source)-[r2:RELATIONSHIP {type: type(r)}]->(primary)
+                ON CREATE SET r2 = properties(r),
+                              r2.created = datetime(),
+                              r2.consolidatedFrom = $entity_name
+                RETURN count(r2) as count
+                """
+                
+                incoming_result = self._safe_execute_query(
+                    incoming_query,
+                    parameters_={
+                        "project_name": project_name,
+                        "entity_name": entity_name,
+                        "primary_entity": primary_entity
+                    },
+                    database_=self.neo4j_database
+                )
+                
+                if incoming_result and incoming_result[0] and incoming_result[0][0]:
+                    relationships_copied += int(incoming_result[0][0])
+                
+                # Copy outgoing relationships
+                outgoing_query = """
+                MATCH (pc:MemoryContainer {name: $project_name, type: "ProjectContainer"})
+                MATCH (pc)-[:CONTAINS]->(source:Entity {name: $entity_name})
+                MATCH (pc)-[:CONTAINS]->(target:Entity)
+                MATCH (source)-[r]->(target)
+                WHERE target.name <> $primary_entity
+                MATCH (pc)-[:CONTAINS]->(primary:Entity {name: $primary_entity})
+                MERGE (primary)-[r2:RELATIONSHIP {type: type(r)}]->(target)
+                ON CREATE SET r2 = properties(r),
+                              r2.created = datetime(),
+                              r2.consolidatedFrom = $entity_name
+                RETURN count(r2) as count
+                """
+                
+                outgoing_result = self._safe_execute_query(
+                    outgoing_query,
+                    parameters_={
+                        "project_name": project_name,
+                        "entity_name": entity_name,
+                        "primary_entity": primary_entity
+                    },
+                    database_=self.neo4j_database
+                )
+                
+                if outgoing_result and outgoing_result[0] and outgoing_result[0][0]:
+                    relationships_copied += int(outgoing_result[0][0])
+            
+            # Delete original entities if not preserving them
+            deleted_entities = []
+            if not preserve_originals:
+                for entity_name in entity_names:
+                    if entity_name == primary_entity:
+                        continue
+                        
+                    delete_query = """
+                    MATCH (pc:MemoryContainer {name: $project_name, type: "ProjectContainer"})
+                    MATCH (pc)-[:CONTAINS]->(e:Entity {name: $entity_name})
+                    WITH e, pc
+                    OPTIONAL MATCH (e)-[r]-()
+                    DELETE r, e
+                    RETURN count(e) as deleted
+                    """
+                    
+                    delete_result = self._safe_execute_query(
+                        delete_query,
+                        parameters_={"project_name": project_name, "entity_name": entity_name},
+                        database_=self.neo4j_database
+                    )
+                    
+                    if delete_result and delete_result[0] and delete_result[0][0] and int(delete_result[0][0]) > 0:
+                        deleted_entities.append(entity_name)
+            
+            # Create a "consolidation event" to track the merge
+            event_query = """
+            MATCH (pc:MemoryContainer {name: $project_name, type: "ProjectContainer"})
+            CREATE (e:Event {
+                id: $event_id,
+                type: "EntityConsolidation",
+                timestamp: datetime(),
+                description: $event_description,
+                reason: $reason,
+                source: $entity_names,
+                target: $primary_entity
+            })
+            CREATE (pc)-[:CONTAINS]->(e)
+            RETURN e.id as id
+            """
+            
+            event_params = {
+                "project_name": project_name,
+                "event_id": generate_id(),
+                "event_description": f"Consolidated {len(entity_names)} entities into '{primary_entity}'",
+                "reason": reason or "Manual entity consolidation",
+                "entity_names": entity_names,
+                "primary_entity": primary_entity
+            }
+            
+            self._safe_execute_query(
+                event_query,
+                parameters_=event_params,
+                database_=self.neo4j_database
+            )
+            
+            self.logger.info(f"Consolidated {len(entity_names)} entities into '{primary_entity}' in project '{project_name}'")
+            
+            return dict_to_json({
+                "status": "success",
+                "message": f"Successfully consolidated entities into '{primary_entity}'",
+                "data": {
+                    "project_name": project_name,
+                    "primary_entity": primary_entity,
+                    "entity_type": primary_type,
+                    "consolidated_entities": entity_names,
+                    "relationships_copied": relationships_copied,
+                    "deleted_entities": deleted_entities,
+                    "preserved": preserve_originals
+                }
+            })
+            
+        except Exception as e:
+            error_info = extract_error(e)
+            self.logger.error(f"Error consolidating entities: {error_info}")
+            return dict_to_json({
+                "status": "error",
+                "message": f"Failed to consolidate entities: {error_info}"
+            })
