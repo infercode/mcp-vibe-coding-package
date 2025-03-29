@@ -155,6 +155,77 @@ The MCP server provides two sophisticated memory systems that mirror human cogni
 - Re-evaluate confidence levels based on new experiences
 - Identify memories that should be linked but currently aren't connected
 
+## Advanced Human-Like Memory Techniques
+
+### Contextual Retrieval
+- Before starting a task, retrieve memories based on context, not just keywords
+- Consider the current project environment when searching for relevant knowledge
+- Use environmental cues (codebase structure, problem domain) to guide memory search
+- Proactively surface relevant memories even when not explicitly asked
+- Example: `search_nodes("authentication patterns in ${current_language} ${current_framework}")`
+
+### Memory Prioritization
+- Distinguish between critical architectural knowledge and routine implementation details
+- Assign higher priority to foundational decisions that impact multiple components
+- Tag memories with importance levels: "foundational", "architectural", "implementation-detail"
+- When providing recommendations, lead with the most critical knowledge first
+- Example: `create_domain_entity({project_id: "Project", type: "DECISION", importance: "architectural", ...})`
+
+### Memory Reinforcement
+- Increase confidence scores when information is validated through successful application
+- After applying knowledge successfully, update the confidence score:
+  ```
+  update_lesson_section({
+      "lesson_id": "Lesson Name",
+      "section_id": "Section ID",
+      "confidence": 0.95,  // Increased from previous value
+      "reinforcement_note": "Successfully applied in Project X"
+  })
+  ```
+- Track which memories are repeatedly useful for solving problems
+- Create explicit "validation" observations that document successful applications
+
+### Associative Memory
+- Create connections between memories based on conceptual similarity, not just direct relationships
+- Use relationship types like "RELATED_TO" when concepts share conceptual ground
+- When retrieving one concept, also retrieve associated concepts that might be relevant
+- Create cross-domain links between technical concepts and business processes
+- Example: `create_lesson_relationship({source_id: "Caching Strategy", target_id: "Performance Optimization", relationship_type: "CONCEPTUALLY_RELATED"})`
+
+### Memory Integration
+- Combine fragments from multiple memories to solve new problems
+- Document how different lessons were combined to create a novel solution:
+  ```
+  create_lesson_section({
+      "lesson_id": "Integrated Solutions",
+      "title": "Combining Caching and Async Processing",
+      "content": "By integrating concepts from 'Redis Caching Patterns' and 'Async Queue Processing', we created...",
+      "source_lessons": ["Redis Caching Patterns", "Async Queue Processing"],
+      "confidence": 0.85
+  })
+  ```
+- Create explicit integration relationships to show how knowledge was combined
+- When facing novel problems, systematically explore how existing memories could be combined
+
+### Narrative Structure
+- Record the "story" behind important decisions, not just the decisions themselves
+- Include the problem context, alternatives considered, and reasoning behind choices
+- Structure narratives with beginning (problem), middle (exploration), and end (solution)
+- Use observations to build a timeline of how understanding evolved:
+  ```
+  create_component({
+      "project_id": "Project",
+      "name": "Authentication Service",
+      "narrative": {
+          "initial_problem": "Needed secure, scalable auth for microservices",
+          "alternatives_considered": ["Custom JWT", "Auth0", "Keycloak"],
+          "decision_factors": ["Cost", "Security", "Integration effort"],
+          "outcome": "Selected Keycloak for enterprise features and existing expertise"
+      }
+  })
+  ```
+- Link narratives across different projects to show evolving understanding
+
 ## Implementation Examples
 
 ```
