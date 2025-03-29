@@ -802,133 +802,155 @@ def test_create_component_relationship(mock_base_manager, mock_logger):
     )
 
 
-def test_create_domain_entity(mock_base_manager, mock_logger):
+def test_create_domain_entity(mock_logger, mock_base_manager):
     """Test creating a domain entity."""
     # Set logger on mock_base_manager
     mock_base_manager.logger = mock_logger
     
-    # Create manager
-    manager = ProjectMemoryManager(base_manager=mock_base_manager)
+    # Create a ProjectMemoryManager instance
+    manager = ProjectMemoryManager(mock_base_manager)
     
-    # Mock domain entity data
-    domain_entity_data = {
-        "id": "domain-entity-123",
-        "name": "Test Domain Entity",
-        "entity_type": "model",
-        "description": "A test domain entity",
-        "code_reference": "src/models/TestModel.ts"
+    # Create a mock domain manager
+    mock_domain_manager = MagicMock()
+    manager.domain_manager = mock_domain_manager
+    
+    # Mock entity data
+    entity_name = "TestEntity"
+    entity_type = "Model"
+    domain_name = "TestDomain"
+    container_name = "TestProject"
+    description = "Test entity description"
+    code_reference = "src/models/test_model.py"
+    properties = {
+        "attribute": "value"
     }
     
-    # Mock success response
+    # Mock result data
     result_data = {
         "status": "success",
         "message": "Domain entity created successfully",
-        "entity": domain_entity_data
+        "entity": {
+            "id": "entity-123",
+            "name": entity_name,
+            "entityType": entity_type,
+            "description": description
+        }
     }
     
-    # Create a method to simulate this functionality since it's not in the real API
-    def mock_create_domain(project_id, component_id, name, entity_type, **kwargs):
-        return result_data
+    # Configure the mock to return the result data
+    mock_domain_manager.create_domain.return_value = json.dumps(result_data)
     
-    # Add the method to the manager
-    manager.create_domain_entity = MagicMock(side_effect=mock_create_domain)
-    
-    # Create domain entity
-    result = manager.create_domain_entity(
-        "project-123",
-        "component-123",
-        name="Test Domain Entity",
-        entity_type="model",
-        description="A test domain entity",
-        code_reference="src/models/TestModel.ts",
-        properties={
-            "attributes": ["id", "name", "description"],
-            "relationships": ["belongs_to_component"]
-        }
+    # Create domain
+    result = manager.create_domain(
+        name=domain_name,
+        container_name=container_name,
+        description=description,
+        properties=properties
     )
     
     # Verify result
     assert isinstance(result, dict)
-    assert "status" in result
     assert result["status"] == "success"
     assert "entity" in result
-    assert result["entity"]["name"] == "Test Domain Entity"
+    assert result["entity"]["name"] == entity_name
     
-    # Verify create_domain_entity was called with correct parameters
-    manager.create_domain_entity.assert_called_once()
+    # Verify create_domain was called with correct parameters
+    mock_domain_manager.create_domain.assert_called_once_with(
+        domain_name,
+        container_name,
+        description,
+        properties
+    )
 
 
-def test_create_domain_relationship(mock_base_manager, mock_logger):
+def test_create_domain_relationship(mock_logger, mock_base_manager):
     """Test creating a relationship between domain entities."""
     # Set logger on mock_base_manager
     mock_base_manager.logger = mock_logger
     
-    # Create manager
-    manager = ProjectMemoryManager(base_manager=mock_base_manager)
+    # Create a ProjectMemoryManager instance
+    manager = ProjectMemoryManager(mock_base_manager)
     
-    # Mock success response
-    result_data = {
-        "status": "success",
-        "message": "Domain relationship created successfully"
+    # Create a mock domain manager
+    mock_domain_manager = MagicMock()
+    manager.domain_manager = mock_domain_manager
+    
+    # Mock relationship data
+    relationship_data = {
+        "from_domain": "SourceDomain",
+        "to_domain": "TargetDomain",
+        "container_name": "TestProject",
+        "relation_type": "DEPENDS_ON",
+        "properties": {
+            "strength": "strong",
+            "description": "Source domain depends on target domain"
+        }
     }
     
-    # Create a method to simulate this functionality since it's not in the real API
-    def mock_create_domain_rel(source_id, to_domain, container_name, relation_type, **kwargs):
-        return result_data
-    
-    # Add the method to the manager
-    manager.create_domain_relationship = MagicMock(side_effect=mock_create_domain_rel)
-    
-    # Create domain relationship
-    result = manager.create_domain_relationship(
-        "domain-entity-1",
-        to_domain="domain-entity-2",
-        container_name="TestProject",
-        relation_type="HAS_MANY",
-        properties={
-            "foreign_key": "source_id",
-            "cascade_delete": True
+    # Mock result
+    result_data = {
+        "status": "success",
+        "message": "Relationship created successfully",
+        "relationship": {
+            "from": "SourceDomain",
+            "to": "TargetDomain",
+            "type": "DEPENDS_ON"
         }
+    }
+    
+    # Configure the mock to return the result data
+    mock_domain_manager.create_domain_relationship.return_value = json.dumps(result_data)
+    
+    # Create relationship
+    result = manager.create_domain_relationship(
+        from_domain=relationship_data["from_domain"],
+        to_domain=relationship_data["to_domain"],
+        container_name=relationship_data["container_name"],
+        relation_type=relationship_data["relation_type"],
+        properties=relationship_data["properties"]
     )
     
     # Verify result
     assert isinstance(result, dict)
-    assert "status" in result
     assert result["status"] == "success"
+    assert "relationship" in result
+    assert result["relationship"]["from"] == "SourceDomain"
+    assert result["relationship"]["to"] == "TargetDomain"
     
     # Verify create_domain_relationship was called with correct parameters
-    manager.create_domain_relationship.assert_called_once_with(
-        "domain-entity-1",
-        to_domain="domain-entity-2",
-        container_name="TestProject",
-        relation_type="HAS_MANY",
-        properties={
-            "foreign_key": "source_id",
-            "cascade_delete": True
-        }
+    mock_domain_manager.create_domain_relationship.assert_called_once_with(
+        relationship_data["from_domain"],
+        relationship_data["to_domain"],
+        relationship_data["container_name"],
+        relationship_data["relation_type"],
+        relationship_data["properties"]
     )
 
 
-def test_get_project_components(mock_base_manager, mock_logger):
-    """Test getting all components for a project."""
+def test_get_project_components(mock_logger, mock_base_manager):
+    """Test getting project components."""
     # Set logger on mock_base_manager
     mock_base_manager.logger = mock_logger
     
-    # Create manager
-    manager = ProjectMemoryManager(base_manager=mock_base_manager)
+    # Create a ProjectMemoryManager instance
+    manager = ProjectMemoryManager(mock_base_manager)
+    
+    # Create a mock component manager
+    mock_component_manager = MagicMock()
+    manager.component_manager = mock_component_manager
     
     # Mock components list
     components = [
         {
             "id": "component-1",
             "name": "Component 1",
-            "component_type": "service",
+            "componentType": "service",
             "description": "First component"
         },
         {
             "id": "component-2",
             "name": "Component 2",
-            "component_type": "library",
+            "componentType": "library",
             "description": "Second component"
         }
     ]
@@ -939,15 +961,13 @@ def test_get_project_components(mock_base_manager, mock_logger):
         "count": 2
     }
     
-    # Create a method to simulate this functionality
-    def mock_get_project_components(project_id):
-        return result_data
+    # Configure the mock to return the result data
+    mock_component_manager.list_components.return_value = json.dumps(result_data)
     
-    # Add the method to the manager
-    manager.get_project_components = MagicMock(side_effect=mock_get_project_components)
-    
-    # Get project components
-    result = manager.get_project_components("project-123")
+    # Get project components - Note: This actually calls list_components with the domain name parameter
+    domain_name = "TestDomain"
+    container_name = "TestProject"
+    result = manager.list_components(domain_name, container_name)
     
     # Verify result
     assert isinstance(result, dict)
@@ -956,56 +976,59 @@ def test_get_project_components(mock_base_manager, mock_logger):
     assert result["components"][0]["name"] == "Component 1"
     assert result["components"][1]["name"] == "Component 2"
     
-    # Verify get_project_components was called with the right project ID
-    manager.get_project_components.assert_called_once_with("project-123")
+    # Verify list_components was called with the right parameters
+    mock_component_manager.list_components.assert_called_once_with(
+        domain_name, container_name, None, "name", 100)
 
 
-def test_get_project_domain_entities(mock_base_manager, mock_logger):
+def test_get_project_domain_entities(mock_logger, mock_base_manager):
     """Test getting all domain entities for a project."""
     # Set logger on mock_base_manager
     mock_base_manager.logger = mock_logger
     
-    # Create manager
-    manager = ProjectMemoryManager(base_manager=mock_base_manager)
+    # Create a ProjectMemoryManager instance
+    manager = ProjectMemoryManager(mock_base_manager)
     
-    # Mock domain entities list
-    domain_entities = [
+    # Create a mock domain manager (this is a proper approach instead of patching get_project_domain_entities)
+    mock_domain_manager = MagicMock()
+    manager.domain_manager = mock_domain_manager
+    
+    # Mock domain entities data
+    entities = [
         {
-            "id": "domain-entity-1",
-            "name": "Domain Entity 1",
-            "entity_type": "model",
-            "description": "First domain entity"
+            "id": "entity-1",
+            "name": "Entity 1",
+            "entityType": "Model",
+            "description": "First entity"
         },
         {
-            "id": "domain-entity-2",
-            "name": "Domain Entity 2",
-            "entity_type": "controller",
-            "description": "Second domain entity"
+            "id": "entity-2",
+            "name": "Entity 2",
+            "entityType": "Controller",
+            "description": "Second entity"
         }
     ]
     
     # Mock result data
     result_data = {
-        "domain_entities": domain_entities,
+        "entities": entities,
         "count": 2
     }
     
-    # Create a method to simulate this functionality
-    def mock_get_project_domain_entities(project_id):
-        return result_data
-    
-    # Add the method to the manager
-    manager.get_project_domain_entities = MagicMock(side_effect=mock_get_project_domain_entities)
+    # Configure the mock to return the domain entities
+    mock_domain_manager.get_domain_entities.return_value = json.dumps(result_data)
     
     # Get project domain entities
-    result = manager.get_project_domain_entities("project-123")
+    project_id = "project-123"
+    result = manager.get_domain_entities("domain-name", project_id)
     
     # Verify result
     assert isinstance(result, dict)
-    assert "domain_entities" in result
-    assert len(result["domain_entities"]) == 2
-    assert result["domain_entities"][0]["name"] == "Domain Entity 1"
-    assert result["domain_entities"][1]["name"] == "Domain Entity 2"
+    assert "entities" in result
+    assert len(result["entities"]) == 2
+    assert result["entities"][0]["name"] == "Entity 1"
+    assert result["entities"][1]["name"] == "Entity 2"
     
-    # Verify get_project_domain_entities was called with the right project ID
-    manager.get_project_domain_entities.assert_called_once_with("project-123") 
+    # Verify get_domain_entities was called with the right parameters
+    mock_domain_manager.get_domain_entities.assert_called_once_with(
+        "domain-name", project_id, None) 
