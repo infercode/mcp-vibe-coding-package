@@ -89,24 +89,71 @@ The MCP server provides two sophisticated memory systems that mirror human cogni
 - Record design decisions with rationales to preserve context
 - Link project entities to relevant lessons to apply experiential knowledge
 
-## Tool Usage Patterns
+## Key Relationship Types and Their Uses
 
-### For Exploration
-1. First use `list_lesson_containers` or `list_project_containers` to see what exists
-2. Use `search_nodes` with semantic queries to find relevant knowledge
-3. Explore relationships between entities to discover connected information
+### Lesson Memory Relationships
+- **BUILDS_ON**: Connect lessons that extend or enhance previous knowledge
+- **SUPERSEDES**: Mark newer lessons that replace outdated information
+- **CONTRADICTS**: Link lessons that provide opposing viewpoints or findings
+- **ORIGINATED_FROM**: Track the source of a lesson (problem, experience, etc.)
+- **SOLVED_WITH**: Connect lessons to the solutions they generated
 
-### For Knowledge Creation
-1. First check if similar knowledge exists to avoid duplication
-2. Create containers before adding detailed entities
-3. Always add meaningful observations to provide context
-4. Establish relationships to connect new knowledge to existing memories
+### Project Memory Relationships
+- **CONTAINS**: Hierarchical structure relationships (Project contains Components)
+- **IMPLEMENTS**: Feature implements a Requirement or Specification
+- **DEPENDS_ON**: Mark dependencies between components or features
+- **LEADS_TO**: Decision or action results in certain outcomes
+- **ALTERNATIVE_TO**: Represent different options for the same purpose
 
-### For Knowledge Application
-1. Retrieve relevant memories at the start of complex tasks
-2. Reference specific memories when making recommendations
-3. Update confidence scores when validating information
-4. Create new lessons when encountering novel situations
+## Common Workflow Examples
+
+### Problem-Solving Workflow
+1. When encountering a problem, search for similar issues: `search_nodes("error handling best practices")`
+2. Retrieve and apply relevant lessons: `get_lesson_section("Effective Error Handling Patterns")`
+3. Document new solutions: `create_lesson_section({"lesson_id": "...", "title": "Solution to X", ...})`
+4. Connect to existing knowledge: `create_lesson_relationship({source_id: "New Solution", target_id: "Existing Pattern", ...})`
+
+### Project Documentation Workflow
+1. Create project structure: `create_project_container({"name": "New Project"})`
+2. Define components: `create_component({"project_id": "New Project", "name": "Authentication Service"})`
+3. Document relationships: `create_component_relationship({source_id: "Frontend", target_id: "API Service", relationship_type: "DEPENDS_ON"})`
+4. Record design decisions: `create_domain_entity({project_id: "New Project", type: "DECISION", name: "Use JWT for Auth", ...})`
+
+## Memory Maintenance
+
+### When to Prune and Consolidate
+- Mark lessons as obsolete when technology or approaches change significantly
+- Consolidate similar lessons that address the same topic with the SUPERSEDES relationship
+- Archive project components that are no longer relevant while preserving key insights
+- Periodically review low-confidence memories and either validate or revise them
+
+### Consolidation Process
+1. Identify fragmented knowledge with `search_nodes("relevant topic")`
+2. Create a consolidated lesson: `create_lesson_section({comprehensive information})`
+3. Link old lessons to new one with SUPERSEDES relationship
+4. Update confidence scores for the consolidated knowledge
+
+## Effective Search Strategies
+
+### Semantic Search Tips
+- Use descriptive phrases rather than keywords: "handling async errors in React" vs "React errors"
+- Include context in your queries: "database indexing for high-volume reads"
+- Search for solutions and problems: "solutions for memory leaks in long-running processes"
+- Use comparative queries: "differences between REST and GraphQL approaches"
+
+### Combining Search Results
+- Look for common patterns across multiple search results
+- Pay attention to confidence scores when evaluating contradictory information
+- Follow relationship links to discover related knowledge not directly matched in search
+
+## Memory Reflection
+
+### Periodic Knowledge Review
+- Schedule regular reviews of high-value memory containers
+- Ask questions like "What patterns emerge from recent lessons?"
+- Look for gaps in knowledge that should be filled
+- Re-evaluate confidence levels based on new experiences
+- Identify memories that should be linked but currently aren't connected
 
 ## Implementation Examples
 
@@ -125,6 +172,19 @@ manager.create_lesson_relationship({
     "source_id": "Effective Error Handling Patterns",
     "target_id": "Python Best Practices",
     "relationship_type": "BUILDS_ON"
+})
+
+# Consolidating fragmented knowledge
+manager.create_lesson_section({
+    "lesson_id": "Comprehensive API Security",
+    "title": "Unified API Security Approaches",
+    "content": "This consolidates best practices from multiple lessons...",
+    "confidence": 0.95
+})
+manager.create_lesson_relationship({
+    "source_id": "Comprehensive API Security",
+    "target_id": "JWT Authentication Basics",
+    "relationship_type": "SUPERSEDES"
 })
 ```
 
