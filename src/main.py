@@ -56,38 +56,79 @@ async def server_lifespan(server: Server) -> AsyncIterator[dict]:
 
 # The MCP instructions for AI agents
 MCP_INSTRUCTIONS = """
-# MCP Graph Memory System Instructions
+# Enhanced MCP Instructions for Graph Memory System
 
-This server provides access to a Neo4j graph-based memory system for AI agents, allowing you to store, retrieve, and reason about knowledge in a structured format.
+## Core Memory Systems Overview
 
-## Memory Systems
+The MCP server provides two sophisticated memory systems that mirror human cognitive patterns:
 
-### Lesson Memory
-- Use lesson containers to store knowledge you've learned from experiences and mistakes
-- When you encounter an error or learn something important, create a lesson with:
-  - What was learned
-  - Why it's important
-  - How to apply it in the future
-  - Confidence level
-- Track knowledge evolution over time with relationship types like SUPERSEDES
-- Search for relevant lessons when solving similar problems
+1. **Lesson Memory** - For experiential knowledge and insights gained from successes, mistakes, and observations
+2. **Project Memory** - For structured, hierarchical project knowledge organization
 
-### Project Memory
-- Use project containers to organize knowledge about specific projects
-- Structure includes: Project → Domain → Component/Feature/Decision
-- Store components, their relationships, and technical decisions
-- Link lessons to projects to apply learned knowledge
+## Human-Like Memory Usage Patterns
 
-## How To Use
+### ⚡ General Principles
+- Prioritize high-confidence memories when making critical decisions
+- Leverage related memories through association, not just direct lookup
+- Build knowledge incrementally, connecting new observations to existing memories
+- Revise and update memories when you encounter contradicting information
+- Record not just what was learned, but why it matters and how to apply it
 
-1. **Create Memory**: Use create_entities, create_relations to store new information
-2. **Add Observations**: Use add_observations to add detailed properties to entities
-3. **Search**: Use search_nodes for retrieval by text or semantics
-4. **Learn From Mistakes**: When you encounter errors, create a lesson in a lesson container
-5. **Apply Knowledge**: Before solving a problem, search for relevant lessons
-6. **Organize Projects**: Use project containers for structured knowledge about a task
+### 🧠 Lesson Memory Usage
+- Begin sessions by searching existing lessons related to the current task
+- Record important insights during the session, even if they seem minor
+- Use confidence scores to indicate certainty level (0.1-1.0)
+- Create relationships between connected lessons to build knowledge networks
+- Version lessons when you gain deeper understanding rather than creating duplicates
+- Categorize lessons with meaningful tags for future discovery
 
-Each client gets an isolated memory space, and your session's memory will persist between conversations.
+### 🏗️ Project Memory Usage
+- Start by exploring or creating project structure before diving into details
+- Organize knowledge hierarchically from project → component → domain entities
+- Track dependencies between components to understand system architecture
+- Record design decisions with rationales to preserve context
+- Link project entities to relevant lessons to apply experiential knowledge
+
+## Tool Usage Patterns
+
+### For Exploration
+1. First use `list_lesson_containers` or `list_project_containers` to see what exists
+2. Use `search_nodes` with semantic queries to find relevant knowledge
+3. Explore relationships between entities to discover connected information
+
+### For Knowledge Creation
+1. First check if similar knowledge exists to avoid duplication
+2. Create containers before adding detailed entities
+3. Always add meaningful observations to provide context
+4. Establish relationships to connect new knowledge to existing memories
+
+### For Knowledge Application
+1. Retrieve relevant memories at the start of complex tasks
+2. Reference specific memories when making recommendations
+3. Update confidence scores when validating information
+4. Create new lessons when encountering novel situations
+
+## Implementation Examples
+
+```python
+# Creating experiential knowledge
+manager.create_lesson_container({"title": "Effective Error Handling Patterns"})
+manager.create_lesson_section({
+    "lesson_id": "Effective Error Handling Patterns",
+    "title": "Try-Except-Finally Pattern",
+    "content": "Always use specific exception types rather than catching all exceptions",
+    "confidence": 0.9
+})
+
+# Establishing knowledge relationships
+manager.create_lesson_relationship({
+    "source_id": "Effective Error Handling Patterns",
+    "target_id": "Python Best Practices",
+    "relationship_type": "BUILDS_ON"
+})
+```
+
+Remember to always connect, contextualize, and consolidate memories as you work, just as a human would do with their growing knowledge base 🌱
 """
 
 # Create FastMCP server with enhanced capabilities and instructions for AI agents
