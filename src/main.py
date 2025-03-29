@@ -54,14 +54,82 @@ async def server_lifespan(server: Server) -> AsyncIterator[dict]:
             # Remove from the dictionary after closing
             client_managers.pop(client_id, None)
 
-# Create FastMCP server with enhanced capabilities
+# The MCP instructions for AI agents
+MCP_INSTRUCTIONS = """
+# MCP Graph Memory System Instructions
+
+This server provides access to a Neo4j graph-based memory system for AI agents, allowing you to store, retrieve, and reason about knowledge in a structured format.
+
+## Memory Systems
+
+### Lesson Memory
+- Use lesson containers to store knowledge you've learned from experiences and mistakes
+- When you encounter an error or learn something important, create a lesson with:
+  - What was learned
+  - Why it's important
+  - How to apply it in the future
+  - Confidence level
+- Track knowledge evolution over time with relationship types like SUPERSEDES
+- Search for relevant lessons when solving similar problems
+
+### Project Memory
+- Use project containers to organize knowledge about specific projects
+- Structure includes: Project → Domain → Component/Feature/Decision
+- Store components, their relationships, and technical decisions
+- Link lessons to projects to apply learned knowledge
+
+## How To Use
+
+1. **Create Memory**: Use create_entities, create_relations to store new information
+2. **Add Observations**: Use add_observations to add detailed properties to entities
+3. **Search**: Use search_nodes for retrieval by text or semantics
+4. **Learn From Mistakes**: When you encounter errors, create a lesson in a lesson container
+5. **Apply Knowledge**: Before solving a problem, search for relevant lessons
+6. **Organize Projects**: Use project containers for structured knowledge about a task
+
+Each client gets an isolated memory space, and your session's memory will persist between conversations.
+"""
+
+# Create FastMCP server with enhanced capabilities and instructions for AI agents
 server = FastMCP(
     name="mem0-graph-memory-server",
     notification_options=NotificationOptions(),  # Use default options
     experimental_capabilities={"graph_memory": True},
-    lifespan=server_lifespan
+    lifespan=server_lifespan,
+    instructions=MCP_INSTRUCTIONS
 )
-logger.debug("FastMCP server created with enhanced capabilities")
+
+logger.debug("FastMCP server created with enhanced capabilities and client instructions")
+
+# Add client tracking middleware for SSE connections
+async def client_tracking_middleware(request, call_next):
+    """Middleware to track client sessions and mark disconnections."""
+    # Extract session ID from request
+    session_id = request.query_params.get("session_id", None)
+    
+    # Mark client activity
+    if session_id:
+        logger.debug(f"Client activity: {session_id}")
+        session_manager.update_activity(session_id)
+    
+    # Process the request
+    response = await call_next(request)
+    
+    # Handle disconnection event for SSE requests
+    if session_id and request.url.path == "/sse":
+        # In SSE, we need to set up background cleanup for when the connection ends
+        async def on_disconnect():
+            try:
+                # Small delay to ensure cleanup happens after the connection is fully closed
+                await asyncio.sleep(1)
+                logger.info(f"Client disconnected: {session_id}")
+                session_manager.mark_client_inactive(session_id)
+            except Exception as e:
+                logger.error(f"Error during disconnect handling for {session_id}: {str(e)}")
+        
+        response.background = on_disconnect()
+    
+    return response
 
 # Define a standard error response structure
 class ErrorResponse:
@@ -212,36 +280,6 @@ def register_all_tools_with_isolation(server):
 
 # Register tools with client isolation
 register_all_tools_with_isolation(server)
-
-# Add client tracking middleware for SSE connections
-async def client_tracking_middleware(request, call_next):
-    """Middleware to track client sessions and mark disconnections."""
-    # Extract session ID from request
-    session_id = request.query_params.get("session_id", None)
-    
-    # Mark client activity
-    if session_id:
-        logger.debug(f"Client activity: {session_id}")
-        session_manager.update_activity(session_id)
-    
-    # Process the request
-    response = await call_next(request)
-    
-    # Handle disconnection event for SSE requests
-    if session_id and request.url.path == "/sse":
-        # In SSE, we need to set up background cleanup for when the connection ends
-        async def on_disconnect():
-            try:
-                # Small delay to ensure cleanup happens after the connection is fully closed
-                await asyncio.sleep(1)
-                logger.info(f"Client disconnected: {session_id}")
-                session_manager.mark_client_inactive(session_id)
-            except Exception as e:
-                logger.error(f"Error during disconnect handling for {session_id}: {str(e)}")
-        
-        response.background = on_disconnect()
-    
-    return response
 
 async def run_server():
     """Run the MCP server with the configured transport."""
