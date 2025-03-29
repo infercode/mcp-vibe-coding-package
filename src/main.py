@@ -157,10 +157,15 @@ The MCP server provides two sophisticated memory systems that mirror human cogni
 
 ## Implementation Examples
 
-```python
+```
 # Creating experiential knowledge
-manager.create_lesson_container({"title": "Effective Error Handling Patterns"})
-manager.create_lesson_section({
+create_lesson_container({
+    "title": "Effective Error Handling Patterns",
+    "description": "Lessons learned about proper error handling across different programming languages",
+    "tags": ["error-handling", "best-practices", "programming"]
+})
+
+create_lesson_section({
     "lesson_id": "Effective Error Handling Patterns",
     "title": "Try-Except-Finally Pattern",
     "content": "Always use specific exception types rather than catching all exceptions",
@@ -168,24 +173,55 @@ manager.create_lesson_section({
 })
 
 # Establishing knowledge relationships
-manager.create_lesson_relationship({
+create_lesson_relationship({
     "source_id": "Effective Error Handling Patterns",
     "target_id": "Python Best Practices",
     "relationship_type": "BUILDS_ON"
 })
 
+# Organizing project knowledge
+create_project_container({
+    "name": "API Gateway Refactoring",
+    "description": "Knowledge about the API gateway refactoring project",
+    "tags": ["api", "architecture", "refactoring"]
+})
+
+create_component({
+    "project_id": "API Gateway Refactoring",
+    "name": "Authentication Service",
+    "component_type": "microservice",
+    "description": "Handles user authentication and JWT token management"
+})
+
+create_component_relationship({
+    "source_id": "Authentication Service",
+    "target_id": "User Database",
+    "relationship_type": "DEPENDS_ON",
+    "properties": {
+        "criticality": "high",
+        "access_pattern": "read-write"
+    }
+})
+
 # Consolidating fragmented knowledge
-manager.create_lesson_section({
+create_lesson_section({
     "lesson_id": "Comprehensive API Security",
     "title": "Unified API Security Approaches",
     "content": "This consolidates best practices from multiple lessons...",
     "confidence": 0.95
 })
-manager.create_lesson_relationship({
+
+create_lesson_relationship({
     "source_id": "Comprehensive API Security",
     "target_id": "JWT Authentication Basics",
     "relationship_type": "SUPERSEDES"
 })
+
+# Searching and retrieving knowledge
+search_nodes("error handling patterns in asynchronous code")
+
+# Getting memory status
+get_memory_status()
 ```
 
 Remember to always connect, contextualize, and consolidate memories as you work, just as a human would do with their growing knowledge base 🌱
