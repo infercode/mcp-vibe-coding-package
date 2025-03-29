@@ -194,97 +194,141 @@ def test_get_project_container_not_found(mock_base_manager, mock_logger):
     assert call_args[0][1]["name"] == "nonexistent-project"
 
 
-def test_update_project_container(mock_component_managers, mock_logger):
+def test_update_project_container(mock_base_manager, mock_logger):
     """Test updating a project container."""
-    # Create manager
-    manager = ProjectMemoryManager(**mock_component_managers, logger=mock_logger)
+    # Set logger on mock_base_manager
+    mock_base_manager.logger = mock_logger
     
-    # Mock entity retrieval and update
-    mock_component_managers["entity_manager"].get_entity.return_value = json.dumps({
+    # Create manager
+    manager = ProjectMemoryManager(base_manager=mock_base_manager)
+    
+    # Set up mocks for safe_execute_query
+    
+    # First query - check if entity exists
+    mock_entity = MagicMock()
+    mock_entity.items.return_value = {
         "id": "project-123",
         "name": "Original Project Name",
-        "type": "ProjectContainer",
-        "metadata": {
-            "description": "Original description",
-            "tags": ["original", "tags"]
-        }
-    })
+        "entityType": "ProjectContainer",
+        "description": "Original description"
+    }.items()
     
-    mock_component_managers["entity_manager"].update_entity.return_value = json.dumps({
-        "status": "success",
-        "id": "project-123"
-    })
+    mock_record1 = MagicMock()
+    mock_record1.get.return_value = mock_entity
     
-    # Update project container
-    project_data = {
+    # Second query - update the entity
+    mock_updated_entity = MagicMock()
+    mock_updated_entity.items.return_value = {
         "id": "project-123",
         "name": "Updated Project Name",
+        "entityType": "ProjectContainer",
         "description": "Updated description",
-        "tags": ["updated", "tags"]
-    }
+        "lastUpdated": 1625097600.0
+    }.items()
     
-    result = manager.update_project_container(project_data)
+    mock_record2 = MagicMock()
+    mock_record2.get.return_value = mock_updated_entity
     
-    # Verify result
-    result_obj = json.loads(result)
-    assert result_obj["status"] == "success"
-    
-    # Verify entity_manager calls
-    mock_component_managers["entity_manager"].get_entity.assert_called_once_with("project-123")
-    mock_component_managers["entity_manager"].update_entity.assert_called_once()
-    
-    # Check update data
-    update_data = mock_component_managers["entity_manager"].update_entity.call_args[0][0]
-    assert update_data["name"] == "Updated Project Name"
-    assert update_data["metadata"]["description"] == "Updated description"
-    assert update_data["metadata"]["tags"] == ["updated", "tags"]
-
-
-def test_update_project_container_not_found(mock_component_managers, mock_logger):
-    """Test updating a non-existent project container."""
-    # Create manager
-    manager = ProjectMemoryManager(**mock_component_managers, logger=mock_logger)
-    
-    # Mock entity retrieval - not found
-    mock_component_managers["entity_manager"].get_entity.return_value = None
+    # Set up side effect for multiple calls
+    mock_base_manager.safe_execute_query.side_effect = [
+        ([mock_record1], None),  # First call - check entity exists
+        ([mock_record2], None)   # Second call - update entity
+    ]
     
     # Update project container
-    project_data = {
-        "id": "nonexistent-project",
-        "name": "Updated Project Name"
+    updates = {
+        "name": "Updated Project Name",
+        "description": "Updated description"
     }
     
-    result = manager.update_project_container(project_data)
+    result = manager.update_project_container("project-123", updates)
     
     # Verify result
-    result_obj = json.loads(result)
-    assert result_obj["status"] == "error"
-    assert "not found" in result_obj["message"].lower()
+    assert isinstance(result, dict)
+    assert "status" in result
+    assert result["status"] == "success"
     
-    # Verify entity_manager calls
-    mock_component_managers["entity_manager"].get_entity.assert_called_once_with("nonexistent-project")
-    mock_component_managers["entity_manager"].update_entity.assert_not_called()
+    # Verify safe_execute_query was called twice
+    assert mock_base_manager.safe_execute_query.call_count == 2
 
 
-def test_delete_project_container(mock_component_managers, mock_logger):
-    """Test deleting a project container."""
+def test_update_project_container_not_found(mock_base_manager, mock_logger):
+    """Test updating a non-existent project container."""
+    # Set logger on mock_base_manager
+    mock_base_manager.logger = mock_logger
+    
     # Create manager
-    manager = ProjectMemoryManager(**mock_component_managers, logger=mock_logger)
+    manager = ProjectMemoryManager(base_manager=mock_base_manager)
     
-    # Mock entity deletion
-    mock_component_managers["entity_manager"].delete_entity.return_value = json.dumps({
-        "status": "success"
-    })
+    # Mock safe_execute_query to return empty results (no project found)
+    mock_base_manager.safe_execute_query.return_value = ([], None)
+    
+    # Update project container
+    updates = {
+        "name": "Updated Project Name",
+        "description": "Updated description"
+    }
+    
+    result = manager.update_project_container("nonexistent-project", updates)
+    
+    # Verify result
+    assert isinstance(result, dict)
+    assert "error" in result
+    assert "not found" in result["error"].lower()
+    
+    # Verify safe_execute_query was called with the right project name
+    mock_base_manager.safe_execute_query.assert_called_once()
+    call_args = mock_base_manager.safe_execute_query.call_args
+    assert call_args[0][1]["name"] == "nonexistent-project"
+
+
+def test_delete_project_container(mock_base_manager, mock_logger):
+    """Test deleting a project container."""
+    # Set logger on mock_base_manager
+    mock_base_manager.logger = mock_logger
+    
+    # Create manager
+    manager = ProjectMemoryManager(base_manager=mock_base_manager)
+    
+    # Mock first safe_execute_query to find the project
+    mock_entity = MagicMock()
+    mock_entity.items.return_value = {
+        "id": "project-123",
+        "name": "Test Project",
+        "entityType": "ProjectContainer"
+    }.items()
+    
+    mock_record1 = MagicMock()
+    mock_record1.get.return_value = mock_entity
+    
+    # Mock second safe_execute_query for deletion
+    mock_record2 = MagicMock()
+    mock_record2.__getitem__.return_value = 1  # One entity deleted
+    
+    # Set up side effect for multiple calls
+    mock_base_manager.safe_execute_query.side_effect = [
+        ([mock_record1], None),  # First call - find the project
+        ([mock_record2], None)   # Second call - delete the project
+    ]
     
     # Delete project container
     result = manager.delete_project_container("project-123")
     
     # Verify result
-    result_obj = json.loads(result)
-    assert result_obj["status"] == "success"
+    assert isinstance(result, dict)
+    assert "status" in result
+    assert result["status"] == "success"
     
-    # Verify entity_manager was called correctly
-    mock_component_managers["entity_manager"].delete_entity.assert_called_once_with("project-123")
+    # Verify safe_execute_query was called twice
+    assert mock_base_manager.safe_execute_query.call_count == 2
+    
+    # First call should be to find the project
+    first_call = mock_base_manager.safe_execute_query.call_args_list[0]
+    assert first_call[0][1]["name"] == "project-123"
+    
+    # Second call should be to delete the project
+    second_call = mock_base_manager.safe_execute_query.call_args_list[1]
+    assert second_call[0][1]["name"] == "project-123"
 
 
 def test_list_project_containers(mock_component_managers, mock_logger):
