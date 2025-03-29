@@ -1,135 +1,197 @@
 import pytest
 from unittest.mock import MagicMock, patch, call
 import json
+from neo4j import Record
+from neo4j.graph import Node
 
 from src.project_memory import ProjectMemoryManager
 
 
-def test_init(mock_component_managers, mock_logger):
+def test_init(mock_base_manager, mock_logger):
     """Test initialization of ProjectMemoryManager."""
-    # Create manager with component managers
-    manager = ProjectMemoryManager(**mock_component_managers, logger=mock_logger)
+    # Set logger on mock_base_manager
+    mock_base_manager.logger = mock_logger
+    
+    # Create manager
+    manager = ProjectMemoryManager(base_manager=mock_base_manager)
     
     # Verify manager attributes are set correctly
-    assert manager.base_manager == mock_component_managers["base_manager"]
-    assert manager.entity_manager == mock_component_managers["entity_manager"]
-    assert manager.relation_manager == mock_component_managers["relation_manager"]
-    assert manager.observation_manager == mock_component_managers["observation_manager"]
+    assert manager.base_manager == mock_base_manager
+    assert hasattr(manager, "domain_manager")
+    assert hasattr(manager, "component_manager")
+    assert hasattr(manager, "dependency_manager")
+    assert hasattr(manager, "version_manager")
     assert manager.logger == mock_logger
 
 
-def test_create_project_container(mock_component_managers, mock_logger):
+def test_create_project_container(mock_base_manager, mock_logger):
     """Test creating a project container."""
-    # Create manager
-    manager = ProjectMemoryManager(**mock_component_managers, logger=mock_logger)
+    # Set logger on mock_base_manager
+    mock_base_manager.logger = mock_logger
     
-    # Mock entity creation
-    mock_component_managers["entity_manager"].create_entity.return_value = json.dumps({
-        "id": "project-123",
-        "name": "Test Project"
-    })
+    # Create manager
+    manager = ProjectMemoryManager(base_manager=mock_base_manager)
+    
+    # Mock entity data
+    entity_data = {
+        "id": "proj_12345",
+        "name": "Test Project",
+        "entityType": "ProjectContainer",
+        "description": "This is a test project"
+    }
+    
+    # Create mock entity
+    mock_entity = MagicMock()
+    mock_entity.items.return_value = entity_data.items()
+    
+    # Mock record
+    mock_record = MagicMock()
+    mock_record.get.return_value = mock_entity
+    
+    # Mock safe_execute_query
+    mock_base_manager.safe_execute_query.return_value = ([mock_record], None)
     
     # Create project container
     result = manager.create_project_container(
         name="Test Project",
-        description="This is a test project",
-        tags=["test", "project"]
+        description="This is a test project"
     )
     
-    # Verify result
-    result_obj = json.loads(result)
-    assert "id" in result_obj
-    assert result_obj["name"] == "Test Project"
+    # Verify result is a dictionary
+    assert isinstance(result, dict)
     
-    # Verify entity_manager was called correctly
-    mock_component_managers["entity_manager"].create_entity.assert_called_once()
+    # Verify content of the result dictionary
+    assert "status" in result
+    assert result["status"] == "success"
+    assert "message" in result
+    assert "container" in result
+    assert result["container"] == entity_data
     
-    # Check entity data
-    entity_data = mock_component_managers["entity_manager"].create_entity.call_args[0][0]
-    assert entity_data["name"] == "Test Project"
-    assert entity_data["type"] == "ProjectContainer"
-    assert entity_data["metadata"]["description"] == "This is a test project"
-    assert "test" in entity_data["metadata"]["tags"]
+    # Verify safe_execute_query was called
+    mock_base_manager.safe_execute_query.assert_called_once()
 
 
-def test_create_project_container_with_default_values(mock_component_managers, mock_logger):
+def test_create_project_container_with_default_values(mock_base_manager, mock_logger):
     """Test creating a project container with default values."""
-    # Create manager
-    manager = ProjectMemoryManager(**mock_component_managers, logger=mock_logger)
+    # Set logger on mock_base_manager
+    mock_base_manager.logger = mock_logger
     
-    # Mock entity creation
-    mock_component_managers["entity_manager"].create_entity.return_value = json.dumps({
-        "id": "project-123",
-        "name": "Minimal Project"
-    })
+    # Create manager
+    manager = ProjectMemoryManager(base_manager=mock_base_manager)
+    
+    # Mock entity data
+    entity_data = {
+        "id": "proj_12345",
+        "name": "Minimal Project",
+        "entityType": "ProjectContainer"
+    }
+    
+    # Create mock entity
+    mock_entity = MagicMock()
+    mock_entity.items.return_value = entity_data.items()
+    
+    # Mock record
+    mock_record = MagicMock()
+    mock_record.get.return_value = mock_entity
+    
+    # Mock safe_execute_query
+    mock_base_manager.safe_execute_query.return_value = ([mock_record], None)
     
     # Create project container with minimal parameters
     result = manager.create_project_container(name="Minimal Project")
     
     # Verify result
-    result_obj = json.loads(result)
-    assert "id" in result_obj
+    assert isinstance(result, dict)
+    assert result["status"] == "success"
+    assert "message" in result
+    assert "container" in result
+    assert result["container"] == entity_data
     
-    # Verify entity_manager was called correctly
-    mock_component_managers["entity_manager"].create_entity.assert_called_once()
+    # Verify safe_execute_query was called
+    mock_base_manager.safe_execute_query.assert_called_once()
     
-    # Check entity data
-    entity_data = mock_component_managers["entity_manager"].create_entity.call_args[0][0]
-    assert entity_data["name"] == "Minimal Project"
-    assert entity_data["type"] == "ProjectContainer"
-    # Default values should be set
-    assert "metadata" in entity_data
-    assert "description" in entity_data["metadata"]
-    assert "tags" in entity_data["metadata"]
+    # Check parameters
+    call_args = mock_base_manager.safe_execute_query.call_args
+    assert "name" in call_args[0][1]
+    assert call_args[0][1]["name"] == "Minimal Project"
 
 
-def test_get_project_container(mock_component_managers, mock_logger):
+def test_get_project_container(mock_base_manager, mock_logger):
     """Test retrieving a project container by ID."""
-    # Create manager
-    manager = ProjectMemoryManager(**mock_component_managers, logger=mock_logger)
+    # Set logger on mock_base_manager
+    mock_base_manager.logger = mock_logger
     
-    # Mock entity retrieval
-    mock_component_managers["entity_manager"].get_entity.return_value = json.dumps({
-        "id": "project-123",
+    # Create manager
+    manager = ProjectMemoryManager(base_manager=mock_base_manager)
+    
+    # Mock entity data
+    entity_data = {
+        "id": "proj_12345",
         "name": "Test Project",
-        "type": "ProjectContainer",
-        "metadata": {
-            "description": "This is a test project",
-            "tags": ["test", "project"]
-        }
-    })
+        "entityType": "ProjectContainer",
+        "description": "This is a test project"
+    }
+    
+    # Create expected result with counts added
+    expected_container = entity_data.copy()
+    expected_container["domain_count"] = 3
+    expected_container["component_count"] = 10
+    
+    # Create mock entity
+    mock_entity = MagicMock()
+    mock_entity.items.return_value = entity_data.items()
+    
+    # Mock record
+    mock_record = MagicMock()
+    mock_record.get.return_value = mock_entity
+    
+    # Create mock domain and component count records
+    domain_record = MagicMock()
+    domain_record.__getitem__.return_value = 3
+    
+    component_record = MagicMock()
+    component_record.__getitem__.return_value = 10
+    
+    # Set up the mock to return different values for each call
+    mock_base_manager.safe_execute_query.side_effect = [
+        ([mock_record], None),        # First call - project query
+        ([domain_record], None),      # Second call - domain count
+        ([component_record], None)    # Third call - component count
+    ]
     
     # Get project container
-    result = manager.get_project_container("project-123")
+    result = manager.get_project_container("Test Project")
     
     # Verify result
-    result_obj = json.loads(result)
-    assert result_obj["id"] == "project-123"
-    assert result_obj["name"] == "Test Project"
-    assert result_obj["metadata"]["description"] == "This is a test project"
+    assert "container" in result
+    assert result["container"] == expected_container
     
-    # Verify entity_manager was called correctly
-    mock_component_managers["entity_manager"].get_entity.assert_called_once_with("project-123")
+    # Verify safe_execute_query was called 3 times
+    assert mock_base_manager.safe_execute_query.call_count == 3
 
 
-def test_get_project_container_not_found(mock_component_managers, mock_logger):
+def test_get_project_container_not_found(mock_base_manager, mock_logger):
     """Test retrieving a non-existent project container."""
-    # Create manager
-    manager = ProjectMemoryManager(**mock_component_managers, logger=mock_logger)
+    # Set logger on mock_base_manager
+    mock_base_manager.logger = mock_logger
     
-    # Mock entity retrieval - not found
-    mock_component_managers["entity_manager"].get_entity.return_value = None
+    # Create manager
+    manager = ProjectMemoryManager(base_manager=mock_base_manager)
+    
+    # Mock safe_execute_query to return empty results (no project found)
+    mock_base_manager.safe_execute_query.return_value = ([], None)
     
     # Get project container
     result = manager.get_project_container("nonexistent-project")
     
     # Verify result
-    result_obj = json.loads(result)
-    assert result_obj["status"] == "error"
-    assert "not found" in result_obj["message"].lower()
+    assert "error" in result
+    assert "not found" in result["error"].lower()
     
-    # Verify entity_manager was called correctly
-    mock_component_managers["entity_manager"].get_entity.assert_called_once_with("nonexistent-project")
+    # Verify safe_execute_query was called with the right project name
+    mock_base_manager.safe_execute_query.assert_called_once()
+    call_args = mock_base_manager.safe_execute_query.call_args
+    assert call_args[0][1]["name"] == "nonexistent-project"
 
 
 def test_update_project_container(mock_component_managers, mock_logger):
