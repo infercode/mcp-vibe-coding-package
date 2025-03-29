@@ -151,6 +151,24 @@ def mock_project_manager(mock_logger):
 
 
 @pytest.fixture
+def mock_component_managers(
+    mock_base_manager, 
+    mock_entity_manager, 
+    mock_relation_manager, 
+    mock_observation_manager,
+    mock_search_manager
+):
+    """Mock component managers as a dictionary for tests that inject managers as keyword arguments."""
+    return {
+        "base_manager": mock_base_manager,
+        "entity_manager": mock_entity_manager,
+        "relation_manager": mock_relation_manager,
+        "observation_manager": mock_observation_manager,
+        "search_manager": mock_search_manager
+    }
+
+
+@pytest.fixture
 def mock_graph_memory_manager(
     mock_base_manager, 
     mock_entity_manager, 
