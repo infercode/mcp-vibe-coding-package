@@ -256,7 +256,14 @@ def test_set_project_name(mock_graph_memory_manager):
     mock_graph_memory_manager.set_project_name.return_value = True
     mock_graph_memory_manager.default_project_name = "new_project"
     
-    # Call the method
+    # Call the method with client_id
+    result = mock_graph_memory_manager.set_project_name("new_project", client_id="test-client")
+    
+    # Verify result
+    assert mock_graph_memory_manager.default_project_name == "new_project"
+    assert result is True
+    
+    # Call the method without client_id
     result = mock_graph_memory_manager.set_project_name("new_project")
     
     # Verify result
@@ -691,6 +698,25 @@ def test_configure_embedding(mock_graph_memory_manager):
     config = {
         "provider": "openai",
         "model": "text-embedding-ada-002",
+        "api_key": "sk-test",
+        "client_id": "test-client"  # Add client_id to test isolation
+    }
+    
+    # Mock os.makedirs to do nothing
+    with patch("os.makedirs", return_value=None):
+        # Mock open to not actually open a file
+        with patch("builtins.open", MagicMock()):
+            # Call configure_embedding
+            result = mock_graph_memory_manager.configure_embedding(config)
+    
+    # Verify result
+    assert "status" in json.loads(result)
+    assert json.loads(result)["status"] == "success"
+    
+    # Test without client_id
+    config = {
+        "provider": "openai",
+        "model": "text-embedding-ada-002",
         "api_key": "sk-test"
     }
     
@@ -721,4 +747,65 @@ def test_debug_dump_neo4j(mock_graph_memory_manager):
     # Verify result
     result_obj = json.loads(result)
     assert "nodes" in result_obj
-    assert "relationships" in result_obj 
+    assert "relationships" in result_obj
+
+
+def test_get_memory_status(mock_graph_memory_manager):
+    """Test get_memory_status method with client_id support."""
+    # Set a mock return value
+    mock_result = json.dumps({
+        "status": "active",
+        "neo4j_connection": "connected",
+        "embedding_status": "enabled",
+        "project_name": "test-project"
+    })
+    mock_graph_memory_manager.get_memory_status.return_value = mock_result
+    
+    # Call with client_id
+    result = mock_graph_memory_manager.get_memory_status(client_id="test-client")
+    
+    # Verify result
+    result_obj = json.loads(result)
+    assert "status" in result_obj
+    assert "neo4j_connection" in result_obj
+    
+    # Call without client_id
+    result = mock_graph_memory_manager.get_memory_status()
+    
+    # Verify result
+    result_obj = json.loads(result)
+    assert "status" in result_obj
+    assert "neo4j_connection" in result_obj
+
+
+def test_get_embedding_config(mock_graph_memory_manager):
+    """Test get_embedding_config method with client_id support."""
+    # Set a mock return value
+    mock_result = json.dumps({
+        "embedder": {
+            "provider": "openai",
+            "config": {
+                "model": "text-embedding-ada-002"
+            }
+        },
+        "graph_store": {
+            "provider": "neo4j"
+        }
+    })
+    mock_graph_memory_manager.get_embedding_config.return_value = mock_result
+    
+    # Call with client_id
+    result = mock_graph_memory_manager.get_embedding_config(client_id="test-client")
+    
+    # Verify result
+    result_obj = json.loads(result)
+    assert "embedder" in result_obj
+    assert "graph_store" in result_obj
+    
+    # Call without client_id
+    result = mock_graph_memory_manager.get_embedding_config()
+    
+    # Verify result
+    result_obj = json.loads(result)
+    assert "embedder" in result_obj
+    assert "graph_store" in result_obj 

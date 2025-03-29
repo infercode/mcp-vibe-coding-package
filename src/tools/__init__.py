@@ -19,18 +19,32 @@ __all__ = [
     "register_all_tools"
 ]
 
-def register_all_tools(server, graph_manager):
+def register_all_tools(server, manager_or_getter):
     """
     Register all memory tools with the server.
     
     Args:
         server: The server instance to register tools with
-        graph_manager: The GraphMemoryManager instance
+        manager_or_getter: Either a GraphMemoryManager instance or a function 
+                         that returns a GraphMemoryManager
         
     Returns:
         None
     """
-    register_core_tools(server, graph_manager)
-    register_lesson_tools(server, graph_manager)
-    register_project_tools(server, graph_manager)
-    register_config_tools(server, graph_manager) 
+    # Check if manager_or_getter is a callable (function that returns a GraphMemoryManager)
+    if callable(manager_or_getter):
+        # manager_or_getter is a getter function that returns the appropriate manager
+        register_core_tools(server, manager_or_getter)
+        register_lesson_tools(server, manager_or_getter)
+        register_project_tools(server, manager_or_getter)
+        register_config_tools(server, manager_or_getter)
+    else:
+        # manager_or_getter is a direct GraphMemoryManager instance
+        # Create a simple getter function that always returns this manager
+        def get_fixed_manager():
+            return manager_or_getter
+            
+        register_core_tools(server, get_fixed_manager)
+        register_lesson_tools(server, get_fixed_manager)
+        register_project_tools(server, get_fixed_manager)
+        register_config_tools(server, get_fixed_manager) 
