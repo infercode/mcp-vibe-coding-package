@@ -34,6 +34,10 @@ def register_project_tools(server, graph_manager):
         """
         Create a new project container in the knowledge graph.
         
+        IMPORTANT: Always check first if a project container with the same name 
+        already exists using list_project_containers() before creating a new one. Creating
+        multiple containers for the same project leads to fragmented knowledge and confusion.
+        
         Args:
             project_data: Dictionary containing project information
                 - name: Required. The name of the project container
