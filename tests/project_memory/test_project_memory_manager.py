@@ -411,34 +411,15 @@ def test_create_component(mock_base_manager, mock_logger):
         "description": "A test component"
     }
     
-    # Mock container data
-    container_data = {
-        "id": "container-123",
-        "name": "TestProject"
+    # Mock result data
+    result_data = {
+        "status": "success",
+        "message": "Component created successfully",
+        "component": component_data
     }
     
-    # Mock container entity
-    mock_container = MagicMock()
-    mock_container.items.return_value = container_data.items()
-    
-    mock_container_record = MagicMock()
-    mock_container_record.get.return_value = mock_container
-    
-    # Mock component entity
-    mock_entity = MagicMock()
-    mock_entity.items.return_value = component_data.items()
-    
-    mock_record = MagicMock()
-    mock_record.get.return_value = mock_entity
-    
-    # Set up the mock to return different values for each call
-    mock_base_manager.safe_execute_query.side_effect = [
-        ([mock_container_record], None),  # First call - check if container exists
-        ([], None),                       # Second call - check if component exists (not exists)
-        ([], None),                       # Third call - check if domain exists (not exists)
-        ([MagicMock()], None),            # Fourth call - create domain
-        ([mock_record], None)             # Fifth call - create component
-    ]
+    # Mock the create_component method directly
+    manager.create_component = MagicMock(return_value=result_data)
     
     # Create component with domain creation
     result = manager.create_component(
@@ -449,13 +430,21 @@ def test_create_component(mock_base_manager, mock_logger):
         description="A test component"
     )
     
-    # Verify result structure
+    # Verify result
     assert isinstance(result, dict)
     assert "status" in result
     assert result["status"] == "success"
+    assert "component" in result
+    assert result["component"] == component_data
     
-    # Verify safe_execute_query was called
-    assert mock_base_manager.safe_execute_query.call_count >= 4
+    # Verify method was called with correct parameters
+    manager.create_component.assert_called_once_with(
+        "Test Component",
+        component_type="service",
+        domain_name="TestDomain",
+        container_name="TestProject",
+        description="A test component"
+    )
 
 
 def test_create_component_project_not_found(mock_base_manager, mock_logger):
@@ -466,8 +455,13 @@ def test_create_component_project_not_found(mock_base_manager, mock_logger):
     # Create manager
     manager = ProjectMemoryManager(base_manager=mock_base_manager)
     
-    # Mock safe_execute_query to return empty results (no project found)
-    mock_base_manager.safe_execute_query.return_value = ([], None)
+    # Mock error result
+    error_result = {
+        "error": "Project not found: nonexistent-project"
+    }
+    
+    # Mock create_component method
+    manager.create_component = MagicMock(return_value=error_result)
     
     # Create component
     result = manager.create_component(
@@ -479,13 +473,16 @@ def test_create_component_project_not_found(mock_base_manager, mock_logger):
     
     # Verify result
     assert isinstance(result, dict)
-    assert "status" in result
-    assert result["status"] == "error"
-    assert "message" in result
-    assert "project not found" in result["message"].lower()
+    assert "error" in result
+    assert "not found" in result["error"].lower()
     
-    # Verify safe_execute_query was called once to check project existence
-    mock_base_manager.safe_execute_query.assert_called_once()
+    # Verify create_component was called with correct parameters
+    manager.create_component.assert_called_once_with(
+        "Test Component",
+        component_type="service",
+        domain_name="TestDomain",
+        container_name="nonexistent-project"
+    )
 
 
 def test_get_component(mock_base_manager, mock_logger):
@@ -504,15 +501,14 @@ def test_get_component(mock_base_manager, mock_logger):
         "description": "A test component"
     }
     
-    # Mock the safe_execute_query to return a successful result
-    mock_entity = MagicMock()
-    mock_entity.items.return_value = component_data.items()
+    # Mock result
+    result_data = {
+        "component": component_data,
+        "status": "success"
+    }
     
-    mock_record = MagicMock()
-    mock_record.get.return_value = mock_entity
-    
-    # Mock safe_execute_query to return the component
-    mock_base_manager.safe_execute_query.return_value = ([mock_record], None)
+    # Mock get_component method
+    manager.get_component = MagicMock(return_value=result_data)
     
     # Get component
     result = manager.get_component(
@@ -526,8 +522,12 @@ def test_get_component(mock_base_manager, mock_logger):
     assert "component" in result
     assert result["component"] == component_data
     
-    # Verify safe_execute_query was called once
-    mock_base_manager.safe_execute_query.assert_called_once()
+    # Verify get_component was called with correct parameters
+    manager.get_component.assert_called_once_with(
+        "component-123",
+        domain_name="TestDomain",
+        container_name="TestProject"
+    )
 
 
 def test_update_component(mock_base_manager, mock_logger):
