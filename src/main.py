@@ -3,7 +3,7 @@ import os
 import sys
 import asyncio
 import json
-from typing import Dict, List, Any, Optional, AsyncIterator
+from typing import Dict, List, Any, Optional, AsyncIterator, Callable
 from contextlib import asynccontextmanager
 import datetime
 
@@ -17,6 +17,7 @@ from src.graph_memory import GraphMemoryManager
 from src.logger import LogLevel, get_logger
 from src.utils import dict_to_json, dump_neo4j_nodes
 from src.tools import register_all_tools
+from src.session_manager import SessionManager
 
 # Initialize logger
 logger = get_logger()
@@ -24,23 +25,34 @@ logger = get_logger()
 logger.set_level(LogLevel.DEBUG)
 logger.info("Initializing Neo4j MCP Graph Memory Server", context={"version": "1.0.0"})
 
-# Create memory graph manager
-graph_manager = GraphMemoryManager(logger)
+# Store of client-specific GraphMemoryManager instances
+client_managers = {}
+
+# Create session manager with default settings
+# 1 hour inactive timeout, 5 minutes cleanup interval
+session_manager = SessionManager(inactive_timeout=3600, cleanup_interval=300)
 
 # Lifespan context manager for Neo4j connections
 @asynccontextmanager
 async def server_lifespan(server: Server) -> AsyncIterator[dict]:
-    """Manage Neo4j connection lifecycle."""
-    # Initialize at startup
-    logger.info("Initializing Neo4j connection in lifespan")
-    graph_manager.initialize()
+    """Manage Neo4j connection lifecycle and session cleanup."""
+    # Start the session cleanup task
+    logger.info("Initializing client manager store")
+    await session_manager.start_cleanup_task()
+    
     try:
-        yield {"graph_manager": graph_manager}
+        yield {"client_managers": client_managers, "session_manager": session_manager}
     finally:
-        # Clean up at shutdown
-        logger.info("Shutting down Neo4j connection")
-        # Call close without awaiting it
-        graph_manager.close()
+        # Stop the cleanup task
+        await session_manager.stop_cleanup_task()
+        
+        # Clean up at shutdown - close all client connections
+        logger.info("Shutting down all client Neo4j connections")
+        for client_id, manager in list(client_managers.items()):
+            logger.info(f"Closing Neo4j connection for client {client_id}")
+            manager.close()
+            # Remove from the dictionary after closing
+            client_managers.pop(client_id, None)
 
 # Create FastMCP server with enhanced capabilities
 server = FastMCP(
@@ -146,8 +158,90 @@ class EmbeddingConfig(BaseModel):
     project_name: Optional[str] = Field(None, description="Project name to use for memory operations")
     config: Optional[Dict[str, Any]] = Field({}, description="Additional provider-specific configuration")
 
-# Register all memory tools from the tools package
-register_all_tools(server, graph_manager)
+# Function to get or create a client-specific manager
+def get_client_manager(client_id=None):
+    """
+    Get the GraphMemoryManager for the current client or create one if it doesn't exist.
+    
+    Args:
+        client_id: Optional client ID to use. If not provided, a default client ID is used.
+                 In a real implementation, this would be derived from the SSE connection.
+    
+    Returns:
+        GraphMemoryManager instance for the client
+    """
+    try:
+        # Use provided client ID or default
+        effective_client_id = client_id or "default-client"
+        
+        logger.debug(f"Getting manager for client ID: {effective_client_id}")
+        
+        # Update the last activity time for this client
+        session_manager.update_activity(effective_client_id)
+        
+        # Create a new manager if this client doesn't have one yet
+        if effective_client_id not in client_managers:
+            logger.info(f"Creating new GraphMemoryManager for client {effective_client_id}")
+            manager = GraphMemoryManager(logger)
+            manager.initialize()
+            client_managers[effective_client_id] = manager
+            
+            # Register the client with the session manager
+            session_manager.register_client(effective_client_id, manager)
+            
+        return client_managers[effective_client_id]
+    except Exception as e:
+        logger.error(f"Error getting client manager: {str(e)}")
+        # Fall back to a temporary manager if something goes wrong
+        return GraphMemoryManager(logger)
+
+# Register all memory tools with client-specific manager handling
+from src.tools import register_core_tools
+from src.tools import register_lesson_tools
+from src.tools import register_project_tools
+from src.tools import register_config_tools
+
+# Custom registration that uses client-specific managers
+def register_all_tools_with_isolation(server):
+    """Register all tools with client isolation."""
+    # We'll modify the tools registration to use get_client_manager() inside each tool
+    register_core_tools(server, get_client_manager)
+    register_lesson_tools(server, get_client_manager)
+    register_project_tools(server, get_client_manager)
+    register_config_tools(server, get_client_manager)
+
+# Register tools with client isolation
+register_all_tools_with_isolation(server)
+
+# Add client tracking middleware for SSE connections
+async def client_tracking_middleware(request, call_next):
+    """Middleware to track client sessions and mark disconnections."""
+    # Extract session ID from request
+    session_id = request.query_params.get("session_id", None)
+    
+    # Mark client activity
+    if session_id:
+        logger.debug(f"Client activity: {session_id}")
+        session_manager.update_activity(session_id)
+    
+    # Process the request
+    response = await call_next(request)
+    
+    # Handle disconnection event for SSE requests
+    if session_id and request.url.path == "/sse":
+        # In SSE, we need to set up background cleanup for when the connection ends
+        async def on_disconnect():
+            try:
+                # Small delay to ensure cleanup happens after the connection is fully closed
+                await asyncio.sleep(1)
+                logger.info(f"Client disconnected: {session_id}")
+                session_manager.mark_client_inactive(session_id)
+            except Exception as e:
+                logger.error(f"Error during disconnect handling for {session_id}: {str(e)}")
+        
+        response.background = on_disconnect()
+    
+    return response
 
 async def run_server():
     """Run the MCP server with the configured transport."""
@@ -159,8 +253,19 @@ async def run_server():
         if use_sse:
             # Using SSE transport
             logger.info(f"Neo4j Graph Memory MCP Server running with SSE on http://0.0.0.0:{port}")
-            # For SSE, return the app so it can be run separately
-            return server.sse_app()
+            
+            # Get the standard SSE app
+            app = server.sse_app()
+            
+            # Add our middleware for client tracking
+            from starlette.middleware.base import BaseHTTPMiddleware
+            from starlette.applications import Starlette
+            
+            # Create a new Starlette app with middleware
+            app_with_middleware = Starlette(routes=app.routes)
+            app_with_middleware.add_middleware(BaseHTTPMiddleware, dispatch=client_tracking_middleware)
+            
+            return app_with_middleware
         else:
             # Using stdio transport
             logger.info("Neo4j Graph Memory MCP Server running on stdio")
@@ -192,31 +297,31 @@ def main():
             # For SSE, we need to run the server in a different way
             try:
                 import uvicorn
-                from starlette.applications import Starlette
-                from starlette.routing import Mount
                 
-                # Get the app from run_server directly without asyncio.run
-                app = Starlette(
-                    routes=[
-                        Mount('/', app=server.sse_app()),
-                    ],
-                    debug=True
-                )
+                # Get the app with middleware
+                app = asyncio.run(run_server())
                 
-                # Run uvicorn synchronously (not inside an async function)
-                uvicorn.run(app, host="0.0.0.0", port=port)
+                # Run the server if app was returned
+                if app is not None:
+                    # Type check to make sure app is an ASGI application
+                    from starlette.applications import Starlette
+                    if isinstance(app, Starlette):
+                        uvicorn.run(app, host="0.0.0.0", port=port)
+                    else:
+                        logger.error("Invalid app type returned from run_server")
+                        sys.exit(1)
+                else:
+                    logger.error("No app returned from run_server")
+                    sys.exit(1)
             except ImportError:
-                logger.error("Uvicorn not installed. Required for SSE mode.")
+                logger.error("uvicorn is required for SSE transport. Please install it with 'pip install uvicorn'.")
                 sys.exit(1)
         else:
-            # For stdio, run the server asynchronously
+            # For stdio, we can use asyncio.run
             asyncio.run(run_server())
-    except KeyboardInterrupt:
-        logger.info("Server stopped by user")
     except Exception as e:
-        logger.error(f"Unhandled exception: {str(e)}", exc_info=True)
+        logger.error(f"Failed to run server: {str(e)}")
         sys.exit(1)
 
-# Start the server when run directly
 if __name__ == "__main__":
     main() 
