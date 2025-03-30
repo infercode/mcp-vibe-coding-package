@@ -472,19 +472,20 @@ def get_client_manager(client_id=None):
         return GraphMemoryManager(logger)
 
 # Register all memory tools with client-specific manager handling
-from src.tools import register_core_tools
-from src.tools import register_lesson_tools
-from src.tools import register_project_tools
-from src.tools import register_config_tools
+# from src.tools import register_core_tools
+# from src.tools import register_lesson_tools
+# from src.tools import register_project_tools
+# from src.tools import register_config_tools
 
 # Custom registration that uses client-specific managers
 def register_all_tools_with_isolation(server):
     """Register all tools with client isolation."""
     # We'll modify the tools registration to use get_client_manager() inside each tool
-    register_core_tools(server, get_client_manager)
-    register_lesson_tools(server, get_client_manager)
-    register_project_tools(server, get_client_manager)
-    register_config_tools(server, get_client_manager)
+    # register_core_tools(server, get_client_manager)
+    # register_lesson_tools(server, get_client_manager)
+    # register_project_tools(server, get_client_manager)
+    # register_config_tools(server, get_client_manager)
+    register_all_tools(server, get_client_manager)
 
 # Register tools with client isolation
 register_all_tools_with_isolation(server)
