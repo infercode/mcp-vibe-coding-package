@@ -545,10 +545,11 @@ def test_project_and_lesson_memory_integration(manager):
     }
     manager.create_project_container = MagicMock(return_value=json.dumps(mock_project_response))
     
-    # Create a project
-    project_result = manager.create_project_container("TestProject", "A test project")
-    project_obj = json.loads(project_result)
-    assert "id" in project_obj
+    # Test project container creation
+    project_data = {"name": "TestProject", "description": "A test project"}
+    project_result = manager.create_project_container(project_data)
+    project_result = json.loads(project_result)
+    assert "id" in project_result
     
     # Mock set_project_name
     manager.set_project_name = MagicMock(return_value={"status": "success"})

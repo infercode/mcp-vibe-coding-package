@@ -935,15 +935,16 @@ class GraphMemoryManager:
     
     # Project Memory System methods
     
-    def create_project_container(self, name: str, description: Optional[str] = None, 
-                               properties: Optional[Dict[str, Any]] = None) -> str:
+    def create_project_container(self, project_data: Dict[str, Any]) -> str:
         """
         Create a project container in the knowledge graph.
         
         Args:
-            name: Name of the project container
-            description: Optional description of the project
-            properties: Optional additional properties
+            project_data: Dictionary containing project information
+                - name: Required. The name of the project container
+                - description: Optional. Description of the project
+                - metadata: Optional. Additional metadata for the project
+                - tags: Optional. List of tags for categorizing the project
             
         Returns:
             JSON string with operation result
@@ -952,15 +953,14 @@ class GraphMemoryManager:
             # Ensure we're initialized
             self._ensure_initialized()
             
+            # Extract required fields
+            if "name" not in project_data:
+                return dict_to_json({"error": "Missing required field: name"})
+                
             # Delegate directly to project memory manager
-            result = self.project_memory.create_project_container(
-                name, description, properties
-            )
+            result = self.project_memory.create_project_container(project_data)
             
-            # Convert to string if needed
-            if isinstance(result, dict):
-                return dict_to_json(result)
-            return result
+            return dict_to_json(result)
             
         except Exception as e:
             if self.logger:
@@ -980,6 +980,8 @@ class GraphMemoryManager:
         try:
             self._ensure_initialized()
             result = self.project_memory.get_project_container(name)
+            
+            # Convert to string if needed
             if isinstance(result, dict):
                 return dict_to_json(result)
             return result

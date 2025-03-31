@@ -12,6 +12,7 @@ from src.project_memory.domain_manager import DomainManager
 from src.project_memory.component_manager import ComponentManager
 from src.project_memory.dependency_manager import DependencyManager
 from src.project_memory.version_manager import VersionManager
+from src.project_memory.project_container import ProjectContainer
 
 class ProjectMemoryManager:
     """
@@ -35,6 +36,7 @@ class ProjectMemoryManager:
         self.component_manager = ComponentManager(self.base_manager)
         self.dependency_manager = DependencyManager(self.base_manager)
         self.version_manager = VersionManager(self.base_manager)
+        self.project_container = ProjectContainer(self.base_manager)
         
         # Logger for the project memory manager
         self.logger = self.base_manager.logger
@@ -618,79 +620,25 @@ class ProjectMemoryManager:
     # Project container management methods
     # ============================================================================
     
-    def create_project_container(self, name: str, 
-                              description: Optional[str] = None,
-                              properties: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def create_project_container(self, project_data: Dict[str, Any]) -> Dict[str, Any]:
         """
         Create a new project container.
         
         Args:
-            name: Name of the project container
-            description: Optional description of the project
-            properties: Optional additional properties
+            project_data: Dictionary containing project information
+                - name: Required. The name of the project container
+                - description: Optional. Description of the project
+                - metadata: Optional. Additional metadata for the project
+                - tags: Optional. List of tags for categorizing the project
             
         Returns:
             Dictionary with the created project container
         """
-        # Use a direct query to create an entity of type 'ProjectContainer'
-        timestamp = time.time()
-        
-        # Generate unique ID
-        container_id = f"proj_{int(timestamp)}_{hash(name) % 10000:04d}"
-        
-        # Create entity query
-        query = """
-        CREATE (e:Entity {
-            id: $id,
-            name: $name,
-            entityType: 'ProjectContainer',
-            created: $created,
-            lastUpdated: $lastUpdated
-        })
-        RETURN e
-        """
-        
-        params = {
-            "id": container_id,
-            "name": name,
-            "created": timestamp,
-            "lastUpdated": timestamp
-        }
-        
-        if description:
-            query = """
-            CREATE (e:Entity {
-                id: $id,
-                name: $name,
-                entityType: 'ProjectContainer',
-                description: $description,
-                created: $created,
-                lastUpdated: $lastUpdated
-            })
-            RETURN e
-            """
-            params["description"] = description
-            
-        if properties:
-            for key, value in properties.items():
-                if key not in params:
-                    params[key] = value
-        
-        # Execute the query
-        records, _ = self.base_manager.safe_execute_query(query, params)
-        
-        if not records or len(records) == 0:
-            return {"error": f"Failed to create project container '{name}'"}
-            
-        # Extract entity data
-        entity = records[0].get("e")
-        entity_data = dict(entity.items()) if entity else {}
-        
-        return {
-            "status": "success",
-            "message": f"Project container '{name}' created successfully",
-            "container": entity_data
-        }
+        # Delegate to the ProjectContainer manager
+        result_json = self.project_container.create_project_container(project_data)
+        # Convert JSON string to dictionary
+        result = json.loads(result_json)
+        return result
     
     def get_project_container(self, name: str) -> Dict[str, Any]:
         """
@@ -702,65 +650,11 @@ class ProjectMemoryManager:
         Returns:
             Dictionary with the project container details
         """
-        # Get entity by name and type
-        query = """
-        MATCH (e:Entity {name: $name, entityType: 'ProjectContainer'})
-        RETURN e
-        """
-        
-        records, _ = self.base_manager.safe_execute_query(query, {"name": name})
-        
-        if not records or len(records) == 0:
-            return {"error": f"Project container '{name}' not found"}
-        
-        # Extract entity data
-        entity = records[0].get("e")
-        container = dict(entity.items()) if entity else {}
-        
-        if not container:
-            return {"error": f"Project container '{name}' found but has no data"}
-            
-        # Get domain count
-        domain_query = """
-        MATCH (c:Entity {name: $container_name, entityType: 'ProjectContainer'})
-        MATCH (d:Entity {entityType: 'Domain'})-[:PART_OF]->(c)
-        RETURN count(d) as domain_count
-        """
-        
-        domain_records, _ = self.base_manager.safe_execute_query(
-            domain_query,
-            {"container_name": name}
-        )
-        
-        domain_count = 0
-        if domain_records and len(domain_records) > 0:
-            domain_count = domain_records[0]["domain_count"]
-        
-        # Get component count
-        component_query = """
-        MATCH (c:Entity {name: $container_name, entityType: 'ProjectContainer'})
-        MATCH (d:Entity {entityType: 'Domain'})-[:PART_OF]->(c)
-        MATCH (comp:Entity)-[:BELONGS_TO]->(d)
-        RETURN count(comp) as component_count
-        """
-        
-        component_records, _ = self.base_manager.safe_execute_query(
-            component_query,
-            {"container_name": name}
-        )
-        
-        component_count = 0
-        if component_records and len(component_records) > 0:
-            component_count = component_records[0]["component_count"]
-        
-        # Add counts to result
-        container["domain_count"] = domain_count
-        container["component_count"] = component_count
-        
-        return {"container": container}
+        result_json = self.project_container.get_project_container(name)
+        result = json.loads(result_json)
+        return result
     
-    def update_project_container(self, name: str, 
-                              updates: Dict[str, Any]) -> Dict[str, Any]:
+    def update_project_container(self, name: str, updates: Dict[str, Any]) -> Dict[str, Any]:
         """
         Update a project container's properties.
         
@@ -771,54 +665,11 @@ class ProjectMemoryManager:
         Returns:
             Dictionary with the updated project container
         """
-        # Check if entity exists
-        query = """
-        MATCH (e:Entity {name: $name, entityType: 'ProjectContainer'})
-        RETURN e
-        """
-        
-        records, _ = self.base_manager.safe_execute_query(query, {"name": name})
-        
-        if not records or len(records) == 0:
-            return {"error": f"Project container '{name}' not found"}
-            
-        # Add lastUpdated timestamp
-        updates["lastUpdated"] = time.time()
-        
-        # Build SET clause
-        set_clauses = []
-        params = {"name": name}
-        
-        for key, value in updates.items():
-            set_clauses.append(f"e.{key} = ${key}")
-            params[key] = value
-            
-        set_clause = ", ".join(set_clauses)
-        
-        # Update query
-        update_query = f"""
-        MATCH (e:Entity {{name: $name, entityType: 'ProjectContainer'}})
-        SET {set_clause}
-        RETURN e
-        """
-        
-        update_records, _ = self.base_manager.safe_execute_query(update_query, params)
-        
-        if not update_records or len(update_records) == 0:
-            return {"error": f"Failed to update project container '{name}'"}
-            
-        # Extract updated entity
-        updated_entity = update_records[0].get("e")
-        updated_data = dict(updated_entity.items()) if updated_entity else {}
-        
-        return {
-            "status": "success",
-            "message": f"Project container '{name}' updated successfully",
-            "container": updated_data
-        }
+        result_json = self.project_container.update_project_container(name, updates)
+        result = json.loads(result_json)
+        return result
     
-    def delete_project_container(self, name: str, 
-                              delete_contents: bool = False) -> Dict[str, Any]:
+    def delete_project_container(self, name: str, delete_contents: bool = False) -> Dict[str, Any]:
         """
         Delete a project container.
         
@@ -829,102 +680,11 @@ class ProjectMemoryManager:
         Returns:
             Dictionary with the deletion result
         """
-        # Check if entity exists
-        query = """
-        MATCH (e:Entity {name: $name, entityType: 'ProjectContainer'})
-        RETURN e
-        """
-        
-        records, _ = self.base_manager.safe_execute_query(query, {"name": name})
-        
-        if not records or len(records) == 0:
-            return {"error": f"Project container '{name}' not found"}
-        
-        deleted_domains = 0
-        deleted_components = 0
-        
-        if delete_contents:
-            # Delete all components in domains
-            delete_components_query = """
-            MATCH (c:Entity {name: $container_name, entityType: 'ProjectContainer'})
-            MATCH (d:Entity)-[:PART_OF]->(c)
-            MATCH (comp:Entity)-[:BELONGS_TO]->(d)
-            
-            // Delete component relationships
-            OPTIONAL MATCH (comp)-[r]-()
-            DELETE r
-            
-            // Delete component observations
-            OPTIONAL MATCH (comp)-[:HAS_OBSERVATION]->(o:Observation)
-            DELETE o
-            
-            // Delete components
-            DELETE comp
-            
-            RETURN count(comp) as deleted_count
-            """
-            
-            comp_records, _ = self.base_manager.safe_execute_query(
-                delete_components_query,
-                {"container_name": name}
-            )
-            
-            if comp_records and len(comp_records) > 0:
-                deleted_components = comp_records[0]["deleted_count"]
-            
-            # Delete all domains
-            delete_domains_query = """
-            MATCH (c:Entity {name: $container_name, entityType: 'ProjectContainer'})
-            MATCH (d:Entity)-[:PART_OF]->(c)
-            
-            // Delete domain relationships
-            OPTIONAL MATCH (d)-[r]-()
-            DELETE r
-            
-            // Delete domains
-            DELETE d
-            
-            RETURN count(d) as deleted_count
-            """
-            
-            domain_records, _ = self.base_manager.safe_execute_query(
-                delete_domains_query,
-                {"container_name": name}
-            )
-            
-            if domain_records and len(domain_records) > 0:
-                deleted_domains = domain_records[0]["deleted_count"]
-        
-        # Delete the container entity
-        delete_query = """
-        MATCH (e:Entity {name: $name, entityType: 'ProjectContainer'})
-        OPTIONAL MATCH (e)-[r]-()
-        DELETE r, e
-        RETURN count(e) as deleted
-        """
-        
-        delete_records, _ = self.base_manager.safe_execute_query(delete_query, {"name": name})
-        
-        deleted = 0
-        if delete_records and len(delete_records) > 0:
-            deleted = delete_records[0]["deleted"]
-            
-        if deleted == 0:
-            return {"error": f"Failed to delete project container '{name}'"}
-        
-        result = {
-            "status": "success",
-            "message": f"Project container '{name}' deleted successfully"
-        }
-        
-        if delete_contents:
-            result["deleted_domains"] = str(deleted_domains)
-            result["deleted_components"] = str(deleted_components)
-        
+        result_json = self.project_container.delete_project_container(name, delete_contents)
+        result = json.loads(result_json)
         return result
     
-    def list_project_containers(self, sort_by: str = "name", 
-                             limit: int = 100) -> Dict[str, Any]:
+    def list_project_containers(self, sort_by: str = "name", limit: int = 100) -> Dict[str, Any]:
         """
         List all project containers.
         
@@ -935,42 +695,9 @@ class ProjectMemoryManager:
         Returns:
             Dictionary with the list of project containers
         """
-        # Validate sort_by
-        valid_sort_fields = ["name", "created", "lastUpdated"]
-        if sort_by not in valid_sort_fields:
-            sort_by = "name"
-        
-        # Query for containers with domain and component counts
-        query = f"""
-        MATCH (c:Entity {{entityType: 'ProjectContainer'}})
-        OPTIONAL MATCH (d:Entity {{entityType: 'Domain'}})-[:PART_OF]->(c)
-        WITH c, count(d) as domain_count
-        
-        OPTIONAL MATCH (c)<-[:PART_OF]-(d:Entity {{entityType: 'Domain'}})<-[:BELONGS_TO]-(comp:Entity)
-        WITH c, domain_count, count(comp) as component_count
-        
-        RETURN c, domain_count, component_count
-        ORDER BY c.{sort_by}
-        LIMIT $limit
-        """
-        
-        records, _ = self.base_manager.safe_execute_query(
-            query,
-            {"limit": limit}
-        )
-        
-        containers = []
-        if records:
-            for record in records:
-                container = dict(record["c"].items())
-                container["domain_count"] = record["domain_count"]
-                container["component_count"] = record["component_count"]
-                containers.append(container)
-        
-        return {
-            "containers": containers,
-            "count": len(containers)
-        }
+        result_json = self.project_container.list_project_containers(sort_by, limit)
+        result = json.loads(result_json)
+        return result
     
     def get_project_status(self, container_name: str) -> Dict[str, Any]:
         """
@@ -998,59 +725,22 @@ class ProjectMemoryManager:
         
         domains = domains_result.get("domains", [])
         
-        # Get component counts by type
-        component_query = """
-        MATCH (c:Entity {name: $container_name, entityType: 'ProjectContainer'})
-        MATCH (d:Entity {entityType: 'Domain'})-[:PART_OF]->(c)
-        MATCH (comp:Entity)-[:BELONGS_TO]->(d)
-        RETURN comp.entityType as type, count(comp) as count
-        """
+        # Get component counts by type using ProjectContainer stats
+        stats_json = self.project_container.get_container_stats(container_name)
+        stats = json.loads(stats_json)
         
-        component_records, _ = self.base_manager.safe_execute_query(
-            component_query,
-            {"container_name": container_name}
-        )
-        
-        component_types = {}
-        if component_records:
-            for record in component_records:
-                entity_type = record["type"]
-                count = record["count"]
-                if entity_type:
-                    component_types[entity_type] = count
-        
-        # Get dependency counts
-        dependency_query = """
-        MATCH (c:Entity {name: $container_name, entityType: 'ProjectContainer'})
-        MATCH (d:Entity {entityType: 'Domain'})-[:PART_OF]->(c)
-        MATCH (from:Entity)-[:BELONGS_TO]->(d)
-        MATCH (to:Entity)-[:BELONGS_TO]->(d)
-        MATCH (from)-[r]->(to)
-        WHERE type(r) IN ['DEPENDS_ON', 'IMPORTS', 'USES', 'EXTENDS', 'IMPLEMENTS', 'CALLS', 'REFERENCES']
-        RETURN type(r) as type, count(r) as count
-        """
-        
-        dependency_records, _ = self.base_manager.safe_execute_query(
-            dependency_query,
-            {"container_name": container_name}
-        )
-        
-        dependency_types = {}
-        if dependency_records:
-            for record in dependency_records:
-                rel_type = record["type"]
-                count = record["count"]
-                dependency_types[rel_type] = count
+        if "error" in stats:
+            return {"error": stats["error"]}
         
         # Build status report
         status = {
             "container": container,
             "domains": domains,
-            "component_counts": component_types,
-            "dependency_counts": dependency_types,
+            "component_counts": stats.get("entity_types", {}),
+            "dependency_counts": stats.get("relationship_types", {}),
             "total_domains": len(domains),
-            "total_components": sum(component_types.values()) if component_types else 0,
-            "total_dependencies": sum(dependency_types.values()) if dependency_types else 0
+            "total_components": stats.get("total_entities", 0),
+            "total_dependencies": stats.get("total_relationships", 0)
         }
         
         return status

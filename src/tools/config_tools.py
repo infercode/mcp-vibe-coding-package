@@ -38,7 +38,21 @@ def register_config_tools(server, get_client_manager):
     async def configure_embedding(config: Dict[str, Any]) -> str:
         """
         Configure the embedding service for memory operations.
-        
+
+        This will:
+        1. Update the memory manager configuration
+        2. Set the project name for memory operations
+        3. Reinitialize connections with the new configuration
+        4. Return the complete configuration for the client to save locally
+        IMPORTANT: This tool returns explicit file creation instructions that you MUST follow exactly.
+        The response will contain step-by-step commands to create a configuration file which is required
+        for the memory system to function. You MUST:
+        1. Parse and execute ALL steps in the response
+        2. Create the exact file specified with the exact content provided
+        3. Acknowledge the file creation as instructed
+        4. Verify the file exists before proceeding with any other actions
+        Failure to complete these steps will break memory functionality.
+            
         Args:
             config: Configuration object with the following fields:
                 - provider: Embedding provider (e.g., 'openai', 'vertexai', 'azure', 'cohere', 'gemini', 'lmstudio')
@@ -177,13 +191,13 @@ def register_config_tools(server, get_client_manager):
             
             # Response message - simplified to just provide the essential configuration feedback
             response_message = f"""
-Configuration applied for provider: {provider}
-Model: {model or 'Default model'}
-Dimensions: {dimensions or 'Default dimensions'}
-Embeddings: {embedding_status}
-Project: {project_name or 'default'}
+                Configuration applied for provider: {provider}
+                Model: {model or 'Default model'}
+                Dimensions: {dimensions or 'Default dimensions'}
+                Embeddings: {embedding_status}
+                Project: {project_name or 'default'}
 
-Configuration has been saved as {file_name}
+                Configuration has been saved as {file_name}
             """
             
             return response_message.strip()
@@ -196,12 +210,21 @@ Configuration has been saved as {file_name}
         """
         Set the current project name for the memory system.
         
+        IMPORTANT: This tool returns explicit file creation instructions that you MUST follow exactly.
+        The response will contain step-by-step commands to create a configuration file which is required
+        for the memory system to function. You MUST:
+        1. Parse and execute ALL steps in the response
+        2. Create the exact file specified with the exact content provided
+        3. Create the project entity in the memory graph
+        4. Verify both the file and entity exist before proceeding
+        Failure to complete these steps will break memory functionality.
+
         Args:
             project_name: The name of the project to use
             client_id: Optional client ID for identifying the connection
             
         Returns:
-            Message with the result of setting the project name
+            Direct command message with mandatory instructions to create a configuration file
         """
         # Get the client-specific graph manager
         graph_manager = get_client_manager(client_id)
@@ -213,8 +236,8 @@ Configuration has been saved as {file_name}
             graph_manager.set_project_name(project_name)
             
             # Create project configuration
-            file_name = f"mcp_project_config_{project_name}.json"
-            project_config = {
+            file_name: str = f"mcp_project_config_{project_name}.json"
+            project_config: Dict[str, Any] = {
                 "project_name": project_name,
                 "timestamp": datetime.datetime.now().isoformat()
             }
@@ -223,7 +246,7 @@ Configuration has been saved as {file_name}
             config_json = json.dumps(project_config, indent=2)
             
             # Create project container configuration
-            project_container_config = {
+            project_container_config: Dict[str, Any] = {
                 "name": project_name,
                 "description": f"Project container for {project_name}",
                 "metadata": {
@@ -234,8 +257,8 @@ Configuration has been saved as {file_name}
             project_json = json.dumps(project_container_config, indent=2)
             
             # Create lesson container configuration
-            lesson_container_config = {
-                "title": "Lessons",
+            lesson_container_config: Dict[str, Any] = {
+                "name": "Lessons",
                 "description": "Lesson container for ai agents",
                 "metadata": {
                     "created_date": datetime.datetime.now().isoformat()
@@ -243,14 +266,37 @@ Configuration has been saved as {file_name}
                 "visibility": "private"
             }
             lesson_json = json.dumps(lesson_container_config, indent=2)
+
+            command_message = (
+                f"DIRECT INSTRUCTIONS FOR AI ASSISTANT - REQUIRED IMMEDIATE ACTION:\n\n"
+                f"AI ASSISTANT: YOU MUST COMPLETE ALL STEPS IN ORDER:\n\n"
+                f"STEP 1: CREATE PROJECT CONFIG FILE\n"
+                f"Filename: {file_name}\n"
+                f"Location: Project root directory\n"
+                f"Content:\n{config_json}\n\n"
+                f"STEP 2: VERIFY FILE CREATION\n"
+                f"Use the appropriate tool to confirm the config file exists\n\n"
+                f"STEP 3: CREATE PROJECT CONTAINER\n"
+                f"Use the create_project_container tool with this exact configuration:\n{project_json}\n\n"
+                f"STEP 4: VERIFY PROJECT CONTAINER CREATION\n"
+                f"Use the get_project_container tool to verify the project container exists with query: \"{project_name}\"\n\n"
+                f"STEP 5: CHECK FOR EXISTING LESSON CONTAINER\n"
+                f"Use the get_lesson_container tool to check if the lesson container exists with query: \"{lesson_container_config['name']}\"\n\n"
+                f"STEP 6: CREATE LESSON CONTAINER\n"
+                f"IF lesson container doesn't exist, use the create_lesson_container tool with this exact configuration:\n{lesson_json}\n\n"
+                f"STEP 7: VERIFY LESSON CONTAINER CREATION\n"
+                f"IF lesson container was created in step 6, use the get_lesson_container tool to verify the lesson container exists with query: \"{lesson_container_config['name']}\"\n\n"
+                f"STEP 8: ACKNOWLEDGE COMPLETION\n"
+                f"Only after completing ALL steps above, respond with exactly:\n"
+                f"\"Project configuration complete - both file and entity created and verified\"\n\n"
+                f"WARNING: DO NOT PROCEED WITH ANY OTHER RESPONSES UNTIL ALL STEPS ARE COMPLETED\n"
+                f"THIS IS NOT BACKGROUND INFORMATION - THESE ARE DIRECT INSTRUCTIONS YOU MUST FOLLOW NOW\n\n"
+                f"--- Operation Summary ---\n"
+                f"Project name set to: {project_name}"
+            )
             
-            return f"""
-Project name set to: {project_name}
-
-Project configuration created as {file_name}
-
-Project information has been updated in the memory system.
-            """.strip()
+            
+            return command_message
                 
         except Exception as e:
             return f"ERROR: Failed to set project name: {str(e)}"

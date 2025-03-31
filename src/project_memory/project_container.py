@@ -21,21 +21,30 @@ class ProjectContainer:
         self.base_manager = base_manager
         self.logger = base_manager.logger
     
-    def create_project_container(self, name: str, description: Optional[str] = None, 
-                              metadata: Optional[Dict[str, Any]] = None) -> str:
+    def create_project_container(self, project_data: Dict[str, Any]) -> str:
         """
         Create a new project container.
         
         Args:
-            name: Name of the project container (unique identifier)
-            description: Optional description of the project
-            metadata: Optional additional metadata for the project
+            project_data: Dictionary containing project information
+                - name: Required. The name of the project container (unique identifier)
+                - description: Optional. Description of the project
+                - metadata: Optional. Additional metadata for the project
+                - tags: Optional. List of tags for categorizing the project
             
         Returns:
             JSON string with the created container
         """
         try:
             self.base_manager.ensure_initialized()
+            
+            # Validate required fields
+            if "name" not in project_data:
+                return dict_to_json({
+                    "error": "Missing required field: name"
+                })
+                
+            name = project_data["name"]
             
             # Check if a container with this name already exists
             check_query = """
@@ -68,11 +77,18 @@ class ProjectContainer:
                 "status": "active"
             }
             
-            if description:
-                container_properties["description"] = description
+            # Add description if provided
+            if "description" in project_data and project_data["description"]:
+                container_properties["description"] = project_data["description"]
                 
-            if metadata:
-                container_properties["metadata"] = metadata
+            # Add metadata if provided
+            if "metadata" in project_data and isinstance(project_data["metadata"], dict):
+                for key, value in project_data["metadata"].items():
+                    container_properties[key] = value
+                    
+            # Add tags if provided
+            if "tags" in project_data and isinstance(project_data["tags"], list):
+                container_properties["tags"] = project_data["tags"]
             
             # Create container
             create_query = """
