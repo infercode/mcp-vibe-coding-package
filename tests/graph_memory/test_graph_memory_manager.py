@@ -621,17 +621,23 @@ def test_create_lesson_container(mock_graph_memory_manager):
 
 def test_create_project_container(mock_graph_memory_manager):
     """Test project container creation delegation."""
-    # Set return value directly
+    # Setup
+    project_data = {
+        "name": "Test Project",
+        "description": "Test description",
+        "metadata": {"owner": "test_user"},
+        "tags": ["test", "demo"]
+    }
+    
+    # Set a simplified return value for testing
     expected_result = json.dumps({"id": "project-1", "name": "Test Project"})
     mock_graph_memory_manager.create_project_container.return_value = expected_result
     
-    # Call create_project_container
-    project_data = {"name": "Test Project", "description": "Test description"}
+    # Call the method
     result = mock_graph_memory_manager.create_project_container(project_data)
     
-    # Verify result
-    assert "id" in json.loads(result)
-    assert "name" in json.loads(result)
+    # Verify the result
+    assert result == expected_result
 
 
 def test_set_project_name_with_file_operations(mock_graph_memory_manager):
