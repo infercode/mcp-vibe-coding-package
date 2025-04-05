@@ -1,6 +1,7 @@
 from typing import Any, Dict, List, Optional
 
 from src.utils import dict_to_json
+from src.utils.neo4j_query_utils import sanitize_query_parameters
 from src.graph_memory.base_manager import BaseManager
 
 class SearchManager:
@@ -59,25 +60,34 @@ class SearchManager:
             query_parts.append("ORDER BY e.name")
             query_parts.append(f"LIMIT {min(limit, 100)}")  # Cap limit for safety
             
-            # Execute the query
+            # Execute the query with validation
             query = " ".join(query_parts)
-            records, _ = self.base_manager.safe_execute_query(
-                query,
-                params
-            )
-            
-            # Process results
-            entities = []
-            if records:
-                for record in records:
-                    entity = record.get("e")
-                    if entity:
-                        # Convert Neo4j node to dict
-                        entity_dict = dict(entity.items())
-                        entity_dict["id"] = entity.id  # Add the Neo4j ID
-                        entities.append(entity_dict)
-            
-            return dict_to_json({"entities": entities})
+            try:
+                # Sanitize parameters
+                sanitized_params = sanitize_query_parameters(params) if params else None
+                
+                # Execute read query with validation
+                records = self.base_manager.safe_execute_read_query(
+                    query,
+                    sanitized_params
+                )
+                
+                # Process results
+                entities = []
+                if records:
+                    for record in records:
+                        entity = record.get("e")
+                        if entity:
+                            # Convert Neo4j node to dict
+                            entity_dict = dict(entity.items())
+                            entity_dict["id"] = entity.id  # Add the Neo4j ID
+                            entities.append(entity_dict)
+                
+                return dict_to_json({"entities": entities})
+            except ValueError as e:
+                error_msg = f"Query validation error: {str(e)}"
+                self.logger.error(error_msg)
+                return dict_to_json({"error": error_msg})
             
         except Exception as e:
             error_msg = f"Error searching entities: {str(e)}"
@@ -126,7 +136,7 @@ class SearchManager:
             # Build final query
             vector_query = " ".join(vector_query_parts)
             
-            # Execute query
+            # Prepare parameters
             params = {
                 "index_name": getattr(self.base_manager, "embedding_index_name", "entity_embedding"),
                 "k": min(limit, 100),  # Cap limit for safety
@@ -136,26 +146,35 @@ class SearchManager:
             if entity_types and len(entity_types) > 0:
                 params["entity_types"] = entity_types
             
-            records, _ = self.base_manager.safe_execute_query(
-                vector_query,
-                params
-            )
-            
-            # Process results
-            entities = []
-            if records:
-                for record in records:
-                    entity = record.get("e")
-                    score = record.get("score")
-                    
-                    if entity:
-                        # Convert Neo4j node to dict
-                        entity_dict = dict(entity.items())
-                        entity_dict["id"] = entity.id  # Add the Neo4j ID
-                        entity_dict["similarity_score"] = score  # Add similarity score
-                        entities.append(entity_dict)
-            
-            return dict_to_json({"entities": entities})
+            try:
+                # Sanitize parameters
+                sanitized_params = sanitize_query_parameters(params)
+                
+                # Execute read query with validation
+                records = self.base_manager.safe_execute_read_query(
+                    vector_query,
+                    sanitized_params
+                )
+                
+                # Process results
+                entities = []
+                if records:
+                    for record in records:
+                        entity = record.get("e")
+                        score = record.get("score")
+                        
+                        if entity:
+                            # Convert Neo4j node to dict
+                            entity_dict = dict(entity.items())
+                            entity_dict["id"] = entity.id  # Add the Neo4j ID
+                            entity_dict["similarity_score"] = score  # Add similarity score
+                            entities.append(entity_dict)
+                
+                return dict_to_json({"entities": entities})
+            except ValueError as e:
+                error_msg = f"Query validation error: {str(e)}"
+                self.logger.error(error_msg)
+                return dict_to_json({"error": error_msg})
             
         except Exception as e:
             error_msg = f"Error in semantic search: {str(e)}"
@@ -187,64 +206,46 @@ class SearchManager:
                     self.logger.error(error_msg)
                     return dict_to_json({"error": error_msg})
             
-            # Execute the query
-            records, summary = self.base_manager.safe_execute_query(
-                cypher_query,
-                params or {}
-            )
-            
-            # Process results
-            results = []
-            if records:
-                for record in records:
-                    # Convert record to a dictionary
-                    record_dict = {}
-                    for key in record.keys():
-                        value = record.get(key)
+            try:
+                # Sanitize parameters
+                sanitized_params = sanitize_query_parameters(params or {}) if params else None
+                
+                # Execute read query with validation
+                records = self.base_manager.safe_execute_read_query(
+                    cypher_query,
+                    sanitized_params
+                )
+                
+                # Process results
+                results = []
+                if records:
+                    for record in records:
+                        # Convert record to a dictionary
+                        record_dict = {}
+                        for key in record.keys():
+                            value = record.get(key)
+                            
+                            # Handle Neo4j Node objects
+                            if value is not None and hasattr(value, "items"):
+                                record_dict[key] = dict(value.items())
+                            else:
+                                record_dict[key] = value
                         
-                        # Handle Neo4j Node objects
-                        if value is not None and hasattr(value, "items"):
-                            record_dict[key] = dict(value.items())
-                        else:
-                            record_dict[key] = value
-                    
-                    results.append(record_dict)
-            
-            # Add summary information
-            summary_info = {"counters": {}, "database": None, "time": None}
-            
-            # Check if summary is a dictionary
-            if isinstance(summary, dict):
-                summary_info.update({k: v for k, v in summary.items() if v is not None})
-            else:
-                # Extract data from ResultSummary object
-                if hasattr(summary, "counters") and summary.counters:
-                    try:
-                        # Handle counters using value_pairs or attributes
-                        if hasattr(summary.counters, "value_pairs") and callable(getattr(summary.counters, "value_pairs")):
-                            summary_info["counters"] = dict(summary.counters.value_pairs())
-                        else:
-                            # Extract counter properties via attributes
-                            counter_dict = {}
-                            for attr in ["nodes_created", "relationships_created", "properties_set", "labels_added"]:
-                                if hasattr(summary.counters, attr):
-                                    counter_dict[attr] = getattr(summary.counters, attr)
-                            summary_info["counters"] = counter_dict
-                    except Exception as e:
-                        self.logger.error(f"Error extracting counters: {str(e)}")
-                        
-                if hasattr(summary, "database"):
-                    summary_info["database"] = summary.database
-                    
-                if hasattr(summary, "result_available_after"):
-                    summary_info["time"] = summary.result_available_after
-            
-            response = {
-                "results": results,
-                "summary": summary_info
-            }
-            
-            return dict_to_json(response)
+                        results.append(record_dict)
+                
+                # Add summary information
+                summary_info = {"counters": {}, "database": None, "time": None}
+                
+                response = {
+                    "results": results,
+                    "summary": summary_info
+                }
+                
+                return dict_to_json(response)
+            except ValueError as e:
+                error_msg = f"Query validation error: {str(e)}"
+                self.logger.error(error_msg)
+                return dict_to_json({"error": error_msg})
             
         except Exception as e:
             error_msg = f"Error executing custom query: {str(e)}"
@@ -282,80 +283,108 @@ class SearchManager:
             elif max_nodes > 100:  # Cap for performance
                 max_nodes = 100
             
-            # Check if entity exists
-            check_query = """
-            MATCH (e:Entity {name: $name})
-            RETURN e
-            """
-            
-            records, _ = self.base_manager.safe_execute_query(
-                check_query,
-                {"name": entity_name}
-            )
-            
-            if not records or len(records) == 0:
-                self.logger.error(f"Entity '{entity_name}' not found")
-                return dict_to_json({"error": f"Entity '{entity_name}' not found"})
-            
-            # Build neighborhood query
-            neighborhood_query = f"""
-            MATCH path = (start:Entity {{name: $name}})-[*1..{max_depth}]-(related)
-            WHERE related:Entity
-            WITH DISTINCT related, start
-            LIMIT $max_nodes
-            RETURN collect(distinct start) + collect(distinct related) as nodes
-            """
-            
-            # Get nodes
-            node_records, _ = self.base_manager.safe_execute_query(
-                neighborhood_query,
-                {"name": entity_name, "max_nodes": max_nodes}
-            )
-            
-            # Get relationships
-            relationship_query = f"""
-            MATCH (start:Entity {{name: $name}})-[r:RELATES_TO*1..{max_depth}]-(related:Entity)
-            WITH DISTINCT r
-            LIMIT $max_rels
-            RETURN collect(r) as relationships
-            """
-            
-            rel_records, _ = self.base_manager.safe_execute_query(
-                relationship_query,
-                {"name": entity_name, "max_rels": max_nodes * 3}  # Allow more relationships than nodes
-            )
-            
-            # Process results
-            nodes = []
-            if node_records and len(node_records) > 0:
-                node_list = node_records[0].get("nodes", [])
-                for node in node_list:
-                    node_dict = dict(node.items())
-                    node_dict["id"] = node.id
-                    nodes.append(node_dict)
-            
-            relationships = []
-            if rel_records and len(rel_records) > 0:
-                rel_list = rel_records[0].get("relationships", [])
-                for rel in rel_list:
-                    # Extract relationship properties
-                    rel_dict = dict(rel.items())
-                    rel_dict["id"] = rel.id
-                    rel_dict["start_node"] = rel.start_node.id
-                    rel_dict["end_node"] = rel.end_node.id
-                    rel_dict["type"] = rel.type
-                    relationships.append(rel_dict)
-            
-            # Prepare response
-            graph = {
-                "nodes": nodes,
-                "relationships": relationships,
-                "center_entity": entity_name,
-                "max_depth": max_depth,
-                "max_nodes": max_nodes
-            }
-            
-            return dict_to_json({"graph": graph})
+            try:
+                # Check if entity exists
+                check_query = """
+                MATCH (e:Entity {name: $name})
+                RETURN e
+                """
+                
+                # Sanitize parameters
+                sanitized_params = sanitize_query_parameters({"name": entity_name})
+                
+                # Execute read query with validation
+                records = self.base_manager.safe_execute_read_query(
+                    check_query,
+                    sanitized_params
+                )
+                
+                if not records or len(records) == 0:
+                    self.logger.error(f"Entity '{entity_name}' not found")
+                    return dict_to_json({"error": f"Entity '{entity_name}' not found"})
+                
+                # Build neighborhood query
+                neighborhood_query = f"""
+                MATCH path = (start:Entity {{name: $name}})-[*1..{max_depth}]-(related)
+                WHERE related:Entity
+                WITH DISTINCT related, start
+                LIMIT $max_nodes
+                RETURN collect(distinct start) + collect(distinct related) as nodes
+                """
+                
+                # Prepare params for neighborhood query
+                neighborhood_params = {
+                    "name": entity_name,
+                    "max_nodes": max_nodes
+                }
+                
+                # Sanitize parameters
+                sanitized_neighborhood_params = sanitize_query_parameters(neighborhood_params)
+                
+                # Get nodes with validation
+                node_records = self.base_manager.safe_execute_read_query(
+                    neighborhood_query,
+                    sanitized_neighborhood_params
+                )
+                
+                # Get relationships
+                relationship_query = f"""
+                MATCH (start:Entity {{name: $name}})-[r:RELATES_TO*1..{max_depth}]-(related:Entity)
+                WITH DISTINCT r
+                LIMIT $max_rels
+                RETURN collect(r) as relationships
+                """
+                
+                # Prepare params for relationship query
+                relationship_params = {
+                    "name": entity_name,
+                    "max_rels": max_nodes * 3  # Allow more relationships than nodes
+                }
+                
+                # Sanitize parameters
+                sanitized_relationship_params = sanitize_query_parameters(relationship_params)
+                
+                # Execute relationship query with validation
+                rel_records = self.base_manager.safe_execute_read_query(
+                    relationship_query,
+                    sanitized_relationship_params
+                )
+                
+                # Process results
+                nodes = []
+                if node_records and len(node_records) > 0:
+                    node_list = node_records[0].get("nodes", [])
+                    for node in node_list:
+                        node_dict = dict(node.items())
+                        node_dict["id"] = node.id
+                        nodes.append(node_dict)
+                
+                relationships = []
+                if rel_records and len(rel_records) > 0:
+                    rel_list = rel_records[0].get("relationships", [])
+                    for rel in rel_list:
+                        # Extract relationship properties
+                        rel_dict = dict(rel.items())
+                        rel_dict["id"] = rel.id
+                        rel_dict["start_node"] = rel.start_node.id
+                        rel_dict["end_node"] = rel.end_node.id
+                        rel_dict["type"] = rel.type
+                        relationships.append(rel_dict)
+                
+                # Prepare response
+                graph = {
+                    "nodes": nodes,
+                    "relationships": relationships,
+                    "center_entity": entity_name,
+                    "max_depth": max_depth,
+                    "max_nodes": max_nodes
+                }
+                
+                return dict_to_json({"graph": graph})
+            except ValueError as e:
+                error_msg = f"Query validation error: {str(e)}"
+                self.logger.error(error_msg)
+                return dict_to_json({"error": error_msg})
             
         except Exception as e:
             error_msg = f"Error exploring entity neighborhood: {str(e)}"
@@ -387,73 +416,97 @@ class SearchManager:
             elif max_depth > 6:  # Cap for performance
                 max_depth = 6
             
-            # Check if entities exist
-            check_query = """
-            MATCH (from:Entity {name: $from_name})
-            MATCH (to:Entity {name: $to_name})
-            RETURN from, to
-            """
-            
-            records, _ = self.base_manager.safe_execute_query(
-                check_query,
-                {"from_name": from_entity, "to_name": to_entity}
-            )
-            
-            if not records or len(records) == 0:
-                return dict_to_json({"error": "One or both entities not found"})
-            
-            # Build path query
-            path_query = f"""
-            MATCH path = (from:Entity {{name: $from_name}})-[*1..{max_depth}]-(to:Entity {{name: $to_name}})
-            WITH path, length(path) as path_length
-            ORDER BY path_length ASC
-            LIMIT 10
-            RETURN path, path_length
-            """
-            
-            # Execute query
-            path_records, _ = self.base_manager.safe_execute_query(
-                path_query,
-                {"from_name": from_entity, "to_name": to_entity}
-            )
-            
-            # Process results
-            paths = []
-            if path_records:
-                for record in path_records:
-                    path = record.get("path")
-                    path_length = record.get("path_length")
-                    
-                    if path:
-                        # Extract nodes and relationships
-                        path_nodes = []
-                        for node in path.nodes:
-                            node_dict = dict(node.items())
-                            node_dict["id"] = node.id
-                            path_nodes.append(node_dict)
+            try:
+                # Check if entities exist
+                check_query = """
+                MATCH (from:Entity {name: $from_name})
+                MATCH (to:Entity {name: $to_name})
+                RETURN from, to
+                """
+                
+                # Prepare params
+                check_params = {
+                    "from_name": from_entity,
+                    "to_name": to_entity
+                }
+                
+                # Sanitize parameters
+                sanitized_check_params = sanitize_query_parameters(check_params)
+                
+                # Execute check query with validation
+                records = self.base_manager.safe_execute_read_query(
+                    check_query,
+                    sanitized_check_params
+                )
+                
+                if not records or len(records) == 0:
+                    return dict_to_json({"error": "One or both entities not found"})
+                
+                # Build path query
+                path_query = f"""
+                MATCH path = (from:Entity {{name: $from_name}})-[*1..{max_depth}]-(to:Entity {{name: $to_name}})
+                WITH path, length(path) as path_length
+                ORDER BY path_length ASC
+                LIMIT 10
+                RETURN path, path_length
+                """
+                
+                # Prepare path query params
+                path_params = {
+                    "from_name": from_entity,
+                    "to_name": to_entity
+                }
+                
+                # Sanitize parameters
+                sanitized_path_params = sanitize_query_parameters(path_params)
+                
+                # Execute path query with validation
+                path_records = self.base_manager.safe_execute_read_query(
+                    path_query,
+                    sanitized_path_params
+                )
+                
+                # Process results
+                paths = []
+                if path_records:
+                    for record in path_records:
+                        path = record.get("path")
+                        path_length = record.get("path_length")
                         
-                        path_rels = []
-                        for rel in path.relationships:
-                            rel_dict = dict(rel.items())
-                            rel_dict["id"] = rel.id
-                            rel_dict["start_node"] = rel.start_node.id
-                            rel_dict["end_node"] = rel.end_node.id
-                            rel_dict["type"] = rel.type
-                            path_rels.append(rel_dict)
-                        
-                        paths.append({
-                            "nodes": path_nodes,
-                            "relationships": path_rels,
-                            "length": path_length
-                        })
-            
-            return dict_to_json({
-                "paths": paths,
-                "from_entity": from_entity,
-                "to_entity": to_entity,
-                "max_depth": max_depth,
-                "path_count": len(paths)
-            })
+                        if path:
+                            # Extract nodes and relationships
+                            path_nodes = []
+                            for node in path.nodes:
+                                node_dict = dict(node.items())
+                                node_dict["id"] = node.id
+                                path_nodes.append(node_dict)
+                            
+                            path_rels = []
+                            for rel in path.relationships:
+                                rel_dict = dict(rel.items())
+                                rel_dict["id"] = rel.id
+                                rel_dict["start_node"] = rel.start_node.id
+                                rel_dict["end_node"] = rel.end_node.id
+                                rel_dict["type"] = rel.type
+                                path_rels.append(rel_dict)
+                            
+                            paths.append({
+                                "nodes": path_nodes,
+                                "relationships": path_rels,
+                                "length": path_length
+                            })
+                
+                return dict_to_json({
+                    "paths": paths,
+                    "from_entity": from_entity,
+                    "to_entity": to_entity,
+                    "max_depth": max_depth,
+                    "path_count": len(paths)
+                })
+            except ValueError as e:
+                error_msg = f"Query validation error: {str(e)}"
+                self.logger.error(error_msg)
+                return dict_to_json({"error": error_msg})
             
         except Exception as e:
             error_msg = f"Error finding paths between entities: {str(e)}"

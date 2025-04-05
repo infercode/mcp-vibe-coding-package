@@ -1,12 +1,15 @@
 import os
 import time
 import json
+import datetime
 from typing import Any, Dict, List, Optional, Tuple, cast
 from typing_extensions import LiteralString
 from neo4j import GraphDatabase, Session, Transaction
 
 from src.logger import Logger, get_logger
 from src.embedding_manager import LiteLLMEmbeddingManager
+# Import neo4j query validation utilities
+from src.models.neo4j_queries import CypherQuery, CypherParameters
 
 class BaseManager:
     """Base manager for Neo4j graph database connections and core functionality."""
@@ -447,4 +450,175 @@ class BaseManager:
         if not self.embedding_enabled:
             return None
             
-        return self.embedding_manager.generate_embedding(text) 
+        return self.embedding_manager.generate_embedding(text)
+        
+    # Neo4j Query Validation Methods
+    
+    def execute_read_query(self, query: str, parameters: Optional[Dict[str, Any]] = None, 
+                         database: Optional[str] = None) -> List[Dict[str, Any]]:
+        """
+        Execute a read-only query with validation.
+        
+        Args:
+            query: The Cypher query to execute
+            parameters: Optional parameters for the query
+            database: Optional database name to use
+            
+        Returns:
+            List of record dictionaries
+        """
+        records, _ = self.safe_execute_query(query, parameters, database)
+        return records
+        
+    def execute_write_query(self, query: str, parameters: Optional[Dict[str, Any]] = None,
+                          database: Optional[str] = None) -> List[Dict[str, Any]]:
+        """
+        Execute a write query with validation.
+        
+        Args:
+            query: The Cypher query to execute
+            parameters: Optional parameters for the query
+            database: Optional database name to use
+            
+        Returns:
+            List of record dictionaries
+        """
+        records, _ = self.safe_execute_query(query, parameters, database)
+        return records
+    
+    def safe_execute_read_query(self, query: str, parameters: Optional[Dict[str, Any]] = None,
+                              database: Optional[str] = None) -> List[Dict[str, Any]]:
+        """
+        Validate and execute a read-only query.
+        
+        Args:
+            query: The Cypher query to execute
+            parameters: Optional parameters for the query
+            database: Optional database name to use
+            
+        Returns:
+            List of record dictionaries
+            
+        Raises:
+            ValueError: If query is invalid or contains destructive operations
+        """
+        try:
+            # Manually check for destructive operations
+            destructive_patterns = [
+                r"(?i)\b(CREATE|DELETE|REMOVE|DROP|SET)\b",
+                r"(?i)\b(MERGE|DETACH DELETE)\b",
+                r"(?i)\b(CREATE|DROP) (INDEX|CONSTRAINT)\b",
+                r"(?i)\.drop\(.*\)"
+            ]
+            
+            import re
+            for pattern in destructive_patterns:
+                if re.search(pattern, query):
+                    raise ValueError(f"Destructive operation detected in read-only query: {pattern}")
+                    
+            # Sanitize parameters manually
+            sanitized_params = parameters
+            if parameters:
+                # Convert dates and complex objects to strings
+                sanitized_params = {}
+                for key, value in parameters.items():
+                    if isinstance(value, (datetime.datetime, datetime.date)):
+                        sanitized_params[key] = str(value)
+                    else:
+                        sanitized_params[key] = value
+                        
+            # Create query model
+            params_model = None
+            if sanitized_params:
+                params_model = CypherParameters(parameters=sanitized_params)
+                
+            validated_query = CypherQuery(
+                query=query,
+                parameters=params_model,
+                read_only=True,
+                database=database
+            )
+            
+            # Execute the validated query
+            records, _ = self._execute_validated_query(validated_query)
+            return records
+            
+        except ValueError as e:
+            self.logger.error(f"Query validation error: {e}")
+            raise
+        except Exception as e:
+            self.logger.error(f"Error executing read query: {e}")
+            raise
+    
+    def safe_execute_write_query(self, query: str, parameters: Optional[Dict[str, Any]] = None,
+                               database: Optional[str] = None) -> List[Dict[str, Any]]:
+        """
+        Validate and execute a write query.
+        
+        Args:
+            query: The Cypher query to execute
+            parameters: Optional parameters for the query
+            database: Optional database name to use
+            
+        Returns:
+            List of record dictionaries
+            
+        Raises:
+            ValueError: If query is invalid
+        """
+        try:
+            # Sanitize parameters manually
+            sanitized_params = parameters
+            if parameters:
+                # Convert dates and complex objects to strings
+                sanitized_params = {}
+                for key, value in parameters.items():
+                    if isinstance(value, (datetime.datetime, datetime.date)):
+                        sanitized_params[key] = str(value)
+                    else:
+                        sanitized_params[key] = value
+                        
+            # Create query model
+            params_model = None
+            if sanitized_params:
+                params_model = CypherParameters(parameters=sanitized_params)
+                
+            validated_query = CypherQuery(
+                query=query,
+                parameters=params_model,
+                read_only=False,
+                database=database
+            )
+            
+            # Execute the validated query
+            records, _ = self._execute_validated_query(validated_query)
+            return records
+            
+        except ValueError as e:
+            self.logger.error(f"Query validation error: {e}")
+            raise
+        except Exception as e:
+            self.logger.error(f"Error executing write query: {e}")
+            raise
+    
+    def _execute_validated_query(self, query_model: CypherQuery) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+        """
+        Execute a validated CypherQuery.
+        
+        Args:
+            query_model: Validated CypherQuery model
+            
+        Returns:
+            Tuple of (records, summary)
+            
+        Raises:
+            Exception: If execution fails
+        """
+        # Extract parameters dictionary or empty dict if None
+        parameters = {}
+        if query_model.parameters:
+            parameters = query_model.parameters.parameters
+        
+        # Execute query with the appropriate database
+        db = query_model.database or self.neo4j_database
+        return self.safe_execute_query(query_model.query, parameters, db) 

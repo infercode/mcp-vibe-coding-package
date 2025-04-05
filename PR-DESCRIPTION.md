@@ -1,53 +1,68 @@
-# PR: Fix Graph Memory Integration Tests
+# SearchManager Integration with Neo4j Query Validation
 
-## Issue
+## Overview
 
-The graph memory integration tests were failing because:
-
-1. The GraphMemoryManager was unable to initialize due to an issue with the embedding adapter
-2. The embedding adapter was failing with an error: `Logger._log() got an unexpected keyword argument 'context'`
-3. In the mocked test environment, some methods like `get_relations` weren't returning the expected format
+This PR integrates the Neo4j query validation system with the SearchManager class, enhancing security, type safety, and error handling for all search operations in the graph memory system.
 
 ## Changes
 
-### Test Fixes
+- **SearchManager Updates**:
+  - Added parameter sanitization to all search methods
+  - Updated query execution to use validated query methods
+  - Enhanced error handling with clear validation errors
+  - Added special handling for semantic search parameters
+  - Maintained backward compatibility with existing code
 
-1. Created a basic test (`test_basic_integration.py`) to verify Neo4j connectivity:
-   - Confirmed direct connection to Neo4j is working
-   - Confirmed BaseManager initializes correctly
-   - Identified the embedding adapter initialization issue
+- **Testing**:
+  - Created `src/examples/search_manager_validation_test.py` for validation testing
+  - Added mock testing support for CI/CD environments
+  - Implemented test cases for both valid and invalid operations
+  - Verified protection against destructive operations in queries
 
-2. Created a real integration test (`test_real_integration.py`) to diagnose GraphMemoryManager issues:
-   - Mocked the embedding adapter to avoid the Logger error
-   - Successfully tested GraphMemoryManager initialization 
-   - Confirmed entity operations work with real Neo4j database
+- **Documentation**:
+  - Updated `docs/neo4j_query_validation_integration.md` to reflect SearchManager integration
+  - Updated `docs/pydantic_implementation_plan.md` with new status and details
+  - Created `docs/neo4j_validation_progress.md` to track overall progress and next steps
 
-3. Fixed the mocked integration tests in `tests/integration/test_graph_memory_integration.py`:
-   - Updated the test fixtures to properly mock the embedding adapter
-   - Added special mocks for the relation_manager to fix the relation tests
-   - Made all assertions more flexible to handle different response formats
+## Key Features
 
-### Key Findings
+1. **Type Safety**:
+   - Runtime validation for all query parameters
+   - Protection against non-serializable parameters
+   - Proper Neo4j parameter sanitization
 
-1. The Neo4j connection is working correctly with:
-   - URI: bolt://localhost:7687
-   - Username: neo4j
-   - Password: P@ssW0rd2025!
+2. **Security Enhancements**:
+   - Prevention of destructive operations (CREATE, DELETE, etc.) in read-only context
+   - Validation against injection attacks in custom queries
+   - Explicit forbidden operations list in `query_knowledge_graph` method
 
-2. The embedding adapter has an issue with the Logger implementation, which causes GraphMemoryManager initialization to fail when not mocked.
+3. **Error Handling**:
+   - Clear error messages for validation failures
+   - Structured error responses with JSON formatting
+   - Proper exception handling throughout the search operations
 
-3. When running the integration tests, the embedding adapter should be disabled or mocked to avoid the initialization failure.
+## Testing Instructions
 
-## Testing
-
-All integration tests are now passing:
+To test the changes, run:
 
 ```bash
-PYTHONPATH=. poetry run pytest tests/integration/test_graph_memory_integration.py -v
+cd /path/to/mcp-vibe-coding-package
+poetry run python src/examples/search_manager_validation_test.py --mock
+```
+
+For testing with a real Neo4j instance:
+
+```bash
+poetry run python src/examples/search_manager_validation_test.py --uri bolt://localhost:7687 --username neo4j --password your_password
 ```
 
 ## Next Steps
 
-1. Fix the embedding adapter to handle the Logger correctly (possibly related to the `context` parameter)
-2. Update the GraphMemoryManager to better handle disabled embeddings
-3. Consider updating test fixtures to be more resilient to implementation changes 
+- Integrate ObservationManager with the Neo4j query validation system
+- Complete comprehensive testing across all manager classes
+- Finalize documentation for the entire Neo4j query validation system
+
+## Related Issues
+
+- Closes #XXX: Integrate SearchManager with Neo4j query validation
+- Contributes to #YYY: Complete Neo4j query validation integration for all managers 

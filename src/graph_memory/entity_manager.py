@@ -86,7 +86,8 @@ class EntityManager:
             RETURN e
             """
             
-            records, _ = self.base_manager.safe_execute_query(
+            # Use safe_execute_read_query for validation
+            records = self.base_manager.safe_execute_read_query(
                 query,
                 {"name": entity_name}
             )
@@ -106,6 +107,10 @@ class EntityManager:
             
             return dict_to_json({"error": f"Entity '{entity_name}' not found"})
             
+        except ValueError as e:
+            error_msg = f"Query validation error: {str(e)}"
+            self.logger.error(error_msg)
+            return dict_to_json({"error": error_msg})
         except Exception as e:
             error_msg = f"Error retrieving entity: {str(e)}"
             self.logger.error(error_msg)
@@ -131,7 +136,8 @@ class EntityManager:
             RETURN e
             """
             
-            records, _ = self.base_manager.safe_execute_query(
+            # Use safe_execute_read_query for validation
+            records = self.base_manager.safe_execute_read_query(
                 query,
                 {"name": entity_name}
             )
@@ -155,7 +161,8 @@ class EntityManager:
                 RETURN e
                 """
                 
-                self.base_manager.safe_execute_query(
+                # Use safe_execute_write_query for validation
+                self.base_manager.safe_execute_write_query(
                     update_query,
                     params
                 )
@@ -172,7 +179,8 @@ class EntityManager:
                 RETURN e
                 """
                 
-                updated_records, _ = self.base_manager.safe_execute_query(
+                # Use safe_execute_read_query for validation
+                updated_records = self.base_manager.safe_execute_read_query(
                     updated_entity_query,
                     {"name": entity_name}
                 )
@@ -199,6 +207,10 @@ class EntityManager:
             
             return self.get_entity(entity_name)
             
+        except ValueError as e:
+            error_msg = f"Query validation error: {str(e)}"
+            self.logger.error(error_msg)
+            return dict_to_json({"error": error_msg})
         except Exception as e:
             error_msg = f"Error updating entity: {str(e)}"
             self.logger.error(error_msg)
@@ -230,7 +242,8 @@ class EntityManager:
             RETURN count(e) as deleted_count
             """
             
-            records, _ = self.base_manager.safe_execute_query(
+            # Use safe_execute_write_query for validation
+            records = self.base_manager.safe_execute_write_query(
                 delete_query,
                 {"name": entity_name}
             )
@@ -244,6 +257,10 @@ class EntityManager:
             else:
                 return dict_to_json({"status": "success", "message": f"Entity '{entity_name}' not found"})
             
+        except ValueError as e:
+            error_msg = f"Query validation error: {str(e)}"
+            self.logger.error(error_msg)
+            return dict_to_json({"error": error_msg})
         except Exception as e:
             error_msg = f"Error deleting entity: {str(e)}"
             self.logger.error(error_msg)
@@ -264,7 +281,8 @@ class EntityManager:
             RETURN e
             """
             
-            self.base_manager.safe_execute_query(
+            # Use safe_execute_write_query for validation
+            self.base_manager.safe_execute_write_query(
                 query,
                 {"name": name, "entity_type": entity_type}
             )
@@ -292,7 +310,8 @@ class EntityManager:
             RETURN o
             """
             
-            self.base_manager.safe_execute_query(
+            # Use safe_execute_write_query for validation
+            self.base_manager.safe_execute_write_query(
                 query,
                 {"entity_name": entity_name, "content": observation_content}
             )
@@ -318,7 +337,8 @@ class EntityManager:
             SET e.embedding = $embedding
             """
             
-            self.base_manager.safe_execute_query(
+            # Use safe_execute_write_query for validation
+            self.base_manager.safe_execute_write_query(
                 query,
                 {"name": entity_name, "embedding": embedding}
             )
@@ -339,7 +359,8 @@ class EntityManager:
             RETURN o.content as content
             """
             
-            records, _ = self.base_manager.safe_execute_query(
+            # Use safe_execute_read_query for validation
+            records = self.base_manager.safe_execute_read_query(
                 query,
                 {"name": entity_name}
             )
@@ -369,7 +390,8 @@ class EntityManager:
             DELETE r, o
             """
             
-            self.base_manager.safe_execute_query(
+            # Use safe_execute_write_query for validation
+            self.base_manager.safe_execute_write_query(
                 delete_query,
                 {"name": entity_name}
             )
@@ -384,11 +406,30 @@ class EntityManager:
     def _convert_to_dict(self, entity: Any) -> Dict[str, Any]:
         """Convert an entity object to a dictionary."""
         if isinstance(entity, dict):
+            # Verify all values are serializable
+            for key, value in entity.items():
+                if isinstance(value, (list, tuple)):
+                    # Check items in lists/tuples
+                    for item in value:
+                        if not self._is_serializable(item):
+                            raise ValueError(f"Entity has non-serializable value in list for '{key}': {type(item)}")
+                elif not self._is_serializable(value):
+                    raise ValueError(f"Entity has non-serializable value for '{key}': {type(value)}")
             return entity
         
         try:
             # Try to convert to dict if it has __dict__ attribute
-            return entity.__dict__
+            result = entity.__dict__
+            # Verify all values are serializable
+            for key, value in result.items():
+                if isinstance(value, (list, tuple)):
+                    # Check items in lists/tuples
+                    for item in value:
+                        if not self._is_serializable(item):
+                            raise ValueError(f"Entity has non-serializable value in list for '{key}': {type(item)}")
+                elif not self._is_serializable(value):
+                    raise ValueError(f"Entity has non-serializable value for '{key}': {type(value)}")
+            return result
         except (AttributeError, TypeError):
             # If not dict-like, try to get basic attributes
             result = {}
@@ -397,8 +438,26 @@ class EntityManager:
             for attr in ["name", "entityType", "observations"]:
                 try:
                     value = getattr(entity, attr)
+                    if not self._is_serializable(value):
+                        raise ValueError(f"Entity has non-serializable value for '{attr}': {type(value)}")
                     result[attr] = value
                 except (AttributeError, TypeError):
                     pass
             
-            return result 
+            return result
+            
+    def _is_serializable(self, value: Any) -> bool:
+        """Check if a value is serializable for Neo4j."""
+        if value is None:
+            return True
+        # Neo4j accepts these primitive types
+        if isinstance(value, (str, int, float, bool)):
+            return True
+        # Lists and arrays are fine if their items are serializable
+        if isinstance(value, (list, tuple)):
+            return all(self._is_serializable(item) for item in value)
+        # Small dictionaries with serializable values are ok
+        if isinstance(value, dict):
+            return all(isinstance(k, str) and self._is_serializable(v) for k, v in value.items())
+        # Reject anything else
+        return False 

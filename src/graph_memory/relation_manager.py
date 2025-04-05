@@ -120,34 +120,40 @@ class RelationManager:
                    properties(r) as properties
             """
             
-            records, _ = self.base_manager.safe_execute_query(
-                query,
-                params
-            )
-            
-            relations = []
-            if records:
-                for record in records:
-                    # Extract relationship data
-                    from_entity = record.get("from_entity")
-                    relation_type = record.get("relation_type")
-                    to_entity = record.get("to_entity")
-                    properties = record.get("properties", {})
-                    
-                    # Create relation object
-                    relation = {
-                        "from": from_entity,
-                        "to": to_entity,
-                        "relationType": relation_type
-                    }
-                    
-                    # Add additional properties
-                    if properties:
-                        relation.update(properties)
-                    
-                    relations.append(relation)
-            
-            return dict_to_json({"relations": relations})
+            try:
+                # Use safe_execute_read_query for validation
+                records = self.base_manager.safe_execute_read_query(
+                    query,
+                    params
+                )
+                
+                relations = []
+                if records:
+                    for record in records:
+                        # Extract relationship data
+                        from_entity = record.get("from_entity")
+                        relation_type = record.get("relation_type")
+                        to_entity = record.get("to_entity")
+                        properties = record.get("properties", {})
+                        
+                        # Create relation object
+                        relation = {
+                            "from": from_entity,
+                            "to": to_entity,
+                            "relationType": relation_type
+                        }
+                        
+                        # Add additional properties
+                        if properties:
+                            relation.update(properties)
+                        
+                        relations.append(relation)
+                
+                return dict_to_json({"relations": relations})
+            except ValueError as e:
+                error_msg = f"Query validation error: {str(e)}"
+                self.logger.error(error_msg)
+                return dict_to_json({"error": error_msg})
             
         except Exception as e:
             error_msg = f"Error retrieving relations: {str(e)}"
@@ -171,89 +177,91 @@ class RelationManager:
             self.base_manager.ensure_initialized()
             
             # Check if relationship exists
-            query = """
-            MATCH (e1:Entity {name: $from_entity})-[r:$relation_type]->(e2:Entity {name: $to_entity})
+            query = f"""
+            MATCH (e1:Entity {{name: $from_entity}})-[r:{relation_type}]->(e2:Entity {{name: $to_entity}})
             RETURN r
             """
             
-            # Convert relation_type to a parameter for safe_execute_query
+            # Parameters for the query
             params = {
                 "from_entity": from_entity,
-                "to_entity": to_entity,
-                "relation_type": relation_type
+                "to_entity": to_entity
             }
             
-            # Manually prepare the query with the relation type
-            prepared_query = query.replace("$relation_type", relation_type)
-            
-            records, _ = self.base_manager.safe_execute_query(
-                prepared_query,
-                {k: v for k, v in params.items() if k != "relation_type"}
-            )
-            
-            if not records or len(records) == 0:
-                return dict_to_json({
-                    "error": f"Relationship from '{from_entity}' to '{to_entity}' with type '{relation_type}' not found"
-                })
-            
-            # Build update query with dynamic property updates
-            update_set_clauses = []
-            update_params = {
-                "from_entity": from_entity,
-                "to_entity": to_entity,
-            }
-            
-            for key, value in updates.items():
-                update_set_clauses.append(f"r.{key} = ${key}")
-                update_params[key] = value
-            
-            if update_set_clauses:
-                update_query = f"""
-                MATCH (e1:Entity {{name: $from_entity}})-[r:{relation_type}]->(e2:Entity {{name: $to_entity}})
-                SET {', '.join(update_set_clauses)}
-                RETURN r
-                """
-                
-                self.base_manager.safe_execute_query(
-                    update_query,
-                    update_params
+            try:
+                # Use safe_execute_read_query for validation
+                records = self.base_manager.safe_execute_read_query(
+                    query,
+                    params
                 )
-            
-            # Get updated relationship
-            get_updated_query = f"""
-            MATCH (e1:Entity {{name: $from_entity}})-[r:{relation_type}]->(e2:Entity {{name: $to_entity}})
-            RETURN e1.name as from_entity, TYPE(r) as relation_type, e2.name as to_entity, 
-                   properties(r) as properties
-            """
-            
-            updated_records, _ = self.base_manager.safe_execute_query(
-                get_updated_query,
-                {"from_entity": from_entity, "to_entity": to_entity}
-            )
-            
-            if updated_records and len(updated_records) > 0:
-                record = updated_records[0]
                 
-                # Create relation object
-                relation = {
-                    "from": record.get("from_entity"),
-                    "to": record.get("to_entity"),
-                    "relationType": record.get("relation_type")
+                if not records or len(records) == 0:
+                    return dict_to_json({
+                        "error": f"Relationship from '{from_entity}' to '{to_entity}' with type '{relation_type}' not found"
+                    })
+                
+                # Build update query with dynamic property updates
+                update_set_clauses = []
+                update_params = {
+                    "from_entity": from_entity,
+                    "to_entity": to_entity,
                 }
                 
-                # Add additional properties
-                properties = record.get("properties", {})
-                if properties:
-                    relation.update(properties)
+                for key, value in updates.items():
+                    update_set_clauses.append(f"r.{key} = ${key}")
+                    update_params[key] = value
                 
-                return dict_to_json({"relation": relation})
-            
-            return dict_to_json({
-                "error": f"Failed to retrieve updated relationship"
-            })
+                if update_set_clauses:
+                    update_query = f"""
+                    MATCH (e1:Entity {{name: $from_entity}})-[r:{relation_type}]->(e2:Entity {{name: $to_entity}})
+                    SET {', '.join(update_set_clauses)}
+                    RETURN r
+                    """
+                    
+                    # Use safe_execute_write_query for validation
+                    self.base_manager.safe_execute_write_query(
+                        update_query,
+                        update_params
+                    )
+                
+                # Get updated relationship
+                get_updated_query = f"""
+                MATCH (e1:Entity {{name: $from_entity}})-[r:{relation_type}]->(e2:Entity {{name: $to_entity}})
+                RETURN e1.name as from_entity, TYPE(r) as relation_type, e2.name as to_entity, 
+                       properties(r) as properties
+                """
+                
+                # Use safe_execute_read_query for validation
+                updated_records = self.base_manager.safe_execute_read_query(
+                    get_updated_query,
+                    {"from_entity": from_entity, "to_entity": to_entity}
+                )
+                
+                if updated_records and len(updated_records) > 0:
+                    record = updated_records[0]
+                    
+                    # Create relation object
+                    relation = {
+                        "from": record.get("from_entity"),
+                        "to": record.get("to_entity"),
+                        "relationType": record.get("relation_type")
+                    }
+                    
+                    # Add additional properties
+                    properties = record.get("properties", {})
+                    if properties:
+                        relation.update(properties)
+                    
+                    return dict_to_json({"relation": relation})
+                
+                return dict_to_json({"error": "Failed to get updated relationship"})
+            except ValueError as e:
+                error_msg = f"Query validation error: {str(e)}"
+                self.logger.error(error_msg)
+                return dict_to_json({"error": error_msg})
             
         except Exception as e:
-            error_msg = f"Error updating relationship: {str(e)}"
+            error_msg = f"Error updating relation: {str(e)}"
             self.logger.error(error_msg)
             return dict_to_json({"error": error_msg})
     
@@ -272,124 +280,161 @@ class RelationManager:
         try:
             self.base_manager.ensure_initialized()
             
-            # Delete relationship
+            # Delete relation query
             delete_query = f"""
             MATCH (e1:Entity {{name: $from_entity}})-[r:{relation_type}]->(e2:Entity {{name: $to_entity}})
             DELETE r
             RETURN count(r) as deleted_count
             """
             
-            records, _ = self.base_manager.safe_execute_query(
-                delete_query,
-                {"from_entity": from_entity, "to_entity": to_entity}
-            )
+            # Parameters for the query
+            params = {
+                "from_entity": from_entity,
+                "to_entity": to_entity
+            }
             
-            deleted_count = 0
-            if records and len(records) > 0:
-                deleted_count = records[0].get("deleted_count", 0)
-            
-            if deleted_count > 0:
-                return dict_to_json({
-                    "status": "success", 
-                    "message": f"Relationship from '{from_entity}' to '{to_entity}' with type '{relation_type}' deleted"
-                })
-            else:
-                return dict_to_json({
-                    "status": "success", 
-                    "message": f"Relationship from '{from_entity}' to '{to_entity}' with type '{relation_type}' not found"
-                })
+            try:
+                # Use safe_execute_write_query for validation
+                records = self.base_manager.safe_execute_write_query(
+                    delete_query,
+                    params
+                )
+                
+                deleted_count = 0
+                if records and len(records) > 0:
+                    deleted_count = records[0].get("deleted_count", 0)
+                
+                if deleted_count > 0:
+                    return dict_to_json({
+                        "status": "success", 
+                        "message": f"Relationship from '{from_entity}' to '{to_entity}' with type '{relation_type}' deleted"
+                    })
+                else:
+                    return dict_to_json({
+                        "status": "success", 
+                        "message": f"Relationship from '{from_entity}' to '{to_entity}' with type '{relation_type}' not found"
+                    })
+            except ValueError as e:
+                error_msg = f"Query validation error: {str(e)}"
+                self.logger.error(error_msg)
+                return dict_to_json({"error": error_msg})
             
         except Exception as e:
-            error_msg = f"Error deleting relationship: {str(e)}"
+            error_msg = f"Error deleting relation: {str(e)}"
             self.logger.error(error_msg)
             return dict_to_json({"error": error_msg})
     
     def _create_relation_in_neo4j(self, from_entity: str, to_entity: str, relation_type: str, 
                                 properties: Optional[Dict[str, Any]] = None) -> None:
-        """
-        Create a relationship directly in Neo4j.
-        
-        Args:
-            from_entity: The source entity name
-            to_entity: The target entity name
-            relation_type: The type of the relationship
-            properties: Optional dictionary of relationship properties
-        """
+        """Create a relationship directly in Neo4j."""
         if not self.base_manager.neo4j_driver:
             self.logger.debug("Neo4j driver not initialized, skipping relation creation")
             return
         
         try:
-            # Check if entities exist
-            check_query = """
-            MATCH (e1:Entity {name: $from_entity})
-            MATCH (e2:Entity {name: $to_entity})
-            RETURN e1, e2
-            """
-            
-            records, _ = self.base_manager.safe_execute_query(
-                check_query,
-                {"from_entity": from_entity, "to_entity": to_entity}
-            )
-            
-            if not records or len(records) == 0:
-                raise ValueError(f"One or both entities '{from_entity}' and '{to_entity}' do not exist")
-            
-            # Build property string if properties exist
-            property_string = ""
-            params = {"from_entity": from_entity, "to_entity": to_entity}
-            
-            if properties:
-                property_parts = []
+            # Create basic query
+            if properties and len(properties) > 0:
+                # Build property string for query
+                property_clauses = []
+                params = {
+                    "from_entity": from_entity,
+                    "to_entity": to_entity
+                }
+                
                 for key, value in properties.items():
-                    property_parts.append(f"{key}: ${key}")
+                    property_clauses.append(f"{key}: ${key}")
                     params[key] = value
                 
-                if property_parts:
-                    property_string = f" {{ {', '.join(property_parts)} }}"
-            
-            # Create relationship
-            create_query = f"""
-            MATCH (e1:Entity {{name: $from_entity}})
-            MATCH (e2:Entity {{name: $to_entity}})
-            MERGE (e1)-[r:{relation_type}{property_string}]->(e2)
-            RETURN r
-            """
-            
-            self.base_manager.safe_execute_query(
-                create_query,
-                params
-            )
-            
+                # Create relation with properties
+                query = f"""
+                MATCH (e1:Entity {{name: $from_entity}}), (e2:Entity {{name: $to_entity}})
+                MERGE (e1)-[r:{relation_type} {{{', '.join(property_clauses)}}}]->(e2)
+                RETURN r
+                """
+                
+                # Use safe_execute_write_query for validation
+                self.base_manager.safe_execute_write_query(
+                    query,
+                    params
+                )
+            else:
+                # Create relation without properties
+                query = f"""
+                MATCH (e1:Entity {{name: $from_entity}}), (e2:Entity {{name: $to_entity}})
+                MERGE (e1)-[r:{relation_type}]->(e2)
+                RETURN r
+                """
+                
+                # Use safe_execute_write_query for validation
+                self.base_manager.safe_execute_write_query(
+                    query,
+                    {"from_entity": from_entity, "to_entity": to_entity}
+                )
+                
+            self.logger.debug(f"Created relation in Neo4j: {from_entity} -[{relation_type}]-> {to_entity}")
+                
+        except ValueError as e:
+            self.logger.error(f"Query validation error: {str(e)}")
+            raise
         except Exception as e:
-            self.logger.error(f"Error creating relationship in Neo4j: {str(e)}")
+            self.logger.error(f"Error creating relation in Neo4j: {str(e)}")
             raise
     
     def _convert_to_dict(self, relation: Any) -> Dict[str, Any]:
         """Convert a relation object to a dictionary."""
         if isinstance(relation, dict):
+            # Verify all values are serializable
+            for key, value in relation.items():
+                if isinstance(value, (list, tuple)):
+                    # Check items in lists/tuples
+                    for item in value:
+                        if not self._is_serializable(item):
+                            raise ValueError(f"Relation has non-serializable value in list for '{key}': {type(item)}")
+                elif not self._is_serializable(value):
+                    raise ValueError(f"Relation has non-serializable value for '{key}': {type(value)}")
             return relation
         
         try:
             # Try to convert to dict if it has __dict__ attribute
-            return relation.__dict__
+            result = relation.__dict__
+            # Verify all values are serializable
+            for key, value in result.items():
+                if isinstance(value, (list, tuple)):
+                    # Check items in lists/tuples
+                    for item in value:
+                        if not self._is_serializable(item):
+                            raise ValueError(f"Relation has non-serializable value in list for '{key}': {type(item)}")
+                elif not self._is_serializable(value):
+                    raise ValueError(f"Relation has non-serializable value for '{key}': {type(value)}")
+            return result
         except (AttributeError, TypeError):
             # If not dict-like, try to get basic attributes
             result = {}
             
             # Common attributes to try
-            for attr in ["from", "to", "relationType", "type"]:
+            for attr in ["from", "from_entity", "to", "to_entity", "relationType", "type"]:
                 try:
                     value = getattr(relation, attr)
-                    if attr == "type":
-                        result["relationType"] = value
-                    else:
-                        result[attr] = value
+                    if not self._is_serializable(value):
+                        raise ValueError(f"Relation has non-serializable value for '{attr}': {type(value)}")
+                    result[attr] = value
                 except (AttributeError, TypeError):
                     pass
             
-            # Handle "from" attribute which is a reserved word in Python
-            if hasattr(relation, "from_entity"):
-                result["from"] = relation.from_entity
+            return result
             
-            return result 
+    def _is_serializable(self, value: Any) -> bool:
+        """Check if a value is serializable for Neo4j."""
+        if value is None:
+            return True
+        # Neo4j accepts these primitive types
+        if isinstance(value, (str, int, float, bool)):
+            return True
+        # Lists and arrays are fine if their items are serializable
+        if isinstance(value, (list, tuple)):
+            return all(self._is_serializable(item) for item in value)
+        # Small dictionaries with serializable values are ok
+        if isinstance(value, dict):
+            return all(isinstance(k, str) and self._is_serializable(v) for k, v in value.items())
+        # Reject anything else
+        return False 
