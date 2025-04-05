@@ -1,6 +1,7 @@
 from typing import Any, Dict, List, Optional, Union
 import time
 import json
+import logging
 from datetime import datetime, timezone
 
 from src.utils import dict_to_json, generate_id
@@ -20,7 +21,7 @@ class EvolutionTracker:
             base_manager: Base manager for graph operations
         """
         self.base_manager = base_manager
-        self.logger = base_manager.logger
+        self.logger = logging.getLogger(__name__)
     
     def get_knowledge_evolution(self, entity_name: Optional[str] = None, 
                              lesson_type: Optional[str] = None,
@@ -165,8 +166,8 @@ class EvolutionTracker:
             # Complete query
             query = "\n".join(query_parts)
             
-            # Execute query
-            records, _ = self.base_manager.safe_execute_query(
+            # Execute query using safe_execute_read_query (read-only operation)
+            records = self.base_manager.safe_execute_read_query(
                 query,
                 params
             )
@@ -249,12 +250,25 @@ class EvolutionTracker:
                             })
                     
                     # Sort timeline by timestamp
-                    sorted_timeline = sorted(timeline, key=lambda t: t.get("timestamp", 0))
-                    lesson_data["timeline"] = sorted_timeline
+                    timeline.sort(key=lambda x: x.get("timestamp", 0))
+                    
+                    # Add to lesson data
+                    lesson_data["timeline"] = timeline
                     
                     results.append(lesson_data)
             
-            return dict_to_json({"lessons": results})
+            # Format the final response
+            return dict_to_json({
+                "lessons": results,
+                "count": len(results),
+                "filters": {
+                    "entity_name": entity_name,
+                    "lesson_type": lesson_type,
+                    "start_date": start_date,
+                    "end_date": end_date,
+                    "include_superseded": include_superseded
+                }
+            })
                 
         except Exception as e:
             error_msg = f"Error retrieving knowledge evolution: {str(e)}"
@@ -263,101 +277,84 @@ class EvolutionTracker:
     
     def get_confidence_evolution(self, entity_name: str) -> str:
         """
-        Track how confidence has evolved for a lesson over time.
+        Track how confidence in knowledge has changed over time.
         
         Args:
-            entity_name: Name of the lesson entity
+            entity_name: Name of the entity to track
             
         Returns:
-            JSON string with the confidence evolution data
+            JSON string with confidence evolution data
         """
         try:
             self.base_manager.ensure_initialized()
             
-            # Get the lesson and its version history
-            query = """
-            MATCH (l:Entity {name: $entity_name, domain: 'lesson'})
-            OPTIONAL MATCH path = (l)-[:SUPERSEDES*0..]->(old:Entity)
-            WITH l, old, length(path) as distance
-            RETURN l.name as lesson_name,
-                   old.version as version,
-                   old.created as timestamp,
-                   old.confidence as confidence,
-                   old.status as status
-            ORDER BY old.created
+            # First verify entity exists
+            entity_query = """
+            MATCH (e:Entity {name: $name})
+            WHERE e.domain = 'lesson'
+            RETURN e
             """
             
-            records, _ = self.base_manager.safe_execute_query(
-                query,
-                {"entity_name": entity_name}
+            # Execute query using safe_execute_read_query (read-only operation)
+            entity_records = self.base_manager.safe_execute_read_query(
+                entity_query,
+                {"name": entity_name}
             )
             
-            if not records or len(records) == 0:
-                return dict_to_json({"error": f"Lesson '{entity_name}' not found"})
+            if not entity_records or len(entity_records) == 0:
+                return dict_to_json({"error": f"Entity '{entity_name}' not found"})
             
-            # Process confidence data points
+            # Get the entity and all previous versions
+            query = """
+            MATCH (e:Entity {name: $name})
+            WHERE e.domain = 'lesson'
+            OPTIONAL MATCH path = (e)-[:SUPERSEDES*0..]->(old:Entity)
+            RETURN old.id as id,
+                   old.name as name,
+                   old.version as version,
+                   old.created as created,
+                   old.confidence as confidence,
+                   old.status as status,
+                   length(path) as distance
+            ORDER BY old.created DESC
+            """
+            
+            # Execute query using safe_execute_read_query (read-only operation)
+            records = self.base_manager.safe_execute_read_query(
+                query,
+                {"name": entity_name}
+            )
+            
+            if not records:
+                return dict_to_json({
+                    "entity": entity_name,
+                    "message": "No version history found",
+                    "confidence_data": []
+                })
+            
+            # Process confidence data
             confidence_data = []
             for record in records:
-                timestamp = record.get("timestamp")
                 confidence = record.get("confidence")
-                version = record.get("version")
-                status = record.get("status")
-                
-                if timestamp is not None and confidence is not None:
-                    data_point = {
-                        "timestamp": timestamp,
-                        "confidence": confidence
-                    }
-                    
-                    if version:
-                        data_point["version"] = version
-                    
-                    if status:
-                        data_point["status"] = status
-                    
-                    confidence_data.append(data_point)
+                if confidence is not None:
+                    confidence_data.append({
+                        "id": record.get("id"),
+                        "version": record.get("version"),
+                        "timestamp": record.get("created"),
+                        "confidence": confidence,
+                        "status": record.get("status")
+                    })
             
-            # Get application events that may have affected confidence
-            application_query = """
-            MATCH (l:Entity {name: $entity_name, domain: 'lesson'})-[r:APPLIED_TO]->(target)
-            RETURN target.name as target,
-                   r.applied_date as timestamp,
-                   r.success_score as success_score
-            ORDER BY r.applied_date
-            """
+            # Sort by timestamp
+            confidence_data.sort(key=lambda x: x.get("timestamp", 0))
             
-            application_records, _ = self.base_manager.safe_execute_query(
-                application_query,
-                {"entity_name": entity_name}
-            )
-            
-            # Process application events
-            application_events = []
-            if application_records:
-                for record in application_records:
-                    timestamp = record.get("timestamp")
-                    success_score = record.get("success_score")
-                    target = record.get("target")
-                    
-                    if timestamp is not None:
-                        event = {
-                            "timestamp": timestamp,
-                            "type": "APPLICATION",
-                            "target": target
-                        }
-                        
-                        if success_score is not None:
-                            event["success_score"] = success_score
-                        
-                        application_events.append(event)
-            
-            # Calculate trends
+            # Calculate confidence trend
             trend_data = self._calculate_confidence_trend(confidence_data)
             
+            # Format response
             return dict_to_json({
-                "lesson": entity_name,
-                "confidence_history": confidence_data,
-                "application_events": application_events,
+                "entity": entity_name,
+                "confidence_data": confidence_data,
                 "trend": trend_data
             })
                 
@@ -368,117 +365,125 @@ class EvolutionTracker:
     
     def get_lesson_application_impact(self, entity_name: str) -> str:
         """
-        Analyze the impact of lesson applications on success metrics.
+        Analyze the impact of lesson application over time.
         
         Args:
-            entity_name: Name of the lesson entity
+            entity_name: Name of the entity to analyze
             
         Returns:
-            JSON string with application impact analysis
+            JSON string with application impact data
         """
         try:
             self.base_manager.ensure_initialized()
             
-            # Get all application events for the lesson
-            query = """
-            MATCH (l:Entity {name: $entity_name, domain: 'lesson'})-[r:APPLIED_TO]->(target)
-            RETURN target.name as target,
-                   r.applied_date as timestamp,
-                   r.success_score as success_score,
-                   r.application_notes as notes
-            ORDER BY r.applied_date
+            # Verify entity exists
+            entity_query = """
+            MATCH (e:Entity {name: $name})
+            WHERE e.domain = 'lesson'
+            RETURN e
             """
             
-            records, _ = self.base_manager.safe_execute_query(
+            # Execute query using safe_execute_read_query (read-only operation)
+            entity_records = self.base_manager.safe_execute_read_query(
+                entity_query,
+                {"name": entity_name}
+            )
+            
+            if not entity_records or len(entity_records) == 0:
+                return dict_to_json({"error": f"Entity '{entity_name}' not found"})
+            
+            # Get application data
+            query = """
+            MATCH (e:Entity {name: $name})-[r:APPLIED_TO]->(target)
+            RETURN target.name as target,
+                   target.entityType as target_type,
+                   r.applied_date as date,
+                   r.success_score as success_score,
+                   r.application_notes as notes,
+                   r.properties as properties
+            ORDER BY r.applied_date DESC
+            """
+            
+            # Execute query using safe_execute_read_query (read-only operation)
+            records = self.base_manager.safe_execute_read_query(
                 query,
-                {"entity_name": entity_name}
+                {"name": entity_name}
             )
             
             if not records:
                 return dict_to_json({
-                    "lesson": entity_name,
-                    "application_count": 0,
-                    "message": "No application events found for this lesson"
+                    "entity": entity_name,
+                    "message": "No application history found",
+                    "applications": []
                 })
             
             # Process application data
             applications = []
-            success_scores = []
-            targets = set()
-            
             for record in records:
-                timestamp = record.get("timestamp")
-                success_score = record.get("success_score")
-                target = record.get("target")
-                notes = record.get("notes")
-                
-                application = {
-                    "timestamp": timestamp,
-                    "target": target
-                }
-                
-                if success_score is not None:
-                    application["success_score"] = success_score
-                    success_scores.append(success_score)
-                
-                if notes:
-                    application["notes"] = notes
-                
-                applications.append(application)
-                
-                if target:
-                    targets.add(target)
+                applications.append({
+                    "target": record.get("target"),
+                    "target_type": record.get("target_type"),
+                    "date": record.get("date"),
+                    "success_score": record.get("success_score"),
+                    "notes": record.get("notes"),
+                    "properties": record.get("properties", {})
+                })
             
-            # Calculate metrics
+            # Calculate statistics
             application_count = len(applications)
-            unique_target_count = len(targets)
+            success_scores = [app.get("success_score", 0) for app in applications if app.get("success_score") is not None]
             
-            avg_success = None
-            min_success = None
-            max_success = None
+            avg_success = sum(success_scores) / len(success_scores) if success_scores else 0
             
-            if success_scores:
-                avg_success = sum(success_scores) / len(success_scores)
-                min_success = min(success_scores)
-                max_success = max(success_scores)
+            # Group by target type
+            target_types = {}
+            for app in applications:
+                target_type = app.get("target_type", "unknown")
+                if target_type not in target_types:
+                    target_types[target_type] = []
+                target_types[target_type].append(app)
             
-            # Calculate timeline stats
-            if application_count >= 2:
-                first_application = min(applications, key=lambda a: a.get("timestamp", 0))
-                last_application = max(applications, key=lambda a: a.get("timestamp", 0))
+            # Calculate success trends over time
+            success_trend = []
+            if applications:
+                # Sort by date
+                sorted_apps = sorted(applications, key=lambda x: x.get("date", 0))
                 
-                time_span = last_application.get("timestamp", 0) - first_application.get("timestamp", 0)
-                days_span = time_span / (24 * 60 * 60) if time_span > 0 else 0
+                # Group by month/year
+                time_periods = {}
+                for app in sorted_apps:
+                    date = app.get("date")
+                    if date:
+                        dt = datetime.fromtimestamp(date)
+                        period = f"{dt.year}-{dt.month:02d}"
+                        
+                        if period not in time_periods:
+                            time_periods[period] = []
+                        
+                        time_periods[period].append(app)
                 
-                timeline_stats = {
-                    "first_application": first_application.get("timestamp"),
-                    "last_application": last_application.get("timestamp"),
-                    "days_span": round(days_span, 1),
-                    "applications_per_day": round(application_count / days_span, 2) if days_span > 0 else 0
-                }
-            else:
-                timeline_stats = {
-                    "first_application": applications[0].get("timestamp") if applications else None,
-                    "applications_per_day": 0
-                }
+                # Calculate average success by period
+                for period, period_apps in time_periods.items():
+                    period_scores = [app.get("success_score", 0) for app in period_apps if app.get("success_score") is not None]
+                    period_avg = sum(period_scores) / len(period_scores) if period_scores else 0
+                    
+                    success_trend.append({
+                        "period": period,
+                        "count": len(period_apps),
+                        "avg_success": period_avg
+                    })
             
-            # Return analysis results
-            result = {
-                "lesson": entity_name,
+            # Format response
+            return dict_to_json({
+                "entity": entity_name,
                 "application_count": application_count,
-                "unique_target_count": unique_target_count,
-                "timeline_stats": timeline_stats,
+                "average_success": avg_success,
+                "target_type_distribution": {
+                    type_name: len(apps) for type_name, apps in target_types.items()
+                },
+                "success_trend": success_trend,
                 "applications": applications
-            }
-            
-            if success_scores:
-                result["success_metrics"] = {
-                    "average_success": avg_success,
-                    "min_success": min_success,
-                    "max_success": max_success
-                }
-            
-            return dict_to_json(result)
+            })
                 
         except Exception as e:
             error_msg = f"Error analyzing lesson application impact: {str(e)}"
@@ -487,130 +492,159 @@ class EvolutionTracker:
     
     def get_learning_progression(self, entity_name: str, max_depth: int = 3) -> str:
         """
-        Analyze the learning progression path for a lesson.
+        Analyze the learning progression by tracking superseded versions.
         
         Args:
-            entity_name: Name of the lesson entity
-            max_depth: Maximum depth for the progression graph
+            entity_name: Name of the entity to analyze
+            max_depth: Maximum depth of superseded relationships to traverse
             
         Returns:
-            JSON string with the learning progression graph
+            JSON string with learning progression data
         """
         try:
             self.base_manager.ensure_initialized()
             
-            # Validate depth
+            # Validate max_depth
             if max_depth < 1:
                 max_depth = 1
-            elif max_depth > 5:  # Cap maximum depth
-                max_depth = 5
+            elif max_depth > 10:
+                max_depth = 10
             
-            # Get lesson relationships in both directions
+            # First get the entity
+            entity_query = """
+            MATCH (e:Entity {name: $name})
+            WHERE e.domain = 'lesson'
+            RETURN e
+            """
+            
+            # Execute query using safe_execute_read_query (read-only operation)
+            entity_records = self.base_manager.safe_execute_read_query(
+                entity_query,
+                {"name": entity_name}
+            )
+            
+            if not entity_records or len(entity_records) == 0:
+                return dict_to_json({"error": f"Entity '{entity_name}' not found"})
+            
+            # Get the progression chain both forward and backward
             query = f"""
-            MATCH (l:Entity {{name: $entity_name, domain: 'lesson'}})
-            
-            // Get BUILDS_ON chain (things this lesson builds on)
-            OPTIONAL MATCH path1 = (l)-[:BUILDS_ON*1..{max_depth}]->(prerequisite:Entity)
-            
-            // Get lessons that build on this
-            OPTIONAL MATCH path2 = (l)<-[:BUILDS_ON*1..{max_depth}]-(dependent:Entity)
-            
-            // Collect all nodes
-            WITH l, 
-                 collect(distinct prerequisite) as prerequisites,
-                 collect(distinct dependent) as dependents
-            
-            // Return nodes and their relationships
-            RETURN l as lesson,
-                   prerequisites,
-                   dependents
+            MATCH (e:Entity {{name: $name}})
+            WHERE e.domain = 'lesson'
+            OPTIONAL MATCH forward_path = (e)-[:SUPERSEDES*1..{max_depth}]->(old:Entity)
+            OPTIONAL MATCH backward_path = (new:Entity)-[:SUPERSEDES*1..{max_depth}]->(e)
+            WITH e, forward_path, backward_path, old, new
+            RETURN DISTINCT e.id as id,
+                   e.name as name,
+                   e.created as created,
+                   e.confidence as confidence,
+                   e.entityType as type,
+                   e.status as status,
+                   COLLECT(DISTINCT {{
+                     id: old.id,
+                     name: old.name,
+                     created: old.created,
+                     confidence: old.confidence,
+                     status: old.status,
+                     relationship: 'SUPERSEDED_BY',
+                     direction: 'old'
+                   }}) as older_versions,
+                   COLLECT(DISTINCT {{
+                     id: new.id,
+                     name: new.name,
+                     created: new.created,
+                     confidence: new.confidence,
+                     status: new.status,
+                     relationship: 'SUPERSEDES',
+                     direction: 'new'
+                   }}) as newer_versions
             """
             
-            records, _ = self.base_manager.safe_execute_query(
+            # Execute query using safe_execute_read_query (read-only operation)
+            records = self.base_manager.safe_execute_read_query(
                 query,
-                {"entity_name": entity_name}
+                {"name": entity_name}
             )
             
-            if not records or len(records) == 0:
-                return dict_to_json({"error": f"Lesson '{entity_name}' not found"})
+            if not records:
+                return dict_to_json({
+                    "entity": entity_name,
+                    "message": "No progression data found",
+                    "progression": []
+                })
             
-            # Process results
-            record = records[0]
-            lesson = record.get("lesson")
-            prerequisites = record.get("prerequisites", [])
-            dependents = record.get("dependents", [])
+            # Process progression data
+            entity_data = {}
+            older_versions = []
+            newer_versions = []
             
-            # Extract lesson data
-            lesson_data = dict(lesson.items()) if lesson else {}
-            
-            # Extract prerequisite data
-            prerequisite_data = []
-            for prereq in prerequisites:
-                if prereq:
-                    prereq_dict = dict(prereq.items())
-                    prerequisite_data.append(prereq_dict)
-            
-            # Extract dependent data
-            dependent_data = []
-            for dep in dependents:
-                if dep:
-                    dep_dict = dict(dep.items())
-                    dependent_data.append(dep_dict)
-            
-            # Get relationship details
-            relationship_query = f"""
-            MATCH (l:Entity {{name: $entity_name, domain: 'lesson'}})
-            
-            // Get direct BUILDS_ON relationships
-            OPTIONAL MATCH (l)-[r1:BUILDS_ON]->(direct:Entity)
-            
-            // Get direct relationships from dependents
-            OPTIONAL MATCH (l)<-[r2:BUILDS_ON]-(direct_dep:Entity)
-            
-            // Return relationship data
-            RETURN collect({{from: l.name, to: direct.name, type: 'BUILDS_ON', properties: properties(r1)}}) as outgoing,
-                   collect({{from: direct_dep.name, to: l.name, type: 'BUILDS_ON', properties: properties(r2)}}) as incoming
-            """
-            
-            relationship_records, _ = self.base_manager.safe_execute_query(
-                relationship_query,
-                {"entity_name": entity_name}
-            )
-            
-            relationships = []
-            if relationship_records and len(relationship_records) > 0:
-                outgoing = relationship_records[0].get("outgoing", [])
-                incoming = relationship_records[0].get("incoming", [])
+            for record in records:
+                # Core entity
+                entity_data = {
+                    "id": record.get("id"),
+                    "name": record.get("name"),
+                    "created": record.get("created"),
+                    "confidence": record.get("confidence"),
+                    "type": record.get("type"),
+                    "status": record.get("status"),
+                    "is_current": True
+                }
                 
-                for rel in outgoing + incoming:
-                    if rel.get("from") and rel.get("to"):
-                        relationships.append(rel)
+                # Process older versions
+                record_older = record.get("older_versions", [])
+                for version in record_older:
+                    if version.get("id"):  # Ensure empty nodes are filtered out
+                        older_versions.append(version)
+                
+                # Process newer versions
+                record_newer = record.get("newer_versions", [])
+                for version in record_newer:
+                    if version.get("id"):  # Ensure empty nodes are filtered out
+                        newer_versions.append(version)
             
-            # Create network graph
-            nodes = []
+            # Sort by created date
+            older_versions.sort(key=lambda x: x.get("created", 0), reverse=True)
+            newer_versions.sort(key=lambda x: x.get("created", 0))
             
-            # Add central lesson
-            if lesson_data:
-                lesson_data["role"] = "central"
-                nodes.append(lesson_data)
+            # Build the complete progression chain
+            progression = []
             
-            # Add prerequisites
-            for prereq in prerequisite_data:
-                prereq["role"] = "prerequisite"
-                nodes.append(prereq)
+            # Add newer versions (from newest to target)
+            for version in newer_versions:
+                version["is_current"] = False
+                progression.append(version)
             
-            # Add dependents
-            for dep in dependent_data:
-                dep["role"] = "dependent"
-                nodes.append(dep)
+            # Add current version
+            progression.append(entity_data)
             
-            # Return progression graph
+            # Add older versions (from target to oldest)
+            for version in older_versions:
+                version["is_current"] = False
+                progression.append(version)
+            
+            # Get improvement metrics
+            confidence_values = [v.get("confidence", 0) for v in progression if v.get("confidence") is not None]
+            confidence_change = 0
+            confidence_growth = 0
+            
+            if len(confidence_values) >= 2:
+                first_confidence = confidence_values[-1]  # Oldest version
+                current_confidence = entity_data.get("confidence", 0)
+                confidence_change = current_confidence - first_confidence
+                confidence_growth = (current_confidence / first_confidence - 1) * 100 if first_confidence > 0 else 0
+            
+            # Format response
             return dict_to_json({
-                "lesson": entity_name,
-                "nodes": nodes,
-                "relationships": relationships,
-                "prerequisite_count": len(prerequisite_data),
-                "dependent_count": len(dependent_data)
+                "entity": entity_name,
+                "current": entity_data,
+                "progression": progression,
+                "version_count": len(progression),
+                "newer_versions": len(newer_versions),
+                "older_versions": len(older_versions),
+                "metrics": {
+                    "confidence_change": confidence_change,
+                    "confidence_growth_percentage": confidence_growth,
+                    "progression_duration_days": self._calculate_duration_days(progression)
+                }
             })
                 
         except Exception as e:
@@ -619,48 +653,96 @@ class EvolutionTracker:
             return dict_to_json({"error": error_msg})
     
     def _truncate_content(self, content: str, max_length: int = 50) -> str:
-        """Truncate content to specified length with ellipsis."""
-        if not content:
-            return ""
+        """
+        Truncate content to specified length.
         
-        if len(content) <= max_length:
+        Args:
+            content: Text content to truncate
+            max_length: Maximum length
+            
+        Returns:
+            Truncated content with ellipsis if needed
+        """
+        if not content or len(content) <= max_length:
             return content
-        
         return content[:max_length] + "..."
     
     def _calculate_confidence_trend(self, confidence_data: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Calculate trend information from confidence history."""
+        """
+        Calculate trend metrics for confidence evolution.
+        
+        Args:
+            confidence_data: List of confidence data points
+            
+        Returns:
+            Dict with trend metrics
+        """
         if not confidence_data or len(confidence_data) < 2:
-            return {"trend": "static", "change": 0.0}
+            return {
+                "direction": "stable",
+                "change": 0,
+                "growth_percentage": 0
+            }
         
-        # Get first and last confidence values
-        first_point = confidence_data[0]
-        last_point = confidence_data[-1]
+        # Extract confidence values
+        confidence_values = [d.get("confidence", 0) for d in confidence_data if d.get("confidence") is not None]
         
-        first_confidence = first_point.get("confidence", 0.0)
-        last_confidence = last_point.get("confidence", 0.0)
+        if not confidence_values or len(confidence_values) < 2:
+            return {
+                "direction": "stable",
+                "change": 0,
+                "growth_percentage": 0
+            }
         
         # Calculate change
-        confidence_change = last_confidence - first_confidence
+        first_confidence = confidence_values[0]
+        last_confidence = confidence_values[-1]
+        change = last_confidence - first_confidence
         
-        # Determine trend
-        if abs(confidence_change) < 0.05:  # Less than 5% change
-            trend = "static"
-        elif confidence_change > 0:
-            if confidence_change > 0.2:  # More than 20% increase
-                trend = "strong_increase"
-            else:
-                trend = "increase"
+        # Calculate growth percentage
+        growth_percentage = (last_confidence / first_confidence - 1) * 100 if first_confidence > 0 else 0
+        
+        # Determine direction
+        if change > 0.05:
+            direction = "increasing"
+        elif change < -0.05:
+            direction = "decreasing"
         else:
-            if confidence_change < -0.2:  # More than 20% decrease
-                trend = "strong_decrease"
-            else:
-                trend = "decrease"
+            direction = "stable"
         
         return {
-            "trend": trend,
-            "change": confidence_change,
-            "initial": first_confidence,
-            "current": last_confidence,
-            "time_period": last_point.get("timestamp", 0) - first_point.get("timestamp", 0)
-        } 
+            "direction": direction,
+            "change": change,
+            "growth_percentage": growth_percentage,
+            "initial_confidence": first_confidence,
+            "current_confidence": last_confidence,
+            "data_points": len(confidence_values)
+        }
+    
+    def _calculate_duration_days(self, progression: List[Dict[str, Any]]) -> float:
+        """
+        Calculate the duration of a progression in days.
+        
+        Args:
+            progression: List of versions in the progression
+            
+        Returns:
+            Duration in days
+        """
+        if not progression or len(progression) < 2:
+            return 0
+        
+        # Find oldest and newest timestamps
+        timestamps = [v.get("created", 0) for v in progression if v.get("created") is not None]
+        
+        if not timestamps or len(timestamps) < 2:
+            return 0
+        
+        oldest = min(timestamps)
+        newest = max(timestamps)
+        
+        # Calculate duration in days
+        duration_seconds = newest - oldest
+        duration_days = duration_seconds / (24 * 60 * 60)
+        
+        return duration_days 

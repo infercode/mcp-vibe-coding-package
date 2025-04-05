@@ -2,6 +2,12 @@ import pytest
 from unittest.mock import MagicMock, patch
 import json
 
+def pytest_configure(config):
+    """Configure pytest with custom markers."""
+    config.addinivalue_line(
+        "markers", "integration: mark a test as an integration test that requires component mocks"
+    )
+
 from src.graph_memory.base_manager import BaseManager
 from src.graph_memory import GraphMemoryManager
 from src.graph_memory.entity_manager import EntityManager

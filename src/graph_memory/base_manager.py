@@ -503,7 +503,7 @@ class BaseManager:
             ValueError: If query is invalid or contains destructive operations
         """
         try:
-            # Manually check for destructive operations
+            # Manually check for destructive operations - these patterns already use word boundaries
             destructive_patterns = [
                 r"(?i)\b(CREATE|DELETE|REMOVE|DROP|SET)\b",
                 r"(?i)\b(MERGE|DETACH DELETE)\b",

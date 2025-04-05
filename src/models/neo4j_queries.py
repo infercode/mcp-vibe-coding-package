@@ -9,6 +9,7 @@ enabling type-safe query execution and result handling.
 from typing import Dict, List, Optional, Any, Union, Set, Literal, ClassVar
 from datetime import datetime
 from pydantic import BaseModel, Field, field_validator, model_validator, root_validator
+import re
 
 # --- Neo4j Parameter Types ---
 
@@ -227,8 +228,16 @@ class CypherQuery(BaseModel):
         
         # Check for disallowed operations in read-only mode
         if read_only:
+            # Use regex with word boundaries to check for destructive operations
             for operation in cls.destructive_operations:
-                if operation in query_upper:
+                # Skip special multi-word operations
+                if " " in operation:
+                    if operation in query_upper:
+                        raise ValueError(f"Destructive operation '{operation}' not allowed in read-only mode")
+                    continue
+                
+                # Use word boundary check for single-word operations
+                if re.search(r'\b' + re.escape(operation) + r'\b', query_upper):
                     raise ValueError(f"Destructive operation '{operation}' not allowed in read-only mode")
             
             # Ensure query starts with a read-only operation

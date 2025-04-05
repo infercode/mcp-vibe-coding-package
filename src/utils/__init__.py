@@ -2,33 +2,47 @@
 Utility functions for the MCP Graph Memory system.
 """
 
-import json
-import uuid
-from typing import Any, Dict
+# Import and re-export utility functions to maintain backwards compatibility
+from src.utils.common_utils import (
+    extract_error,
+    generate_id
+)
 
-def dict_to_json(data: Dict[str, Any]) -> str:
-    """
-    Convert a dictionary to a JSON string.
-    
-    Args:
-        data: The dictionary to convert
-        
-    Returns:
-        A JSON string representation of the dictionary
-    """
-    return json.dumps(data, default=str)
+from src.utils.json_utils import (
+    dict_to_json
+)
 
-def generate_id(prefix: str = "") -> str:
-    """
-    Generate a unique ID with an optional prefix.
+from src.utils.neo4j_query_utils import (
+    dump_neo4j_nodes,
+    is_json_serializable,
+    sanitize_query_parameters,
+    validate_query,
+    safe_execute_validated_query,
+    safe_execute_query,
+    create_node_query,
+    create_match_node_query,
+    create_relationship_query,
+    build_match_query
+)
+
+# For backward compatibility and convenience, explicitly define exports
+__all__ = [
+    # Common utils
+    'extract_error',
+    'generate_id',
     
-    Args:
-        prefix: Optional prefix for the ID (e.g., "les" for lesson, "obs" for observation)
+    # JSON utils
+    'dict_to_json',
     
-    Returns:
-        A unique ID string with optional prefix
-    """
-    unique_id = str(uuid.uuid4())
-    if prefix:
-        return f"{prefix}_{unique_id}"
-    return unique_id 
+    # Neo4j utils
+    'dump_neo4j_nodes',
+    'is_json_serializable',
+    'sanitize_query_parameters',
+    'validate_query',
+    'safe_execute_validated_query',
+    'safe_execute_query',
+    'create_node_query',
+    'create_match_node_query',
+    'create_relationship_query',
+    'build_match_query',
+] 

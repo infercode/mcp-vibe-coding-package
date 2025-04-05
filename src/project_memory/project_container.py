@@ -52,7 +52,8 @@ class ProjectContainer:
             RETURN c
             """
             
-            records, _ = self.base_manager.safe_execute_query(
+            # Use safe_execute_read_query for validation (this is a read-only operation)
+            records = self.base_manager.safe_execute_read_query(
                 check_query,
                 {"name": name}
             )
@@ -96,7 +97,8 @@ class ProjectContainer:
             RETURN c
             """
             
-            create_records, _ = self.base_manager.safe_execute_query(
+            # Use safe_execute_write_query for validation (this is a write operation)
+            create_records = self.base_manager.safe_execute_write_query(
                 create_query,
                 {"properties": container_properties}
             )
@@ -140,7 +142,8 @@ class ProjectContainer:
             RETURN c, count(component) as component_count
             """
             
-            records, _ = self.base_manager.safe_execute_query(
+            # Use safe_execute_read_query for validation (this is a read-only operation)
+            records = self.base_manager.safe_execute_read_query(
                 query,
                 {"name": name}
             )
@@ -162,7 +165,8 @@ class ProjectContainer:
             RETURN component.entityType as type, count(component) as count
             """
             
-            domain_records, _ = self.base_manager.safe_execute_query(
+            # Use safe_execute_read_query for validation (this is a read-only operation)
+            domain_records = self.base_manager.safe_execute_read_query(
                 domain_query,
                 {"name": name}
             )
@@ -209,7 +213,8 @@ class ProjectContainer:
             RETURN c
             """
             
-            records, _ = self.base_manager.safe_execute_query(
+            # Use safe_execute_read_query for validation (this is a read-only operation)
+            records = self.base_manager.safe_execute_read_query(
                 check_query,
                 {"name": name}
             )
@@ -246,7 +251,8 @@ class ProjectContainer:
             # Add name to updates for the query
             params = {"name": name, **updates}
             
-            update_records, _ = self.base_manager.safe_execute_query(
+            # Use safe_execute_write_query for validation (this is a write operation)
+            update_records = self.base_manager.safe_execute_write_query(
                 update_query,
                 params
             )
@@ -290,7 +296,7 @@ class ProjectContainer:
             RETURN c
             """
             
-            records, _ = self.base_manager.safe_execute_query(
+            records = self.base_manager.safe_execute_read_query(
                 check_query,
                 {"name": name}
             )
@@ -320,7 +326,7 @@ class ProjectContainer:
                 RETURN count(component) as deleted_count
                 """
                 
-                delete_records, _ = self.base_manager.safe_execute_query(
+                delete_records = self.base_manager.safe_execute_write_query(
                     delete_components_query,
                     {"name": name}
                 )
@@ -335,7 +341,7 @@ class ProjectContainer:
                 DELETE c
                 """
                 
-                self.base_manager.safe_execute_query(
+                self.base_manager.safe_execute_write_query(
                     delete_container_query,
                     {"name": name}
                 )
@@ -352,7 +358,7 @@ class ProjectContainer:
                 RETURN count(component) as component_count
                 """
                 
-                component_records, _ = self.base_manager.safe_execute_query(
+                component_records = self.base_manager.safe_execute_read_query(
                     check_components_query,
                     {"name": name}
                 )
@@ -372,7 +378,7 @@ class ProjectContainer:
                 DELETE c
                 """
                 
-                self.base_manager.safe_execute_query(
+                self.base_manager.safe_execute_write_query(
                     delete_container_query,
                     {"name": name}
                 )
@@ -416,7 +422,7 @@ class ProjectContainer:
             LIMIT $limit
             """
             
-            records, _ = self.base_manager.safe_execute_query(
+            records = self.base_manager.safe_execute_read_query(
                 query,
                 {"limit": limit}
             )
@@ -459,7 +465,7 @@ class ProjectContainer:
             RETURN c
             """
             
-            container_records, _ = self.base_manager.safe_execute_query(
+            container_records = self.base_manager.safe_execute_read_query(
                 container_query,
                 {"container_name": container_name}
             )
@@ -475,7 +481,7 @@ class ProjectContainer:
             RETURN e
             """
             
-            entity_records, _ = self.base_manager.safe_execute_query(
+            entity_records = self.base_manager.safe_execute_read_query(
                 entity_query,
                 {"entity_name": entity_name}
             )
@@ -493,7 +499,7 @@ class ProjectContainer:
             RETURN e
             """
             
-            check_records, _ = self.base_manager.safe_execute_query(
+            check_records = self.base_manager.safe_execute_read_query(
                 check_query,
                 {"container_name": container_name, "entity_name": entity_name}
             )
@@ -512,7 +518,7 @@ class ProjectContainer:
             RETURN e
             """
             
-            add_records, _ = self.base_manager.safe_execute_query(
+            add_records = self.base_manager.safe_execute_write_query(
                 add_query,
                 {"container_name": container_name, "entity_name": entity_name, "timestamp": time.time()}
             )
@@ -554,7 +560,7 @@ class ProjectContainer:
             RETURN r
             """
             
-            check_records, _ = self.base_manager.safe_execute_query(
+            check_records = self.base_manager.safe_execute_read_query(
                 check_query,
                 {"container_name": container_name, "entity_name": entity_name}
             )
@@ -572,7 +578,7 @@ class ProjectContainer:
             DELETE r
             """
             
-            self.base_manager.safe_execute_query(
+            self.base_manager.safe_execute_write_query(
                 remove_query,
                 {"container_name": container_name, "entity_name": entity_name}
             )
@@ -607,7 +613,7 @@ class ProjectContainer:
             RETURN c
             """
             
-            container_records, _ = self.base_manager.safe_execute_query(
+            container_records = self.base_manager.safe_execute_read_query(
                 container_query,
                 {"container_name": container_name}
             )
@@ -638,7 +644,7 @@ class ProjectContainer:
                 
                 params = {"container_name": container_name}
             
-            records, _ = self.base_manager.safe_execute_query(
+            records = self.base_manager.safe_execute_read_query(
                 query,
                 params
             )
@@ -691,7 +697,7 @@ class ProjectContainer:
             RETURN c
             """
             
-            update_records, _ = self.base_manager.safe_execute_query(
+            update_records = self.base_manager.safe_execute_write_query(
                 update_query,
                 {"container_name": container_name, "status": status, "timestamp": time.time()}
             )
@@ -734,7 +740,7 @@ class ProjectContainer:
             RETURN c
             """
             
-            container_records, _ = self.base_manager.safe_execute_query(
+            container_records = self.base_manager.safe_execute_read_query(
                 container_query,
                 {"container_name": container_name}
             )
@@ -754,7 +760,7 @@ class ProjectContainer:
             RETURN e.entityType as type, count(e) as count
             """
             
-            type_records, _ = self.base_manager.safe_execute_query(
+            type_records = self.base_manager.safe_execute_read_query(
                 type_query,
                 {"container_name": container_name}
             )
@@ -777,7 +783,7 @@ class ProjectContainer:
             RETURN type(r) as type, count(r) as count
             """
             
-            rel_records, _ = self.base_manager.safe_execute_query(
+            rel_records = self.base_manager.safe_execute_read_query(
                 rel_query,
                 {"container_name": container_name}
             )
@@ -799,7 +805,7 @@ class ProjectContainer:
             RETURN o.type as type, count(o) as count
             """
             
-            obs_records, _ = self.base_manager.safe_execute_query(
+            obs_records = self.base_manager.safe_execute_read_query(
                 obs_query,
                 {"container_name": container_name}
             )

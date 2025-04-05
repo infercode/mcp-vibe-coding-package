@@ -1,31 +1,40 @@
 #!/usr/bin/env python3
-"""
-Configuration Tools with Pydantic Integration
-
-This module implements MCP tools for configuration management using 
-Pydantic models for validation and serialization.
-"""
-
-import os
 import json
-import uuid
-import copy
 import datetime
-from typing import Dict, Any, Optional, List, Union
+import copy
+from typing import Dict, List, Any, Optional, Callable
 
 from src.logger import get_logger
-from src.models.config.models import (
-    UnifiedConfig, ConfigUpdate, Neo4jConfig, EmbeddingConfig,
-    Neo4jStatus, EmbeddingStatus, MemoryStatus,
-    create_error_response, create_success_response, model_to_json, model_to_dict
-)
+from src.utils import dict_to_json, dump_neo4j_nodes
+from src.graph_memory import GraphMemoryManager
 
 # Initialize logger
 logger = get_logger()
 
-def register_config_tools(server, get_config_manager):
-    """Register configuration tools with the server."""
+class ErrorResponse:
+    @staticmethod
+    def create(message: str, code: str = "internal_error", details: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Create a standardized error response."""
+        response = {
+            "status": "error",
+            "error": {
+                "code": code,
+                "message": message
+            },
+            "timestamp": datetime.datetime.now().isoformat()
+        }
+        if details:
+            response["error"]["details"] = details
+        return response
+
+def register_config_tools(server, get_client_manager):
+    """Register configuration tools with the server.
     
+    Args:
+        server: The MCP server instance
+        get_client_manager: Function to get the client-specific GraphMemoryManager
+    """
+            
     @server.tool()
     async def get_memory_status(client_id: Optional[str] = None) -> str:
         """
@@ -37,10 +46,10 @@ def register_config_tools(server, get_config_manager):
         Returns:
             JSON string with the memory system status
         """
+        # Get the client-specific graph manager
+        graph_manager = get_client_manager(client_id)
+        
         try:
-            # Get the client-specific graph manager
-            graph_manager = get_config_manager(client_id)
-            
             # Get basic information about the memory system
             config = graph_manager.get_current_config()
             
@@ -63,20 +72,10 @@ def register_config_tools(server, get_config_manager):
                 "timestamp": datetime.datetime.now().isoformat()
             }
             
-            # Create a success response
-            success_response = create_success_response(
-                message="Successfully retrieved memory status",
-                data=status
-            )
-            return model_to_json(success_response)
-            
+            return json.dumps(status)
+                
         except Exception as e:
-            logger.error(f"Error getting memory status: {str(e)}", exc_info=True)
-            error_response = create_error_response(
-                message=f"Error getting memory status: {str(e)}",
-                code="status_retrieval_error"
-            )
-            return model_to_json(error_response)
+            return f"ERROR: Failed to get memory status: {str(e)}"
 
     @server.tool()
     async def get_unified_config(project_name: str = "", config_content: str = "") -> str:
@@ -119,31 +118,30 @@ def register_config_tools(server, get_config_manager):
                     client_id = config.get("client_id", None)
                     
                     # Get the client-specific graph manager
-                    graph_manager = get_config_manager(client_id)
+                    graph_manager = get_client_manager(client_id)
                     
                     # Apply the configuration
                     result = graph_manager.apply_client_config(config)
                     
                     # Return success or error message
                     if result["status"] == "success":
-                        success_response = create_success_response(
-                            message="Configuration applied successfully",
-                            data=graph_manager.get_current_config()
-                        )
-                        return model_to_json(success_response)
+                        return json.dumps({
+                            "status": "success",
+                            "message": "Configuration applied successfully",
+                            "config": graph_manager.get_current_config()
+                        })
                     else:
-                        error_response = create_error_response(
-                            message=result["message"],
-                            code="config_application_error"
-                        )
-                        return model_to_json(error_response)
+                        return json.dumps({
+                            "status": "error",
+                            "message": result["message"],
+                            "config": graph_manager.get_current_config()
+                        })
                         
                 except json.JSONDecodeError:
-                    error_response = create_error_response(
-                        message="Invalid JSON configuration provided",
-                        code="invalid_json_error"
-                    )
-                    return model_to_json(error_response)
+                    return json.dumps({
+                        "status": "error",
+                        "message": "Invalid JSON configuration provided"
+                    })
             
             # If no config content was provided, request the client to read the file
             # Format the response using direct instruction format
@@ -173,12 +171,7 @@ def register_config_tools(server, get_config_manager):
             return command_message
                 
         except Exception as e:
-            logger.error(f"Error processing configuration request: {str(e)}", exc_info=True)
-            error_response = create_error_response(
-                message=f"Error processing configuration request: {str(e)}",
-                code="config_request_error"
-            )
-            return model_to_json(error_response)
+            return f"ERROR: Failed to process configuration request: {str(e)}"
             
     @server.tool()
     async def create_unified_config(config: Dict[str, Any]) -> str:
@@ -206,17 +199,13 @@ def register_config_tools(server, get_config_manager):
         try:
             # Extract required fields
             if "project_name" not in config:
-                error_response = create_error_response(
-                    message="Missing required parameter: project_name",
-                    code="missing_parameter_error"
-                )
-                return model_to_json(error_response)
+                return "ERROR: Missing required parameter: project_name"
                 
             project_name = config["project_name"]
             client_id = config.get("client_id", "default-client")
             
             # Get default Neo4j connection info from manager
-            graph_manager = get_config_manager(client_id)
+            graph_manager = get_client_manager(client_id)
             
             # Create unified configuration
             timestamp = config.get("timestamp", datetime.datetime.now().isoformat())
@@ -301,7 +290,7 @@ def register_config_tools(server, get_config_manager):
                 )
                 
                 if warning_message:
-                    return f"WARNING: Applied configuration with warnings: {warning_message}\n\n{command_message}"
+                    return f"WARNING: Applied configuration with warnings: {warning_message}\n\n"
                 return command_message
             else:
                 # In STDIO mode, write the file directly
@@ -309,32 +298,24 @@ def register_config_tools(server, get_config_manager):
                     with open(file_name, 'w') as f:
                         f.write(config_json)
                     
+                    response = {
+                        "status": "success" if not warning_message else "warning",
+                        "message": f"Configuration created and saved to {file_name}",
+                        "config": unified_config
+                    }
+                    
                     if warning_message:
-                        warning_response = create_success_response(
-                            message=f"Configuration created and saved to {file_name} with warnings: {warning_message}",
-                            data=unified_config
-                        )
-                        return model_to_json(warning_response)
-                    else:
-                        success_response = create_success_response(
-                            message=f"Configuration created and saved to {file_name}",
-                            data=unified_config
-                        )
-                        return model_to_json(success_response)
+                        response["warning"] = warning_message
+                        
+                    return json.dumps(response)
                 except Exception as e:
-                    error_response = create_error_response(
-                        message=f"Failed to save configuration file: {str(e)}",
-                        code="file_save_error"
-                    )
-                    return model_to_json(error_response)
+                    return json.dumps({
+                        "status": "error",
+                        "message": f"Failed to save configuration file: {str(e)}"
+                    })
                 
         except Exception as e:
-            logger.error(f"Error creating configuration: {str(e)}", exc_info=True)
-            error_response = create_error_response(
-                message=f"Error creating configuration: {str(e)}",
-                code="config_creation_error"
-            )
-            return model_to_json(error_response)
+            return f"ERROR: Failed to create configuration: {str(e)}"
 
     @server.tool()
     async def update_unified_config(project_name: str, updates: Dict[str, Any], config_content: str = "") -> str:
@@ -359,10 +340,10 @@ def register_config_tools(server, get_config_manager):
         """
         try:
             # Get the client-specific graph manager
-            graph_manager = get_config_manager(None)  # We'll extract client_id from config
+            graph_manager = get_client_manager(None)  # We'll extract client_id from config
             
             # Detect mode and get current config
-            is_sse_mode = getattr(graph_manager, "_is_sse_mode", True)  # Default to SSE mode if attribute not found
+            is_sse_mode = graph_manager._is_sse_mode
             
             # Define the file name
             file_name = f"mcp_unified_config_{project_name}.json"
@@ -404,35 +385,31 @@ def register_config_tools(server, get_config_manager):
                 try:
                     current_config = json.loads(config_content)
                 except json.JSONDecodeError:
-                    error_response = create_error_response(
-                        message="Invalid JSON configuration provided",
-                        code="invalid_json_error"
-                    )
-                    return model_to_json(error_response)
+                    return json.dumps({
+                        "status": "error",
+                        "message": "Invalid JSON configuration provided"
+                    })
             elif not is_sse_mode:
                 # In STDIO mode, read config from disk
                 try:
                     with open(file_name, 'r') as f:
                         current_config = json.load(f)
                 except FileNotFoundError:
-                    error_response = create_error_response(
-                        message=f"Configuration file not found: {file_name}",
-                        code="file_not_found_error"
-                    )
-                    return model_to_json(error_response)
+                    return json.dumps({
+                        "status": "error",
+                        "message": f"Configuration file not found: {file_name}"
+                    })
                 except json.JSONDecodeError:
-                    error_response = create_error_response(
-                        message=f"Invalid JSON in configuration file: {file_name}",
-                        code="invalid_json_error"
-                    )
-                    return model_to_json(error_response)
+                    return json.dumps({
+                        "status": "error",
+                        "message": f"Invalid JSON in configuration file: {file_name}"
+                    })
             else:
                 # This should not happen as we would have returned earlier
-                error_response = create_error_response(
-                    message="Missing configuration content in SSE mode",
-                    code="missing_content_error"
-                )
-                return model_to_json(error_response)
+                return json.dumps({
+                    "status": "error",
+                    "message": "Missing configuration content in SSE mode"
+                })
             
             # Process config update - convert from coroutine to regular result
             result = await process_config_update(project_name, current_config, updates, graph_manager)
@@ -465,27 +442,24 @@ def register_config_tools(server, get_config_manager):
                         with open(file_name, 'w') as f:
                             json.dump(result["config"], f, indent=2)
                             
-                        success_response = create_success_response(
-                            message=f"Configuration updated and saved to {file_name}",
-                            data=result["config"]
-                        )
-                        return model_to_json(success_response)
+                        return json.dumps({
+                "status": "success",
+                            "message": f"Configuration updated and saved to {file_name}",
+                            "config": result["config"]
+                        })
                     except Exception as e:
-                        error_response = create_error_response(
-                            message=f"Failed to save configuration file: {str(e)}",
-                            code="file_save_error"
-                        )
-                        return model_to_json(error_response)
+                        return json.dumps({
+                            "status": "error",
+                            "message": f"Failed to save configuration file: {str(e)}"
+                        })
             else:
                 return json.dumps(result)
         
         except Exception as e:
-            logger.error(f"Error updating configuration: {str(e)}", exc_info=True)
-            error_response = create_error_response(
-                message=f"Error updating configuration: {str(e)}",
-                code="config_update_error"
-            )
-            return model_to_json(error_response)
+            return json.dumps({
+                "status": "error",
+                "message": f"Failed to update configuration: {str(e)}"
+            })
 
     @server.tool()
     async def process_config_update(project_name: str, current_config: Dict[str, Any], updates: Dict[str, Any], graph_manager: Optional[Any] = None) -> Dict[str, Any]:
@@ -550,17 +524,7 @@ def register_config_tools(server, get_config_manager):
             }
             
         except Exception as e:
-            logger.error(f"Error processing configuration update: {str(e)}", exc_info=True)
             return {
                 "status": "error",
                 "message": f"Failed to process configuration update: {str(e)}"
-            }
-
-    # Return the registered tools
-    return {
-        "get_memory_status": get_memory_status,
-        "get_unified_config": get_unified_config,
-        "create_unified_config": create_unified_config,
-        "update_unified_config": update_unified_config,
-        "process_config_update": process_config_update
-    }
+            } 

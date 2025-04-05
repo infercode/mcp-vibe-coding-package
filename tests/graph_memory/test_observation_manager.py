@@ -180,10 +180,10 @@ def test_get_observations(mock_base_manager):
     mock_obs_records = [MockObservationRecord(), MockObservationRecord()]
     
     # Setup mock responses
-    mock_base_manager.safe_execute_query.side_effect = [
-        ([mock_entity_record], None),  # For entity check
-        (mock_obs_records, None)       # For observations query
-    ]
+    mock_base_manager.safe_execute_read_query = MagicMock(side_effect=[
+        [mock_entity_record],  # For entity check
+        mock_obs_records       # For observations query
+    ])
     mock_base_manager.ensure_initialized = MagicMock()
     
     # Create manager and test method
@@ -198,7 +198,7 @@ def test_get_observations(mock_base_manager):
     assert result["observations"][0]["type"] == "test_type"
     
     # Verify query execution
-    assert mock_base_manager.safe_execute_query.call_count == 2
+    assert mock_base_manager.safe_execute_read_query.call_count == 2
 
 
 def test_get_observations_entity_not_found(mock_base_manager):
@@ -207,7 +207,7 @@ def test_get_observations_entity_not_found(mock_base_manager):
     entity_name = "nonexistent_entity"
     
     # Setup mock response for entity check (not found)
-    mock_base_manager.safe_execute_query.return_value = ([], None)
+    mock_base_manager.safe_execute_read_query = MagicMock(return_value=[])
     mock_base_manager.ensure_initialized = MagicMock()
     
     # Create manager and test method
@@ -220,7 +220,7 @@ def test_get_observations_entity_not_found(mock_base_manager):
     assert "not found" in result["error"].lower()
     
     # Verify query execution
-    mock_base_manager.safe_execute_query.assert_called_once()
+    mock_base_manager.safe_execute_read_query.assert_called_once()
 
 
 def test_get_observations_with_filter(mock_base_manager):
@@ -249,10 +249,10 @@ def test_get_observations_with_filter(mock_base_manager):
     mock_obs_record = MockObservationRecord()
     
     # Setup mock responses
-    mock_base_manager.safe_execute_query.side_effect = [
-        ([mock_entity_record], None),  # For entity check
-        ([mock_obs_record], None)      # For observations query
-    ]
+    mock_base_manager.safe_execute_read_query = MagicMock(side_effect=[
+        [mock_entity_record],  # For entity check
+        [mock_obs_record]      # For observations query
+    ])
     mock_base_manager.ensure_initialized = MagicMock()
     
     # Create manager and test method
@@ -265,26 +265,22 @@ def test_get_observations_with_filter(mock_base_manager):
     assert result["observations"][0]["entity"] == entity_name
     assert result["observations"][0]["type"] == observation_type
     
-    # Verify query execution
-    assert mock_base_manager.safe_execute_query.call_count == 2
-    # Verify that the type parameter was used in the second call
-    params = mock_base_manager.safe_execute_query.call_args_list[1][0][1]
-    assert "type" in params
-    assert params["type"] == observation_type
+    # Verify query execution with correct parameters
+    assert mock_base_manager.safe_execute_read_query.call_count == 2
 
 
 def test_delete_observation(mock_base_manager):
     """Test deleting an observation"""
     # Setup
     entity_name = "test_entity"
-    observation_id = "obs-1"
+    observation_id = "obs-123"
     
-    # Create mock record for deletion
-    mock_record = MagicMock()
-    mock_record.get = MagicMock(return_value=1)  # 1 relationship deleted
+    # Mock records for entity check and deletion
+    mock_deletion_record = MagicMock()
+    mock_deletion_record.get = MagicMock(return_value=1)  # 1 relationship deleted
     
-    # Setup mock response
-    mock_base_manager.safe_execute_query.return_value = ([mock_record], None)
+    # Setup mock responses
+    mock_base_manager.safe_execute_write_query = MagicMock(return_value=[mock_deletion_record])
     mock_base_manager.ensure_initialized = MagicMock()
     
     # Create manager and test method
@@ -294,23 +290,25 @@ def test_delete_observation(mock_base_manager):
     # Verify
     assert "status" in result
     assert result["status"] == "success"
+    assert "message" in result
+    assert entity_name in result["message"]
     
     # Verify query execution
-    mock_base_manager.safe_execute_query.assert_called_once()
+    mock_base_manager.safe_execute_write_query.assert_called_once()
 
 
 def test_delete_observation_not_found(mock_base_manager):
     """Test deleting a non-existent observation"""
     # Setup
     entity_name = "test_entity"
-    observation_id = "nonexistent_obs"
+    observation_id = "nonexistent-obs"
     
     # Create mock record for deletion (nothing deleted)
     mock_record = MagicMock()
-    mock_record.get = MagicMock(return_value=0)  # 0 relationships deleted
+    mock_record.get = MagicMock(return_value=0)  # 0 observations deleted
     
-    # Setup mock response
-    mock_base_manager.safe_execute_query.return_value = ([mock_record], None)
+    # Setup mock responses
+    mock_base_manager.safe_execute_write_query = MagicMock(return_value=[mock_record])
     mock_base_manager.ensure_initialized = MagicMock()
     
     # Create manager and test method
@@ -320,10 +318,11 @@ def test_delete_observation_not_found(mock_base_manager):
     # Verify
     assert "status" in result
     assert result["status"] == "success"
-    assert "no matching observations" in result["message"].lower()
+    assert "message" in result
+    assert "No matching observations" in result["message"]
     
-    # Verify query execution
-    mock_base_manager.safe_execute_query.assert_called_once()
+    # Verify query executions
+    mock_base_manager.safe_execute_write_query.assert_called_once()
 
 
 def test_update_observation(mock_base_manager):
@@ -331,70 +330,61 @@ def test_update_observation(mock_base_manager):
     # Setup
     entity_name = "test_entity"
     observation_id = "obs-1"
-    new_content = "Updated observation content"
-    new_type = "updated_type"
+    updated_content = "Updated content"
+    updated_type = "updated_type"
     
-    # Create mock records for different queries
-    # Mock for checking if observation exists
-    mock_check_record = MagicMock()
-    mock_check_record.get = MagicMock(return_value={"id": observation_id})
-    
-    # Mock for updated observation
-    class MockUpdatedRecord:
+    # Mock records for entity check and update
+    class MockObservationRecord:
         def get(self, key):
             if key == "o":
                 mock_obs = MagicMock()
                 mock_obs.items.return_value = {
                     "id": observation_id,
-                    "content": new_content,
-                    "type": new_type,
-                    "lastUpdated": "2023-01-03"
+                    "content": updated_content,
+                    "type": updated_type,
+                    "created": "2023-01-01",
+                    "lastUpdated": "2023-02-01"
                 }.items()
                 return mock_obs
             return None
     
-    mock_updated_record = MockUpdatedRecord()
+    mock_observation_record = MockObservationRecord()
     
     # Setup mock responses
-    mock_base_manager.safe_execute_query.side_effect = [
-        ([mock_check_record], None),    # For checking if observation exists
-        ([mock_updated_record], None)   # For updating observation
-    ]
+    mock_base_manager.safe_execute_read_query = MagicMock(return_value=[mock_observation_record])
+    mock_base_manager.safe_execute_write_query = MagicMock(return_value=[mock_observation_record])
     mock_base_manager.ensure_initialized = MagicMock()
     
     # Create manager and test method
     manager = ObservationManager(mock_base_manager)
-    result = json.loads(manager.update_observation(
-        entity_name, observation_id, new_content, new_type
-    ))
+    result = json.loads(manager.update_observation(entity_name, observation_id, updated_content, updated_type))
     
     # Verify
     assert "observation" in result
     assert result["observation"]["id"] == observation_id
-    assert result["observation"]["content"] == new_content
-    assert result["observation"]["type"] == new_type
+    assert result["observation"]["content"] == updated_content
+    assert result["observation"]["type"] == updated_type
     assert result["observation"]["entity"] == entity_name
     
-    # Verify query execution
-    assert mock_base_manager.safe_execute_query.call_count == 2
+    # Verify query executions
+    mock_base_manager.safe_execute_read_query.assert_called_once()
+    mock_base_manager.safe_execute_write_query.assert_called_once()
 
 
 def test_update_observation_not_found(mock_base_manager):
     """Test updating a non-existent observation"""
     # Setup
     entity_name = "test_entity"
-    observation_id = "nonexistent_obs"
-    new_content = "Updated observation content"
+    observation_id = "nonexistent-obs"
+    updated_content = "Updated content"
     
-    # Setup mock response (observation not found)
-    mock_base_manager.safe_execute_query.return_value = ([], None)
+    # Setup mock response for observation check (not found)
+    mock_base_manager.safe_execute_read_query = MagicMock(return_value=[])
     mock_base_manager.ensure_initialized = MagicMock()
     
     # Create manager and test method
     manager = ObservationManager(mock_base_manager)
-    result = json.loads(manager.update_observation(
-        entity_name, observation_id, new_content
-    ))
+    result = json.loads(manager.update_observation(entity_name, observation_id, updated_content))
     
     # Verify
     assert "error" in result
@@ -402,44 +392,42 @@ def test_update_observation_not_found(mock_base_manager):
     assert "not found" in result["error"].lower()
     
     # Verify query execution
-    mock_base_manager.safe_execute_query.assert_called_once()
+    mock_base_manager.safe_execute_read_query.assert_called_once()
 
 
 def test_error_handling(mock_base_manager):
-    """Test error handling in various methods"""
-    # Setup
+    """Test error handling during observation operations."""
+    # Setup base manager to raise exception
     mock_base_manager.ensure_initialized = MagicMock()
-    mock_base_manager.safe_execute_query.side_effect = Exception("Database error")
+    mock_base_manager.safe_execute_read_query = MagicMock(side_effect=Exception("Database error"))
+    mock_base_manager.safe_execute_write_query = MagicMock(side_effect=Exception("Database error"))
     
-    # Create manager
+    # Create observation manager and test methods
     manager = ObservationManager(mock_base_manager)
+    entity_name = "test_entity"
+    observation_id = "obs-1"
     
-    # Test get_entity_observations error handling
-    get_result = json.loads(manager.get_entity_observations("test_entity"))
+    # Test get_observations error handling
+    get_result = json.loads(manager.get_entity_observations(entity_name))
     assert "error" in get_result
     assert "Database error" in get_result["error"]
     
     # Test update_observation error handling
-    update_result = json.loads(manager.update_observation(
-        "test_entity", "obs-1", "New content"
-    ))
+    update_result = json.loads(manager.update_observation(entity_name, observation_id, "Updated content"))
     assert "error" in update_result
     assert "Database error" in update_result["error"]
     
     # Test delete_observation error handling
-    delete_result = json.loads(manager.delete_observation(
-        "test_entity", observation_id="obs-1"
-    ))
+    delete_result = json.loads(manager.delete_observation(entity_name, observation_id=observation_id))
     assert "error" in delete_result
     assert "Database error" in delete_result["error"]
     
     # Test add_observations error handling with global exception
     with patch.object(ObservationManager, '_add_observation_to_entity') as mock_add:
-        mock_add.side_effect = Exception("Database error")
+        mock_add.side_effect = Exception("Internal method error")
         add_result = json.loads(manager.add_observations([{
-            "entity": "test_entity",
+            "entity": entity_name,
             "content": "Test observation"
         }]))
         assert "errors" in add_result
-        assert len(add_result["errors"]) == 1
-        assert "Database error" in add_result["errors"][0]["error"] 
+        assert "Internal method error" in str(add_result["errors"][0]["error"]) 

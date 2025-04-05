@@ -1,6 +1,7 @@
 from typing import Any, Dict, List, Optional, Union
 
 from src.utils import dict_to_json, generate_id
+from src.utils.neo4j_query_utils import sanitize_query_parameters
 from src.graph_memory.base_manager import BaseManager
 
 class ObservationManager:
@@ -100,51 +101,64 @@ class ObservationManager:
             RETURN e
             """
             
-            entity_records, _ = self.base_manager.safe_execute_query(
-                entity_query,
-                {"name": entity_name}
-            )
-            
-            if not entity_records or len(entity_records) == 0:
-                return dict_to_json({"error": f"Entity '{entity_name}' not found"})
-            
-            # Build query based on filters
-            query_parts = ["MATCH (e:Entity {name: $name})-[:HAS_OBSERVATION]->(o:Observation)"]
-            params = {"name": entity_name}
-            
-            if observation_type:
-                query_parts.append("WHERE o.type = $type")
-                params["type"] = observation_type
-            
-            query = f"""
-            {query_parts[0]}
-            {' '.join(query_parts[1:])}
-            RETURN o.id as id, o.content as content, o.type as type, 
-                   o.created as created, o.lastUpdated as lastUpdated
-            """
-            
-            records, _ = self.base_manager.safe_execute_query(
-                query,
-                params
-            )
-            
-            observations = []
-            if records:
-                for record in records:
-                    # Extract observation data
-                    observation = {
-                        "entity": entity_name,
-                        "content": record.get("content")
-                    }
-                    
-                    # Add optional fields if they exist
-                    for field in ["id", "type", "created", "lastUpdated"]:
-                        if record.get(field):
-                            observation[field] = record.get(field)
-                    
-                    observations.append(observation)
-            
-            return dict_to_json({"observations": observations})
+            try:
+                # Sanitize parameters
+                sanitized_params = sanitize_query_parameters({"name": entity_name})
+                
+                # Execute read query with validation
+                entity_records = self.base_manager.safe_execute_read_query(
+                    entity_query,
+                    sanitized_params
+                )
+                
+                if not entity_records or len(entity_records) == 0:
+                    return dict_to_json({"error": f"Entity '{entity_name}' not found"})
+                
+                # Build query based on filters
+                query_parts = ["MATCH (e:Entity {name: $name})-[:HAS_OBSERVATION]->(o:Observation)"]
+                params = {"name": entity_name}
+                
+                if observation_type:
+                    query_parts.append("WHERE o.type = $type")
+                    params["type"] = observation_type
+                
+                query = f"""
+                {query_parts[0]}
+                {' '.join(query_parts[1:])}
+                RETURN o.id as id, o.content as content, o.type as type, 
+                       o.created as created, o.lastUpdated as lastUpdated
+                """
+                
+                # Sanitize query parameters
+                sanitized_query_params = sanitize_query_parameters(params)
+                
+                # Execute read query with validation
+                records = self.base_manager.safe_execute_read_query(
+                    query,
+                    sanitized_query_params
+                )
+                
+                observations = []
+                if records:
+                    for record in records:
+                        # Extract observation data
+                        observation = {
+                            "entity": entity_name,
+                            "content": record.get("content")
+                        }
+                        
+                        # Add optional fields if they exist
+                        for field in ["id", "type", "created", "lastUpdated"]:
+                            if record.get(field):
+                                observation[field] = record.get(field)
+                        
+                        observations.append(observation)
+                
+                return dict_to_json({"observations": observations})
+            except ValueError as e:
+                error_msg = f"Query validation error: {str(e)}"
+                self.logger.error(error_msg)
+                return dict_to_json({"error": error_msg})
             
         except Exception as e:
             error_msg = f"Error retrieving observations: {str(e)}"
@@ -168,58 +182,75 @@ class ObservationManager:
         try:
             self.base_manager.ensure_initialized()
             
-            # Check if observation exists
-            query = """
-            MATCH (e:Entity {name: $entity_name})-[:HAS_OBSERVATION]->(o:Observation {id: $observation_id})
-            RETURN o
-            """
-            
-            records, _ = self.base_manager.safe_execute_query(
-                query,
-                {"entity_name": entity_name, "observation_id": observation_id}
-            )
-            
-            if not records or len(records) == 0:
-                return dict_to_json({
-                    "error": f"Observation with ID '{observation_id}' not found for entity '{entity_name}'"
-                })
-            
-            # Build update query
-            update_parts = ["o.content = $content", "o.lastUpdated = datetime()"]
-            params = {
-                "entity_name": entity_name,
-                "observation_id": observation_id,
-                "content": content
-            }
-            
-            if observation_type:
-                update_parts.append("o.type = $type")
-                params["type"] = observation_type
-            
-            update_query = f"""
-            MATCH (e:Entity {{name: $entity_name}})-[:HAS_OBSERVATION]->(o:Observation {{id: $observation_id}})
-            SET {', '.join(update_parts)}
-            RETURN o
-            """
-            
-            updated_records, _ = self.base_manager.safe_execute_query(
-                update_query,
-                params
-            )
-            
-            if updated_records and len(updated_records) > 0:
-                observation = updated_records[0].get("o")
+            try:
+                # Check if observation exists
+                query = """
+                MATCH (e:Entity {name: $entity_name})-[:HAS_OBSERVATION]->(o:Observation {id: $observation_id})
+                RETURN o
+                """
                 
-                if observation:
-                    # Convert to dictionary
-                    observation_dict = dict(observation.items())
-                    observation_dict["entity"] = entity_name
+                # Sanitize parameters
+                check_params = {
+                    "entity_name": entity_name, 
+                    "observation_id": observation_id
+                }
+                sanitized_check_params = sanitize_query_parameters(check_params)
+                
+                # Execute read query with validation
+                records = self.base_manager.safe_execute_read_query(
+                    query,
+                    sanitized_check_params
+                )
+                
+                if not records or len(records) == 0:
+                    return dict_to_json({
+                        "error": f"Observation with ID '{observation_id}' not found for entity '{entity_name}'"
+                    })
+                
+                # Build update query
+                update_parts = ["o.content = $content", "o.lastUpdated = datetime()"]
+                params = {
+                    "entity_name": entity_name,
+                    "observation_id": observation_id,
+                    "content": content
+                }
+                
+                if observation_type:
+                    update_parts.append("o.type = $type")
+                    params["type"] = observation_type
+                
+                update_query = f"""
+                MATCH (e:Entity {{name: $entity_name}})-[:HAS_OBSERVATION]->(o:Observation {{id: $observation_id}})
+                SET {', '.join(update_parts)}
+                RETURN o
+                """
+                
+                # Sanitize parameters
+                sanitized_params = sanitize_query_parameters(params)
+                
+                # Execute write query with validation
+                updated_records = self.base_manager.safe_execute_write_query(
+                    update_query,
+                    sanitized_params
+                )
+                
+                if updated_records and len(updated_records) > 0:
+                    observation = updated_records[0].get("o")
                     
-                    return dict_to_json({"observation": observation_dict})
-            
-            return dict_to_json({
-                "error": f"Failed to update observation"
-            })
+                    if observation:
+                        # Convert to dictionary
+                        observation_dict = dict(observation.items())
+                        observation_dict["entity"] = entity_name
+                        
+                        return dict_to_json({"observation": observation_dict})
+                
+                return dict_to_json({
+                    "error": f"Failed to update observation"
+                })
+            except ValueError as e:
+                error_msg = f"Query validation error: {str(e)}"
+                self.logger.error(error_msg)
+                return dict_to_json({"error": error_msg})
             
         except Exception as e:
             error_msg = f"Error updating observation: {str(e)}"
@@ -245,42 +276,51 @@ class ObservationManager:
             if not observation_content and not observation_id:
                 return dict_to_json({"error": "Must provide either observation_content or observation_id"})
             
-            # Build delete query
-            query_parts = ["MATCH (e:Entity {name: $entity_name})-[r:HAS_OBSERVATION]->(o:Observation)"]
-            params = {"entity_name": entity_name}
-            
-            if observation_id:
-                query_parts.append("WHERE o.id = $observation_id")
-                params["observation_id"] = observation_id
-            elif observation_content:
-                query_parts.append("WHERE o.content = $content")
-                params["content"] = observation_content
-            
-            delete_query = f"""
-            {' '.join(query_parts)}
-            DELETE r, o
-            RETURN count(o) as deleted_count
-            """
-            
-            records, _ = self.base_manager.safe_execute_query(
-                delete_query,
-                params
-            )
-            
-            deleted_count = 0
-            if records and len(records) > 0:
-                deleted_count = records[0].get("deleted_count", 0)
-            
-            if deleted_count > 0:
-                return dict_to_json({
-                    "status": "success", 
-                    "message": f"Deleted {deleted_count} observation(s) from entity '{entity_name}'"
-                })
-            else:
-                return dict_to_json({
-                    "status": "success", 
-                    "message": f"No matching observations found for entity '{entity_name}'"
-                })
+            try:
+                # Build delete query
+                query_parts = ["MATCH (e:Entity {name: $entity_name})-[r:HAS_OBSERVATION]->(o:Observation)"]
+                params = {"entity_name": entity_name}
+                
+                if observation_id:
+                    query_parts.append("WHERE o.id = $observation_id")
+                    params["observation_id"] = observation_id
+                elif observation_content:
+                    query_parts.append("WHERE o.content = $content")
+                    params["content"] = observation_content
+                
+                delete_query = f"""
+                {' '.join(query_parts)}
+                DELETE r, o
+                RETURN count(o) as deleted_count
+                """
+                
+                # Sanitize parameters
+                sanitized_params = sanitize_query_parameters(params)
+                
+                # Execute write query with validation
+                records = self.base_manager.safe_execute_write_query(
+                    delete_query,
+                    sanitized_params
+                )
+                
+                deleted_count = 0
+                if records and len(records) > 0:
+                    deleted_count = records[0].get("deleted_count", 0)
+                
+                if deleted_count > 0:
+                    return dict_to_json({
+                        "status": "success", 
+                        "message": f"Deleted {deleted_count} observation(s) from entity '{entity_name}'"
+                    })
+                else:
+                    return dict_to_json({
+                        "status": "success", 
+                        "message": f"No matching observations found for entity '{entity_name}'"
+                    })
+            except ValueError as e:
+                error_msg = f"Query validation error: {str(e)}"
+                self.logger.error(error_msg)
+                return dict_to_json({"error": error_msg})
             
         except Exception as e:
             error_msg = f"Error deleting observation: {str(e)}"
@@ -314,9 +354,13 @@ class ObservationManager:
             RETURN e
             """
             
-            entity_records, _ = self.base_manager.safe_execute_query(
+            # Sanitize parameters
+            sanitized_entity_params = sanitize_query_parameters({"name": entity_name})
+            
+            # Execute read query with validation
+            entity_records = self.base_manager.safe_execute_read_query(
                 entity_query,
-                {"name": entity_name}
+                sanitized_entity_params
             )
             
             if not entity_records or len(entity_records) == 0:
@@ -350,13 +394,20 @@ class ObservationManager:
             
             query = "\n".join(query_parts)
             
-            self.base_manager.safe_execute_query(
+            # Sanitize parameters
+            sanitized_params = sanitize_query_parameters(params)
+            
+            # Execute write query with validation
+            self.base_manager.safe_execute_write_query(
                 query,
-                params
+                sanitized_params
             )
             
             return observation_id
             
+        except ValueError as e:
+            self.logger.error(f"Validation error adding observation to entity: {str(e)}")
+            raise
         except Exception as e:
             self.logger.error(f"Error adding observation to entity: {str(e)}")
             raise

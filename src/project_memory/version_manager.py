@@ -1,6 +1,7 @@
 from typing import Any, Dict, List, Optional, Union
 import time
 import json
+import logging
 
 from src.utils import dict_to_json, generate_id
 from src.graph_memory.base_manager import BaseManager
@@ -20,7 +21,7 @@ class VersionManager:
             base_manager: Base manager for graph operations
         """
         self.base_manager = base_manager
-        self.logger = base_manager.logger
+        self.logger = logging.getLogger(__name__)
         self.entity_manager = EntityManager(base_manager)
     
     def create_version(self, 
@@ -59,7 +60,7 @@ class VersionManager:
             RETURN comp
             """
             
-            component_records, _ = self.base_manager.safe_execute_query(
+            component_records = self.base_manager.safe_execute_read_query(
                 component_query,
                 {"container_name": container_name, "domain_name": domain_name, "component_name": component_name}
             )
@@ -81,7 +82,7 @@ class VersionManager:
             RETURN v
             """
             
-            version_records, _ = self.base_manager.safe_execute_query(
+            version_records = self.base_manager.safe_execute_read_query(
                 version_check_query,
                 {"component_id": component_id, "version_number": version_number}
             )
@@ -127,7 +128,7 @@ class VersionManager:
             RETURN v
             """
             
-            create_records, _ = self.base_manager.safe_execute_query(
+            create_records = self.base_manager.safe_execute_write_query(
                 create_query,
                 {"properties": version_entity}
             )
@@ -145,14 +146,14 @@ class VersionManager:
             RETURN v
             """
             
-            link_records, _ = self.base_manager.safe_execute_query(
+            link_records = self.base_manager.safe_execute_write_query(
                 link_query,
                 {"component_id": component_id, "version_id": version_id, "timestamp": timestamp}
             )
             
             if not link_records or len(link_records) == 0:
                 # Attempt to clean up the created entity
-                self.base_manager.safe_execute_query(
+                self.base_manager.safe_execute_write_query(
                     "MATCH (v:Entity {id: $version_id}) DELETE v",
                     {"version_id": version_id}
                 )
@@ -171,7 +172,7 @@ class VersionManager:
             LIMIT 1
             """
             
-            prev_records, _ = self.base_manager.safe_execute_query(
+            prev_records = self.base_manager.safe_execute_read_query(
                 prev_version_query,
                 {"component_id": component_id, "version_id": version_id}
             )
@@ -187,7 +188,7 @@ class VersionManager:
                 CREATE (curr)-[:SUPERSEDES {created: $timestamp}]->(prev)
                 """
                 
-                self.base_manager.safe_execute_query(
+                self.base_manager.safe_execute_write_query(
                     supersedes_query,
                     {"version_id": version_id, "prev_version_id": prev_version_id, "timestamp": timestamp}
                 )
@@ -234,7 +235,7 @@ class VersionManager:
             RETURN comp
             """
             
-            component_records, _ = self.base_manager.safe_execute_query(
+            component_records = self.base_manager.safe_execute_read_query(
                 component_query,
                 {"container_name": container_name, "domain_name": domain_name, "component_name": component_name}
             )
@@ -256,7 +257,7 @@ class VersionManager:
                 RETURN v
                 """
                 
-                version_records, _ = self.base_manager.safe_execute_query(
+                version_records = self.base_manager.safe_execute_read_query(
                     version_query,
                     {"component_id": component_id, "version_number": version_number}
                 )
@@ -279,7 +280,7 @@ class VersionManager:
                 LIMIT 1
                 """
                 
-                latest_records, _ = self.base_manager.safe_execute_query(
+                latest_records = self.base_manager.safe_execute_read_query(
                     latest_query,
                     {"component_id": component_id}
                 )
@@ -331,7 +332,7 @@ class VersionManager:
             RETURN comp
             """
             
-            component_records, _ = self.base_manager.safe_execute_query(
+            component_records = self.base_manager.safe_execute_read_query(
                 component_query,
                 {"container_name": container_name, "domain_name": domain_name, "component_name": component_name}
             )
@@ -353,7 +354,7 @@ class VersionManager:
             LIMIT $limit
             """
             
-            version_records, _ = self.base_manager.safe_execute_query(
+            version_records = self.base_manager.safe_execute_read_query(
                 versions_query,
                 {"component_id": component_id, "limit": limit}
             )
@@ -405,7 +406,7 @@ class VersionManager:
             RETURN comp
             """
             
-            component_records, _ = self.base_manager.safe_execute_query(
+            component_records = self.base_manager.safe_execute_read_query(
                 component_query,
                 {"container_name": container_name, "domain_name": domain_name, "component_name": component_name}
             )
@@ -426,7 +427,7 @@ class VersionManager:
             RETURN v
             """
             
-            latest_records, _ = self.base_manager.safe_execute_query(
+            latest_records = self.base_manager.safe_execute_read_query(
                 latest_query,
                 {"component_id": component_id}
             )
@@ -454,7 +455,7 @@ class VersionManager:
             RETURN v
             """
             
-            history_records, _ = self.base_manager.safe_execute_query(
+            history_records = self.base_manager.safe_execute_read_query(
                 history_query,
                 {"latest_version_id": latest_version_id}
             )
@@ -509,7 +510,7 @@ class VersionManager:
             RETURN comp
             """
             
-            component_records, _ = self.base_manager.safe_execute_query(
+            component_records = self.base_manager.safe_execute_read_query(
                 component_query,
                 {"container_name": container_name, "domain_name": domain_name, "component_name": component_name}
             )
@@ -530,7 +531,7 @@ class VersionManager:
             RETURN v
             """
             
-            version_records, _ = self.base_manager.safe_execute_query(
+            version_records = self.base_manager.safe_execute_read_query(
                 versions_query,
                 {"component_id": component_id, "version1": version1, "version2": version2}
             )
@@ -566,7 +567,7 @@ class VersionManager:
             RETURN length(path) as distance
             """
             
-            path_records, _ = self.base_manager.safe_execute_query(
+            path_records = self.base_manager.safe_execute_read_query(
                 path_query,
                 {"newer_id": newer_version["id"], "older_id": older_version["id"]}
             )
@@ -650,7 +651,7 @@ class VersionManager:
             RETURN comp
             """
             
-            component_records, _ = self.base_manager.safe_execute_query(
+            component_records = self.base_manager.safe_execute_read_query(
                 component_query,
                 {"container_name": container_name, "domain_name": domain_name, "component_name": component_name}
             )
@@ -671,7 +672,7 @@ class VersionManager:
             RETURN v
             """
             
-            version_records, _ = self.base_manager.safe_execute_query(
+            version_records = self.base_manager.safe_execute_read_query(
                 version_query,
                 {"component_id": component_id, "version_number": version_number}
             )
@@ -691,7 +692,7 @@ class VersionManager:
             RETURN t
             """
             
-            tag_records, _ = self.base_manager.safe_execute_query(
+            tag_records = self.base_manager.safe_execute_read_query(
                 tag_check_query,
                 {"version_id": version_id, "tag_name": tag_name}
             )
@@ -723,7 +724,7 @@ class VersionManager:
             RETURN t
             """
             
-            create_records, _ = self.base_manager.safe_execute_query(
+            create_records = self.base_manager.safe_execute_write_query(
                 create_tag_query,
                 {"properties": tag_entity}
             )
@@ -741,14 +742,14 @@ class VersionManager:
             RETURN t
             """
             
-            link_records, _ = self.base_manager.safe_execute_query(
+            link_records = self.base_manager.safe_execute_write_query(
                 link_query,
                 {"version_id": version_id, "tag_id": tag_id, "timestamp": timestamp}
             )
             
             if not link_records or len(link_records) == 0:
                 # Attempt to clean up the created entity
-                self.base_manager.safe_execute_query(
+                self.base_manager.safe_execute_write_query(
                     "MATCH (t:Entity {id: $tag_id}) DELETE t",
                     {"tag_id": tag_id}
                 )
@@ -799,7 +800,7 @@ class VersionManager:
             RETURN comp
             """
             
-            component_records, _ = self.base_manager.safe_execute_query(
+            component_records = self.base_manager.safe_execute_read_query(
                 component_query,
                 {"container_name": container_name, "domain_name": domain_name, "component_name": component_name}
             )
@@ -820,7 +821,7 @@ class VersionManager:
             RETURN v.commitHash as hash, v.versionNumber as version
             """
             
-            existing_records, _ = self.base_manager.safe_execute_query(
+            existing_records = self.base_manager.safe_execute_read_query(
                 existing_query,
                 {"component_id": component_id}
             )

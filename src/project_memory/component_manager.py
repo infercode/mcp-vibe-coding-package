@@ -1,6 +1,7 @@
 from typing import Any, Dict, List, Optional, Union
 import time
 import json
+import logging
 
 from src.utils import dict_to_json, generate_id
 from src.graph_memory.base_manager import BaseManager
@@ -20,7 +21,7 @@ class ComponentManager:
             base_manager: Base manager for graph operations
         """
         self.base_manager = base_manager
-        self.logger = base_manager.logger
+        self.logger = logging.getLogger(__name__)
         self.entity_manager = EntityManager(base_manager)
     
     def create_component(self, name: str, 
@@ -55,7 +56,7 @@ class ComponentManager:
             RETURN d
             """
             
-            domain_records, _ = self.base_manager.safe_execute_query(
+            domain_records = self.base_manager.safe_execute_read_query(
                 domain_query,
                 {"container_name": container_name, "domain_name": domain_name}
             )
@@ -73,7 +74,7 @@ class ComponentManager:
             RETURN comp
             """
             
-            component_records, _ = self.base_manager.safe_execute_query(
+            component_records = self.base_manager.safe_execute_read_query(
                 component_check_query,
                 {"container_name": container_name, "domain_name": domain_name, "name": name}
             )
@@ -114,7 +115,7 @@ class ComponentManager:
             RETURN comp
             """
             
-            create_records, _ = self.base_manager.safe_execute_query(
+            create_records = self.base_manager.safe_execute_write_query(
                 create_query,
                 {"properties": component_entity}
             )
@@ -132,14 +133,14 @@ class ComponentManager:
             RETURN comp
             """
             
-            add_records, _ = self.base_manager.safe_execute_query(
+            add_records = self.base_manager.safe_execute_write_query(
                 add_to_container_query,
                 {"container_name": container_name, "component_id": component_id, "timestamp": timestamp}
             )
             
             if not add_records or len(add_records) == 0:
                 # Attempt to clean up the created entity
-                self.base_manager.safe_execute_query(
+                self.base_manager.safe_execute_write_query(
                     "MATCH (comp:Entity {id: $component_id}) DELETE comp",
                     {"component_id": component_id}
                 )
@@ -156,14 +157,14 @@ class ComponentManager:
             RETURN comp
             """
             
-            domain_add_records, _ = self.base_manager.safe_execute_query(
+            domain_add_records = self.base_manager.safe_execute_write_query(
                 add_to_domain_query,
                 {"domain_name": domain_name, "component_id": component_id, "timestamp": timestamp}
             )
             
             if not domain_add_records or len(domain_add_records) == 0:
                 # Attempt to clean up the created relationships and entity
-                self.base_manager.safe_execute_query(
+                self.base_manager.safe_execute_write_query(
                     """
                     MATCH (comp:Entity {id: $component_id})
                     OPTIONAL MATCH (comp)-[r]-()
@@ -214,7 +215,7 @@ class ComponentManager:
             RETURN comp, count(o) as observation_count
             """
             
-            records, _ = self.base_manager.safe_execute_query(
+            records = self.base_manager.safe_execute_read_query(
                 query,
                 {"container_name": container_name, "domain_name": domain_name, "name": name}
             )
@@ -242,7 +243,7 @@ class ComponentManager:
             RETURN type(r) as relation_type, count(r) as count
             """
             
-            relation_records, _ = self.base_manager.safe_execute_query(
+            relation_records = self.base_manager.safe_execute_read_query(
                 relations_query,
                 {"container_name": container_name, "domain_name": domain_name, "name": name}
             )
@@ -293,7 +294,7 @@ class ComponentManager:
             RETURN comp
             """
             
-            component_records, _ = self.base_manager.safe_execute_query(
+            component_records = self.base_manager.safe_execute_read_query(
                 component_query,
                 {"container_name": container_name, "domain_name": domain_name, "name": name}
             )
@@ -332,7 +333,7 @@ class ComponentManager:
             # Add name, domain_name and container_name to updates for the query
             params = {"name": name, "domain_name": domain_name, "container_name": container_name, **updates}
             
-            update_records, _ = self.base_manager.safe_execute_query(
+            update_records = self.base_manager.safe_execute_write_query(
                 update_query,
                 params
             )
@@ -379,7 +380,7 @@ class ComponentManager:
             RETURN comp
             """
             
-            component_records, _ = self.base_manager.safe_execute_query(
+            component_records = self.base_manager.safe_execute_read_query(
                 component_query,
                 {"container_name": container_name, "domain_name": domain_name, "name": name}
             )
@@ -400,7 +401,7 @@ class ComponentManager:
             RETURN count(r) as relation_count
             """
             
-            relation_records, _ = self.base_manager.safe_execute_query(
+            relation_records = self.base_manager.safe_execute_read_query(
                 check_relations_query,
                 {"component_id": component_id}
             )
@@ -421,7 +422,7 @@ class ComponentManager:
             DELETE o
             """
             
-            self.base_manager.safe_execute_query(
+            self.base_manager.safe_execute_write_query(
                 delete_observations_query,
                 {"component_id": component_id}
             )
@@ -433,7 +434,7 @@ class ComponentManager:
             DELETE r
             """
             
-            self.base_manager.safe_execute_query(
+            self.base_manager.safe_execute_write_query(
                 delete_rels_query,
                 {"component_id": component_id}
             )
@@ -444,7 +445,7 @@ class ComponentManager:
             DELETE comp
             """
             
-            self.base_manager.safe_execute_query(
+            self.base_manager.safe_execute_write_query(
                 delete_query,
                 {"component_id": component_id}
             )
@@ -485,7 +486,7 @@ class ComponentManager:
             RETURN d
             """
             
-            domain_records, _ = self.base_manager.safe_execute_query(
+            domain_records = self.base_manager.safe_execute_read_query(
                 domain_query,
                 {"container_name": container_name, "domain_name": domain_name}
             )
@@ -534,7 +535,7 @@ class ComponentManager:
                     "limit": limit
                 }
             
-            records, _ = self.base_manager.safe_execute_query(
+            records = self.base_manager.safe_execute_read_query(
                 query,
                 params
             )
@@ -589,7 +590,7 @@ class ComponentManager:
             RETURN from, to
             """
             
-            components_records, _ = self.base_manager.safe_execute_query(
+            components_records = self.base_manager.safe_execute_read_query(
                 components_query,
                 {
                     "container_name": container_name, 
@@ -615,7 +616,7 @@ class ComponentManager:
             RETURN r
             """
             
-            check_records, _ = self.base_manager.safe_execute_query(
+            check_records = self.base_manager.safe_execute_read_query(
                 check_query,
                 {
                     "container_name": container_name, 
@@ -647,7 +648,7 @@ class ComponentManager:
             RETURN r
             """
             
-            create_records, _ = self.base_manager.safe_execute_query(
+            create_records = self.base_manager.safe_execute_write_query(
                 create_query,
                 {
                     "container_name": container_name, 

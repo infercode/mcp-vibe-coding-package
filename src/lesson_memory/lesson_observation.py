@@ -1,6 +1,8 @@
 from typing import Any, Dict, List, Optional, Union
 import time
 import json
+import logging
+import uuid
 
 from src.utils import dict_to_json, generate_id
 from src.graph_memory.base_manager import BaseManager
@@ -8,8 +10,8 @@ from src.graph_memory.observation_manager import ObservationManager
 
 class LessonObservation:
     """
-    Manager for structured lesson observations.
-    Handles typed observations with specific semantic meaning.
+    Manager for lesson observation operations.
+    Extends the core observation manager with lesson-specific functionality.
     """
     
     # Define standard lesson observation types
@@ -29,72 +31,129 @@ class LessonObservation:
             base_manager: Base manager for graph operations
         """
         self.base_manager = base_manager
-        self.logger = base_manager.logger
+        self.logger = logging.getLogger(__name__)
         self.observation_manager = ObservationManager(base_manager)
     
-    def add_lesson_observation(self, entity_name: str, content: str, observation_type: str,
-                            container_name: Optional[str] = None) -> str:
+    def add_lesson_observation(self, entity_name: str, content: str, 
+                            observation_type: str = "observation",
+                            confidence: float = 1.0,
+                            properties: Optional[Dict[str, Any]] = None) -> str:
         """
-        Add a structured observation to a lesson entity.
+        Add an observation to a lesson entity.
         
         Args:
-            entity_name: Name of the entity to add observation to
-            content: Content of the observation
-            observation_type: Type of observation (should be a lesson observation type)
-            container_name: Optional container to verify entity membership
+            entity_name: Name of the entity to add the observation to
+            content: Text content of the observation
+            observation_type: Type of observation
+            confidence: Confidence score (0.0 to 1.0)
+            properties: Optional additional properties
             
         Returns:
-            JSON string with the added observation
+            JSON string with the created observation
         """
         try:
             self.base_manager.ensure_initialized()
             
-            # Validate observation type
-            if observation_type not in self.LESSON_OBSERVATION_TYPES:
-                self.logger.info(f"Observation type '{observation_type}' is not a standard lesson observation type")
+            # Check if entity exists
+            entity_query = """
+            MATCH (e:Entity {name: $entity_name})
+            RETURN e
+            """
             
-            # Check if entity exists and is in the container
-            if container_name:
-                container_query = """
-                MATCH (c:LessonContainer {name: $container_name})-[:CONTAINS]->(e:Entity {name: $entity_name})
-                RETURN e
-                """
-                
-                container_records, _ = self.base_manager.safe_execute_query(
-                    container_query,
-                    {"container_name": container_name, "entity_name": entity_name}
-                )
-                
-                if not container_records or len(container_records) == 0:
-                    return dict_to_json({
-                        "error": f"Entity '{entity_name}' not found in container '{container_name}'"
-                    })
+            # Use safe_execute_read_query for validation (read-only operation)
+            entity_records = self.base_manager.safe_execute_read_query(
+                entity_query,
+                {"entity_name": entity_name}
+            )
             
-            # Create the observation
-            observation_dict = {
-                "entity": entity_name,
+            if not entity_records or len(entity_records) == 0:
+                return dict_to_json({"error": f"Entity '{entity_name}' not found"})
+            
+            # Check if entity belongs to the lesson domain
+            entity = dict(entity_records[0]["e"].items())
+            if entity.get("domain") != "lesson":
+                return dict_to_json({
+                    "error": f"Entity '{entity_name}' is not a lesson entity"
+                })
+            
+            # Generate observation ID
+            observation_id = str(uuid.uuid4())
+            timestamp = time.time()
+            
+            # Prepare observation properties
+            observation_props = properties or {}
+            observation_props.update({
+                "id": observation_id,
                 "content": content,
-                "type": observation_type
-            }
+                "type": observation_type,
+                "created": timestamp,
+                "lastUpdated": timestamp,
+                "domain": "lesson",  # Mark as lesson observation
+                "confidence": max(0.0, min(1.0, confidence))  # Clamp to 0-1 range
+            })
             
-            # Add structured observations to entity
-            observation_result = self.observation_manager.add_observations([observation_dict])
-            return observation_result
+            # Create observation
+            create_query = """
+            CREATE (o:Observation $properties)
+            RETURN o
+            """
+            
+            # Use safe_execute_write_query for validation (write operation)
+            create_records = self.base_manager.safe_execute_write_query(
+                create_query,
+                {"properties": observation_props}
+            )
+            
+            if not create_records or len(create_records) == 0:
+                return dict_to_json({"error": "Failed to create observation"})
+            
+            # Link observation to entity
+            link_query = """
+            MATCH (e:Entity {name: $entity_name})
+            MATCH (o:Observation {id: $observation_id})
+            CREATE (e)-[r:HAS_OBSERVATION {created: $timestamp}]->(o)
+            RETURN o
+            """
+            
+            # Use safe_execute_write_query for validation (write operation)
+            link_records = self.base_manager.safe_execute_write_query(
+                link_query,
+                {
+                    "entity_name": entity_name,
+                    "observation_id": observation_id,
+                    "timestamp": timestamp
+                }
+            )
+            
+            if not link_records or len(link_records) == 0:
+                # Attempt to clean up the created observation
+                self.base_manager.safe_execute_write_query(
+                    "MATCH (o:Observation {id: $id}) DELETE o",
+                    {"id": observation_id}
+                )
+                return dict_to_json({"error": "Failed to link observation to entity"})
+            
+            # Get the created observation
+            observation = dict(link_records[0]["o"].items())
+            
+            self.logger.info(f"Added lesson observation to entity '{entity_name}'")
+            return dict_to_json({
+                "observation": observation,
+                "message": f"Observation added to entity '{entity_name}'"
+            })
                 
         except Exception as e:
             error_msg = f"Error adding lesson observation: {str(e)}"
             self.logger.error(error_msg)
             return dict_to_json({"error": error_msg})
     
-    def get_lesson_observations(self, entity_name: str, observation_type: Optional[str] = None,
-                             container_name: Optional[str] = None) -> str:
+    def get_lesson_observations(self, entity_name: str, observation_type: Optional[str] = None) -> str:
         """
-        Get structured observations for a lesson entity.
+        Get observations for a lesson entity.
         
         Args:
             entity_name: Name of the entity
-            observation_type: Optional type to filter by
-            container_name: Optional container to verify entity membership
+            observation_type: Optional observation type to filter by
             
         Returns:
             JSON string with the observations
@@ -102,74 +161,59 @@ class LessonObservation:
         try:
             self.base_manager.ensure_initialized()
             
-            # Check if entity exists and is in the container
-            if container_name:
-                container_query = """
-                MATCH (c:LessonContainer {name: $container_name})-[:CONTAINS]->(e:Entity {name: $entity_name})
-                RETURN e
-                """
-                
-                container_records, _ = self.base_manager.safe_execute_query(
-                    container_query,
-                    {"container_name": container_name, "entity_name": entity_name}
-                )
-                
-                if not container_records or len(container_records) == 0:
-                    return dict_to_json({
-                        "error": f"Entity '{entity_name}' not found in container '{container_name}'"
-                    })
+            # Check if entity exists
+            entity_query = """
+            MATCH (e:Entity {name: $entity_name})
+            RETURN e
+            """
             
-            # Build query based on observation_type
-            query_parts = ["MATCH (e:Entity {name: $entity_name})-[:HAS_OBSERVATION]->(o:Observation)"]
-            params = {"entity_name": entity_name}
-            
-            if observation_type:
-                query_parts.append("WHERE o.type = $observation_type")
-                params["observation_type"] = observation_type
-                
-                # Allow filtering by lesson observation type group
-                if observation_type in self.LESSON_OBSERVATION_TYPES:
-                    query_parts[-1] = "WHERE o.type = $observation_type"
-                
-            # Complete query
-            query_parts.append("RETURN o.id as id, o.content as content, o.type as type, o.created as created")
-            query = "\n".join(query_parts)
-            
-            # Execute query
-            records, _ = self.base_manager.safe_execute_query(
-                query,
-                params
+            # Use safe_execute_read_query for validation (read-only operation)
+            entity_records = self.base_manager.safe_execute_read_query(
+                entity_query,
+                {"entity_name": entity_name}
             )
+            
+            if not entity_records or len(entity_records) == 0:
+                return dict_to_json({"error": f"Entity '{entity_name}' not found"})
+            
+            # Check if entity belongs to the lesson domain
+            entity = dict(entity_records[0]["e"].items())
+            if entity.get("domain") != "lesson":
+                return dict_to_json({
+                    "error": f"Entity '{entity_name}' is not a lesson entity"
+                })
+            
+            # Build query based on observation_type filter
+            if observation_type:
+                query = """
+                MATCH (e:Entity {name: $entity_name})-[:HAS_OBSERVATION]->(o:Observation)
+                WHERE o.type = $observation_type
+                RETURN o
+                ORDER BY o.created DESC
+                """
+                params = {"entity_name": entity_name, "observation_type": observation_type}
+            else:
+                query = """
+                MATCH (e:Entity {name: $entity_name})-[:HAS_OBSERVATION]->(o:Observation)
+                RETURN o
+                ORDER BY o.created DESC
+                """
+                params = {"entity_name": entity_name}
+            
+            # Use safe_execute_read_query for validation (read-only operation)
+            records = self.base_manager.safe_execute_read_query(query, params)
             
             # Process results
             observations = []
             if records:
                 for record in records:
-                    observation = {
-                        "id": record.get("id"),
-                        "content": record.get("content"),
-                        "type": record.get("type"),
-                        "created": record.get("created")
-                    }
+                    observation = dict(record["o"].items())
                     observations.append(observation)
-            
-            # Format results by type if no specific type is requested
-            if observation_type is None:
-                # Group observations by type
-                observations_by_type = {}
-                for obs in observations:
-                    obs_type = obs.get("type")
-                    if obs_type not in observations_by_type:
-                        observations_by_type[obs_type] = []
-                    observations_by_type[obs_type].append(obs)
-                
-                return dict_to_json({
-                    "entity": entity_name,
-                    "observations_by_type": observations_by_type
-                })
             
             return dict_to_json({
                 "entity": entity_name,
+                "observation_count": len(observations),
+                "observation_type": observation_type,
                 "observations": observations
             })
                 
@@ -178,16 +222,13 @@ class LessonObservation:
             self.logger.error(error_msg)
             return dict_to_json({"error": error_msg})
     
-    def update_lesson_observation(self, entity_name: str, observation_id: str, 
-                               content: str, observation_type: Optional[str] = None) -> str:
+    def update_lesson_observation(self, observation_id: str, updates: Dict[str, Any]) -> str:
         """
         Update a lesson observation.
         
         Args:
-            entity_name: Name of the entity
             observation_id: ID of the observation to update
-            content: New content for the observation
-            observation_type: Optional new type for the observation
+            updates: Dictionary of property updates
             
         Returns:
             JSON string with the updated observation
@@ -195,26 +236,90 @@ class LessonObservation:
         try:
             self.base_manager.ensure_initialized()
             
-            # Validate observation type if provided
-            if observation_type and observation_type not in self.LESSON_OBSERVATION_TYPES:
-                self.logger.info(f"Observation type '{observation_type}' is not a standard lesson observation type")
+            # Check if observation exists and is a lesson observation
+            observation_query = """
+            MATCH (o:Observation {id: $observation_id})
+            RETURN o
+            """
             
-            # Update the observation
-            return self.observation_manager.update_observation(
-                entity_name, observation_id, content, observation_type
+            # Use safe_execute_read_query for validation (read-only operation)
+            observation_records = self.base_manager.safe_execute_read_query(
+                observation_query,
+                {"observation_id": observation_id}
             )
+            
+            if not observation_records or len(observation_records) == 0:
+                return dict_to_json({"error": f"Observation with ID '{observation_id}' not found"})
+            
+            # Check if it's a lesson observation
+            observation = dict(observation_records[0]["o"].items())
+            if observation.get("domain") != "lesson":
+                return dict_to_json({
+                    "error": f"Observation '{observation_id}' is not a lesson observation"
+                })
+            
+            # Validate updates - prevent changing core properties
+            protected_fields = ["id", "created", "domain"]
+            for field in protected_fields:
+                if field in updates:
+                    del updates[field]
+            
+            if not updates:
+                return dict_to_json({
+                    "observation": observation,
+                    "message": "No valid updates provided"
+                })
+            
+            # Add lastUpdated timestamp
+            updates["lastUpdated"] = time.time()
+            
+            # If confidence is being updated, ensure it's in the valid range
+            if "confidence" in updates:
+                updates["confidence"] = max(0.0, min(1.0, updates["confidence"]))
+            
+            # Prepare update parts
+            set_parts = []
+            for key, value in updates.items():
+                set_parts.append(f"o.{key} = ${key}")
+            
+            # Build update query
+            update_query = f"""
+            MATCH (o:Observation {{id: $observation_id}})
+            SET {', '.join(set_parts)}
+            RETURN o
+            """
+            
+            # Add observation_id to updates for the query
+            params = {"observation_id": observation_id, **updates}
+            
+            # Use safe_execute_write_query for validation (write operation)
+            update_records = self.base_manager.safe_execute_write_query(
+                update_query,
+                params
+            )
+            
+            if not update_records or len(update_records) == 0:
+                return dict_to_json({"error": f"Failed to update observation '{observation_id}'"})
+            
+            # Return updated observation
+            updated_observation = dict(update_records[0]["o"].items())
+            
+            self.logger.info(f"Updated lesson observation: {observation_id}")
+            return dict_to_json({
+                "observation": updated_observation,
+                "message": "Observation updated successfully"
+            })
                 
         except Exception as e:
             error_msg = f"Error updating lesson observation: {str(e)}"
             self.logger.error(error_msg)
             return dict_to_json({"error": error_msg})
     
-    def delete_lesson_observation(self, entity_name: str, observation_id: str) -> str:
+    def delete_lesson_observation(self, observation_id: str) -> str:
         """
         Delete a lesson observation.
         
         Args:
-            entity_name: Name of the entity
             observation_id: ID of the observation to delete
             
         Returns:
@@ -223,10 +328,58 @@ class LessonObservation:
         try:
             self.base_manager.ensure_initialized()
             
-            # Delete the observation
-            return self.observation_manager.delete_observation(
-                entity_name, observation_id=observation_id
+            # Check if observation exists and is a lesson observation
+            observation_query = """
+            MATCH (o:Observation {id: $observation_id})
+            RETURN o
+            """
+            
+            # Use safe_execute_read_query for validation (read-only operation)
+            observation_records = self.base_manager.safe_execute_read_query(
+                observation_query,
+                {"observation_id": observation_id}
             )
+            
+            if not observation_records or len(observation_records) == 0:
+                return dict_to_json({"error": f"Observation with ID '{observation_id}' not found"})
+            
+            # Check if it's a lesson observation
+            observation = dict(observation_records[0]["o"].items())
+            if observation.get("domain") != "lesson":
+                return dict_to_json({
+                    "error": f"Observation '{observation_id}' is not a lesson observation"
+                })
+            
+            # Delete relationships first
+            delete_rels_query = """
+            MATCH (o:Observation {id: $observation_id})
+            MATCH (e)-[r:HAS_OBSERVATION]->(o)
+            DELETE r
+            """
+            
+            # Use safe_execute_write_query for validation (write operation)
+            self.base_manager.safe_execute_write_query(
+                delete_rels_query,
+                {"observation_id": observation_id}
+            )
+            
+            # Delete the observation
+            delete_query = """
+            MATCH (o:Observation {id: $observation_id})
+            DELETE o
+            """
+            
+            # Use safe_execute_write_query for validation (write operation)
+            self.base_manager.safe_execute_write_query(
+                delete_query,
+                {"observation_id": observation_id}
+            )
+            
+            self.logger.info(f"Deleted lesson observation: {observation_id}")
+            return dict_to_json({
+                "status": "success",
+                "message": f"Observation '{observation_id}' deleted successfully"
+            })
                 
         except Exception as e:
             error_msg = f"Error deleting lesson observation: {str(e)}"

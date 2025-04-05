@@ -1,610 +1,1063 @@
 #!/usr/bin/env python3
+"""
+Lesson Memory Tools with Pydantic Integration
+
+This module implements MCP tools for the lesson memory system using
+Pydantic models for validation and serialization.
+"""
+
+from typing import Dict, List, Optional, Any, Union
+from datetime import datetime
 import json
-import datetime
-from typing import Dict, List, Any, Optional, Union
 
 from src.logger import get_logger
-from src.utils import dict_to_json
+from src.models.lesson_memory import (
+    LessonEntityCreate, LessonEntityUpdate, LessonObservationCreate, LessonObservationUpdate,
+    StructuredLessonObservations, LessonRelationshipCreate, LessonContainerCreate,
+    LessonContainerUpdate, SearchQuery
+)
+from src.models.lesson_responses import (
+    create_entity_response, create_observation_response, create_container_response,
+    create_relationship_response, create_search_response, create_lesson_error_response,
+    parse_legacy_result, handle_lesson_response, model_to_json
+)
+from src.models.responses import model_to_dict
 
 # Initialize logger
 logger = get_logger()
 
-class ErrorResponse:
-    @staticmethod
-    def create(message: str, code: str = "internal_error", details: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """Create a standardized error response."""
-        response = {
-            "status": "error",
-            "error": {
-                "code": code,
-                "message": message
-            },
-            "timestamp": datetime.datetime.now().isoformat()
-        }
-        if details:
-            response["error"]["details"] = details
-        return response
 
-def register_lesson_tools(server, graph_manager):
+def register_lesson_tools(server, get_client_manager):
     """Register lesson memory tools with the server."""
     
     # Lesson Container Management Tools
     @server.tool()
-    async def create_lesson_container(lesson_data: Dict[str, Any]) -> str:
+    async def create_lesson_container(container_data: Dict[str, Any], client_id: Optional[str] = None) -> str:
         """
-        Create a new lesson container in the knowledge graph. 
-        IMPORTANT: This tool should only be called ONCE and ONLY IF no lesson container 
-        already exists for this project in the graph database. Always check first using 
-        list_lesson_containers to verify no container exists with a similar title.
+        Create a new lesson container in the knowledge graph.
         
         Args:
-            lesson_data: Dictionary containing lesson information
-                - title: Required. The title of the lesson
-                - description: Optional. Description of the lesson
-                - metadata: Optional. Additional metadata for the lesson
-                - tags: Optional. List of tags for categorizing the lesson
-                - lesson_id: Optional. Custom ID for the lesson (generated if not provided)
-                - visibility: Optional. Visibility setting for the lesson ("public", "private", etc.)
-                - difficulty: Optional. Difficulty level of the lesson
-                - prerequisites: Optional. List of prerequisite lessons
-                - estimated_time: Optional. Estimated time to complete the lesson
+            container_data: Dictionary containing container information
+                - name: Required. The name of the container
+                - description: Optional. Description of the container
+                - tags: Optional. List of tags for categorizing the container
+                - metadata: Optional. Additional metadata
+            client_id: Optional client ID for identifying the connection
                 
         Returns:
             JSON response with operation result
         """
         try:
-            # Extract required fields
-            if "title" not in lesson_data:
-                return dict_to_json(ErrorResponse.create(
-                    message="Missing required field: title",
-                    code="missing_required_field"
-                ))
+            # Validate input using Pydantic model
+            try:
+                # Extract client_id from metadata if present and not provided directly
+                metadata_client_id = None
+                if "metadata" in container_data and isinstance(container_data["metadata"], dict):
+                    metadata_client_id = container_data["metadata"].get("client_id")
                 
-            result = graph_manager.create_lesson_container(lesson_data)
+                # Use the explicitly provided client_id, or the one from metadata
+                effective_client_id = client_id or metadata_client_id
+                
+                # Add client_id to metadata if it doesn't exist but was provided
+                if effective_client_id:
+                    if "metadata" not in container_data:
+                        container_data["metadata"] = {}
+                    container_data["metadata"]["client_id"] = effective_client_id
+                
+                # Create Pydantic model for validation
+                container_model = LessonContainerCreate(**container_data)
+            except Exception as e:
+                logger.error(f"Validation error for container data: {str(e)}")
+                error_response = create_lesson_error_response(
+                    message=f"Invalid container data: {str(e)}",
+                    code="validation_error"
+                )
+                return model_to_json(error_response)
             
-            if result["status"] == "error":
-                return dict_to_json(ErrorResponse.create(
-                    message=f"Failed to create lesson: {result.get('message', 'Unknown error')}",
-                    code="lesson_creation_error"
-                ))
+            # Get the graph manager with the appropriate client context
+            client_graph_manager = get_client_manager(effective_client_id)
+            
+            # Call the create method with validated data
+            result = client_graph_manager.lesson_memory.create_lesson_container(model_to_dict(container_model))
+            
+            # Handle the response
+            def success_handler(data):
+                container_data = data.get("container", {})
+                return create_container_response(
+                    container_data=container_data,
+                    message=f"Lesson container '{container_model.name}' created successfully"
+                )
                 
-            return dict_to_json({
-                "status": "success",
-                "message": f"Lesson container '{lesson_data['title']}' created successfully",
-                "lesson_id": result.get("lesson_id", ""),
-                "timestamp": datetime.datetime.now().isoformat()
-            })
+            return handle_lesson_response(
+                result=result,
+                success_handler=success_handler,
+                error_code="container_creation_error"
+            )
             
         except Exception as e:
             logger.error(f"Error creating lesson container: {str(e)}")
-            error_response = ErrorResponse.create(
+            error_response = create_lesson_error_response(
                 message=f"Failed to create lesson container: {str(e)}",
-                code="lesson_creation_error"
+                code="container_creation_error"
             )
-            return dict_to_json(error_response)
-            
+            return model_to_json(error_response)
+    
     @server.tool()
-    async def get_lesson_container(lesson_id: str) -> str:
+    async def get_lesson_container(container_id: str, client_id: Optional[str] = None) -> str:
         """
-        Retrieve a lesson container by ID or title.
+        Retrieve a lesson container by ID or name.
         
         Args:
-            lesson_id: The ID or title of the lesson container
+            container_id: The ID or name of the lesson container
+            client_id: Optional client ID for identifying the connection
                 
         Returns:
             JSON response with lesson container data
         """
         try:
-            result = graph_manager.get_lesson_container(lesson_id)
+            # Get the graph manager with the appropriate client context
+            client_graph_manager = get_client_manager(client_id)
             
-            if result["status"] == "error":
-                return dict_to_json(ErrorResponse.create(
-                    message=f"Lesson container not found: {lesson_id}",
-                    code="lesson_not_found"
-                ))
+            # Get lesson container
+            result = client_graph_manager.lesson_memory.get_lesson_container(container_id)
+            
+            # Handle the response
+            def success_handler(data):
+                container_data = data.get("container", {})
+                return create_container_response(
+                    container_data=container_data,
+                    message=f"Lesson container retrieved successfully"
+                )
                 
-            return dict_to_json({
-                "status": "success",
-                "lesson": result["lesson"],
-                "timestamp": datetime.datetime.now().isoformat()
-            })
+            return handle_lesson_response(
+                result=result,
+                success_handler=success_handler,
+                error_code="container_retrieval_error"
+            )
             
         except Exception as e:
             logger.error(f"Error retrieving lesson container: {str(e)}")
-            error_response = ErrorResponse.create(
+            error_response = create_lesson_error_response(
                 message=f"Failed to retrieve lesson container: {str(e)}",
-                code="lesson_retrieval_error"
+                code="container_retrieval_error"
             )
-            return dict_to_json(error_response)
-            
+            return model_to_json(error_response)
+    
     @server.tool()
-    async def update_lesson_container(lesson_data: Dict[str, Any]) -> str:
+    async def update_lesson_container(container_data: Dict[str, Any], client_id: Optional[str] = None) -> str:
         """
         Update an existing lesson container.
         
         Args:
-            lesson_data: Dictionary containing lesson information
-                - id: Required. The ID of the lesson container to update
-                - title: Optional. New title for the lesson
-                - description: Optional. New description for the lesson
-                - metadata: Optional. Updated metadata for the lesson
+            container_data: Dictionary containing container information
+                - id: Required. The ID of the container to update
+                - name: Optional. New name for the container
+                - description: Optional. New description for the container
                 - tags: Optional. Updated list of tags
-                - visibility: Optional. Updated visibility setting
-                - difficulty: Optional. Updated difficulty level
-                - prerequisites: Optional. Updated list of prerequisite lessons
-                - estimated_time: Optional. Updated estimated completion time
+                - metadata: Optional. Updated metadata
+            client_id: Optional client ID for identifying the connection
                 
         Returns:
             JSON response with operation result
         """
         try:
-            # Extract required fields
-            if "id" not in lesson_data:
-                return dict_to_json(ErrorResponse.create(
-                    message="Missing required field: id",
-                    code="missing_required_field"
-                ))
+            # Validate input using Pydantic model
+            try:
+                # Extract client_id from metadata if present and not provided directly
+                metadata_client_id = None
+                if "metadata" in container_data and isinstance(container_data["metadata"], dict):
+                    metadata_client_id = container_data["metadata"].get("client_id")
                 
-            result = graph_manager.update_lesson_container(lesson_data)
+                # Use the explicitly provided client_id, or the one from metadata
+                effective_client_id = client_id or metadata_client_id
+                
+                # Add client_id to metadata if it doesn't exist but was provided
+                if effective_client_id:
+                    if "metadata" not in container_data:
+                        container_data["metadata"] = {}
+                    container_data["metadata"]["client_id"] = effective_client_id
+                
+                # Create Pydantic model for validation
+                container_model = LessonContainerUpdate(**container_data)
+            except Exception as e:
+                logger.error(f"Validation error for container update data: {str(e)}")
+                error_response = create_lesson_error_response(
+                    message=f"Invalid container update data: {str(e)}",
+                    code="validation_error"
+                )
+                return model_to_json(error_response)
             
-            if result["status"] == "error":
-                return dict_to_json(ErrorResponse.create(
-                    message=f"Failed to update lesson: {result.get('message', 'Unknown error')}",
-                    code="lesson_update_error"
-                ))
+            # Get the graph manager with the appropriate client context
+            client_graph_manager = get_client_manager(effective_client_id)
+            
+            # Call the update method with validated data
+            result = client_graph_manager.lesson_memory.update_lesson_container(model_to_dict(container_model))
+            
+            # Handle the response
+            def success_handler(data):
+                container_data = data.get("container", {})
+                return create_container_response(
+                    container_data=container_data,
+                    message=f"Lesson container updated successfully"
+                )
                 
-            return dict_to_json({
-                "status": "success",
-                "message": f"Lesson container '{lesson_data.get('title', lesson_data['id'])}' updated successfully",
-                "timestamp": datetime.datetime.now().isoformat()
-            })
+            return handle_lesson_response(
+                result=result,
+                success_handler=success_handler,
+                error_code="container_update_error"
+            )
             
         except Exception as e:
             logger.error(f"Error updating lesson container: {str(e)}")
-            error_response = ErrorResponse.create(
+            error_response = create_lesson_error_response(
                 message=f"Failed to update lesson container: {str(e)}",
-                code="lesson_update_error"
+                code="container_update_error"
             )
-            return dict_to_json(error_response)
-            
+            return model_to_json(error_response)
+    
     @server.tool()
-    async def delete_lesson_container(lesson_id: str) -> str:
+    async def delete_lesson_container(container_id: str, client_id: Optional[str] = None) -> str:
         """
         Delete a lesson container and all its associated entities.
         
         Args:
-            lesson_id: The ID or title of the lesson container to delete
+            container_id: The ID or name of the lesson container to delete
+            client_id: Optional client ID for identifying the connection
                 
         Returns:
             JSON response with operation result
         """
         try:
-            result = graph_manager.delete_lesson_container(lesson_id)
+            # Get the graph manager with the appropriate client context
+            client_graph_manager = get_client_manager(client_id)
             
-            if result["status"] == "error":
-                return dict_to_json(ErrorResponse.create(
-                    message=f"Failed to delete lesson: {result.get('message', 'Unknown error')}",
-                    code="lesson_deletion_error"
-                ))
+            # Delete lesson container
+            result = client_graph_manager.lesson_memory.delete_lesson_container(container_id)
+            
+            # Handle the response
+            def success_handler(data):
+                return create_container_response(
+                    container_data={},
+                    message=f"Lesson container '{container_id}' deleted successfully"
+                )
                 
-            return dict_to_json({
-                "status": "success",
-                "message": f"Lesson container '{lesson_id}' deleted successfully",
-                "timestamp": datetime.datetime.now().isoformat()
-            })
+            return handle_lesson_response(
+                result=result,
+                success_handler=success_handler,
+                error_code="container_deletion_error"
+            )
             
         except Exception as e:
             logger.error(f"Error deleting lesson container: {str(e)}")
-            error_response = ErrorResponse.create(
+            error_response = create_lesson_error_response(
                 message=f"Failed to delete lesson container: {str(e)}",
-                code="lesson_deletion_error"
+                code="container_deletion_error"
             )
-            return dict_to_json(error_response)
-            
+            return model_to_json(error_response)
+    
     @server.tool()
-    async def list_lesson_containers(tags: Optional[List[str]] = None, 
-                                    difficulty: Optional[str] = None, 
-                                    visibility: Optional[str] = None) -> str:
+    async def list_lesson_containers(filters: Optional[Dict[str, Any]] = None, client_id: Optional[str] = None) -> str:
         """
-        List lesson containers, optionally filtered by tags, difficulty, and/or visibility.
+        List all lesson containers or filter by specific criteria.
         
         Args:
-            tags: Optional. List of tags to filter by
-            difficulty: Optional. Difficulty level to filter by
-            visibility: Optional. Visibility setting to filter by
+            filters: Optional filters for searching containers
+                - tags: Optional list of tags to filter by
+                - name_contains: Optional string to search in container names
+                - limit: Optional maximum number of results to return
+            client_id: Optional client ID for identifying the connection
                 
         Returns:
-            JSON response with list of lesson containers
+            JSON response with lesson containers matching the criteria
         """
         try:
-            # Build filter parameters
-            filter_params = {}
-            if tags:
-                filter_params["tags"] = tags
-            if difficulty:
-                filter_params["difficulty"] = difficulty
-            if visibility:
-                filter_params["visibility"] = visibility
-                
-            result = graph_manager.list_lesson_containers(filter_params)
+            # Set default filters if none provided
+            if filters is None:
+                filters = {}
             
-            if result["status"] == "error":
-                return dict_to_json(ErrorResponse.create(
-                    message=f"Failed to list lessons: {result.get('message', 'Unknown error')}",
-                    code="lesson_list_error"
-                ))
+            # Get the graph manager with the appropriate client context
+            client_graph_manager = get_client_manager(client_id)
+            
+            # List lesson containers
+            result = client_graph_manager.lesson_memory.list_lesson_containers(filters)
+            
+            # Handle the response
+            def success_handler(data):
+                containers = data.get("containers", [])
+                return create_lesson_error_response(
+                    message=f"Found {len(containers)} lesson containers",
+                    code="success",
+                    details={"containers": containers}
+                )
                 
-            return dict_to_json({
-                "status": "success",
-                "lessons": result["lessons"],
-                "count": len(result["lessons"]),
-                "filters": filter_params,
-                "timestamp": datetime.datetime.now().isoformat()
-            })
+            return handle_lesson_response(
+                result=result,
+                success_handler=success_handler,
+                error_code="container_listing_error"
+            )
             
         except Exception as e:
             logger.error(f"Error listing lesson containers: {str(e)}")
-            error_response = ErrorResponse.create(
+            error_response = create_lesson_error_response(
                 message=f"Failed to list lesson containers: {str(e)}",
-                code="lesson_list_error"
+                code="container_listing_error"
             )
-            return dict_to_json(error_response)
+            return model_to_json(error_response)
     
-    # Lesson Section Management
     @server.tool()
-    async def create_lesson_section(section_data: Dict[str, Any]) -> str:
+    async def create_lesson_entity(entity_data: Dict[str, Any], client_id: Optional[str] = None) -> str:
         """
-        Create a new section within a lesson.
+        Create a new lesson entity and add it to a container.
         
         Args:
-            section_data: Dictionary containing section information
-                - lesson_id: Required. The ID of the lesson this section belongs to
-                - title: Required. The title of the section
-                - content: Optional. The content of the section
-                - order: Optional. The order of the section within the lesson
-                - section_type: Optional. The type of section (e.g., "introduction", "explanation", "exercise")
-                - metadata: Optional. Additional metadata for the section
+            entity_data: Dictionary containing entity information
+                - container_name: Required. Name of the container to add the entity to
+                - entity_name: Required. Name of the entity
+                - entity_type: Required. Type of the entity
+                - observations: Optional. List of observations
+                - metadata: Optional. Additional metadata
+            client_id: Optional client ID for identifying the connection
                 
         Returns:
             JSON response with operation result
         """
         try:
-            # Extract required fields
-            required_fields = ["lesson_id", "title"]
-            missing_fields = [field for field in required_fields if field not in section_data]
-            
-            if missing_fields:
-                return dict_to_json(ErrorResponse.create(
-                    message=f"Missing required fields: {', '.join(missing_fields)}",
-                    code="missing_required_fields"
-                ))
+            # Validate input using Pydantic model
+            try:
+                # Add client_id to metadata if provided
+                if client_id:
+                    if "metadata" not in entity_data:
+                        entity_data["metadata"] = {}
+                    entity_data["metadata"]["client_id"] = client_id
                 
-            result = graph_manager.create_lesson_section(section_data)
+                # Create Pydantic model for validation
+                entity_model = LessonEntityCreate(**entity_data)
+            except Exception as e:
+                logger.error(f"Validation error for entity data: {str(e)}")
+                error_response = create_lesson_error_response(
+                    message=f"Invalid entity data: {str(e)}",
+                    code="validation_error"
+                )
+                return model_to_json(error_response)
             
-            if result["status"] == "error":
-                return dict_to_json(ErrorResponse.create(
-                    message=f"Failed to create section: {result.get('message', 'Unknown error')}",
-                    code="section_creation_error"
-                ))
+            # Get the graph manager
+            client_graph_manager = get_client_manager(client_id)
+            
+            # Call the create method
+            result = client_graph_manager.lesson_memory.create_lesson_entity(
+                container_name=entity_model.container_name,
+                entity_name=entity_model.entity_name,
+                entity_type=entity_model.entity_type,
+                observations=entity_model.observations,
+                metadata=entity_model.metadata
+            )
+            
+            # Handle the response
+            def success_handler(data):
+                entity_data = data.get("entity", {})
+                return create_entity_response(
+                    entity_data=entity_data,
+                    message=f"Lesson entity '{entity_model.entity_name}' created successfully"
+                )
                 
-            return dict_to_json({
-                "status": "success",
-                "message": f"Section '{section_data['title']}' created successfully",
-                "section_id": result.get("section_id", ""),
-                "timestamp": datetime.datetime.now().isoformat()
-            })
+            return handle_lesson_response(
+                result=result,
+                success_handler=success_handler,
+                error_code="entity_creation_error"
+            )
             
         except Exception as e:
-            logger.error(f"Error creating lesson section: {str(e)}")
-            error_response = ErrorResponse.create(
-                message=f"Failed to create lesson section: {str(e)}",
-                code="section_creation_error"
+            logger.error(f"Error creating lesson entity: {str(e)}")
+            error_response = create_lesson_error_response(
+                message=f"Failed to create lesson entity: {str(e)}",
+                code="entity_creation_error"
             )
-            return dict_to_json(error_response)
-            
+            return model_to_json(error_response)
+    
     @server.tool()
-    async def update_lesson_section(section_data: Dict[str, Any]) -> str:
+    async def add_lesson_observation(observation_data: Dict[str, Any], client_id: Optional[str] = None) -> str:
         """
-        Update an existing lesson section.
+        Add a structured observation to a lesson entity.
         
         Args:
-            section_data: Dictionary containing section information
-                - id: Required. The ID of the section to update
-                - title: Optional. New title for the section
-                - content: Optional. Updated content for the section
-                - order: Optional. Updated order within the lesson
-                - section_type: Optional. Updated section type
-                - metadata: Optional. Updated metadata
+            observation_data: Dictionary containing observation information
+                - entity_name: Required. Name of the entity to add observation to
+                - content: Required. Content of the observation
+                - observation_type: Required. Type of observation
+                - container_name: Optional. Container to verify entity membership
+            client_id: Optional client ID for identifying the connection
                 
         Returns:
             JSON response with operation result
         """
         try:
-            # Extract required fields
-            if "id" not in section_data:
-                return dict_to_json(ErrorResponse.create(
-                    message="Missing required field: id",
-                    code="missing_required_field"
-                ))
-                
-            result = graph_manager.update_lesson_section(section_data)
+            # Validate input using Pydantic model
+            try:
+                # Create Pydantic model for validation
+                observation_model = LessonObservationCreate(**observation_data)
+            except Exception as e:
+                logger.error(f"Validation error for observation data: {str(e)}")
+                error_response = create_lesson_error_response(
+                    message=f"Invalid observation data: {str(e)}",
+                    code="validation_error"
+                )
+                return model_to_json(error_response)
             
-            if result["status"] == "error":
-                return dict_to_json(ErrorResponse.create(
-                    message=f"Failed to update section: {result.get('message', 'Unknown error')}",
-                    code="section_update_error"
-                ))
+            # Get the graph manager
+            client_graph_manager = get_client_manager(client_id)
+            
+            # Call the add method
+            result = client_graph_manager.lesson_memory.add_lesson_observation(
+                entity_name=observation_model.entity_name,
+                content=observation_model.content,
+                observation_type=observation_model.observation_type,
+                container_name=observation_model.container_name
+            )
+            
+            # Handle the response
+            def success_handler(data):
+                observations = data.get("observations", [])
+                return create_observation_response(
+                    entity_name=observation_model.entity_name,
+                    observations=observations,
+                    message=f"Observation added to entity '{observation_model.entity_name}'"
+                )
                 
-            return dict_to_json({
-                "status": "success",
-                "message": f"Section '{section_data.get('title', section_data['id'])}' updated successfully",
-                "timestamp": datetime.datetime.now().isoformat()
-            })
+            return handle_lesson_response(
+                result=result,
+                success_handler=success_handler,
+                error_code="observation_creation_error"
+            )
             
         except Exception as e:
-            logger.error(f"Error updating lesson section: {str(e)}")
-            error_response = ErrorResponse.create(
-                message=f"Failed to update lesson section: {str(e)}",
-                code="section_update_error"
+            logger.error(f"Error adding lesson observation: {str(e)}")
+            error_response = create_lesson_error_response(
+                message=f"Failed to add lesson observation: {str(e)}",
+                code="observation_creation_error"
             )
-            return dict_to_json(error_response)
+            return model_to_json(error_response)
     
-    # Module Management Tools
     @server.tool()
-    async def create_module(module_data: Dict[str, Any]) -> str:
+    async def create_structured_lesson_observations(observation_data: Dict[str, Any], client_id: Optional[str] = None) -> str:
         """
-        Create a new module (grouping of lessons).
+        Create structured observations for a lesson entity.
         
         Args:
-            module_data: Dictionary containing module information
-                - title: Required. The title of the module
-                - description: Optional. Description of the module
-                - lessons: Optional. List of lesson IDs to include in the module
-                - metadata: Optional. Additional metadata for the module
-                - tags: Optional. List of tags for categorizing the module
-                - visibility: Optional. Visibility setting for the module
+            observation_data: Dictionary containing structured observations
+                - entity_name: Required. Name of the entity
+                - what_was_learned: Optional. Factual knowledge gained
+                - why_it_matters: Optional. Importance and consequences
+                - how_to_apply: Optional. Application guidance
+                - root_cause: Optional. Underlying causes
+                - evidence: Optional. Examples and supporting data
+                - container_name: Optional. Container to verify entity membership
+            client_id: Optional client ID for identifying the connection
                 
         Returns:
             JSON response with operation result
         """
         try:
-            # Extract required fields
-            if "title" not in module_data:
-                return dict_to_json(ErrorResponse.create(
-                    message="Missing required field: title",
-                    code="missing_required_field"
-                ))
-                
-            result = graph_manager.create_module(module_data)
+            # Validate input using Pydantic model
+            try:
+                # Create Pydantic model for validation
+                structured_model = StructuredLessonObservations(**observation_data)
+            except Exception as e:
+                logger.error(f"Validation error for structured observations: {str(e)}")
+                error_response = create_lesson_error_response(
+                    message=f"Invalid structured observations: {str(e)}",
+                    code="validation_error"
+                )
+                return model_to_json(error_response)
             
-            if result["status"] == "error":
-                return dict_to_json(ErrorResponse.create(
-                    message=f"Failed to create module: {result.get('message', 'Unknown error')}",
-                    code="module_creation_error"
-                ))
+            # Get the graph manager
+            client_graph_manager = get_client_manager(client_id)
+            
+            # Call the create method
+            result = client_graph_manager.lesson_memory.create_structured_lesson_observations(
+                entity_name=structured_model.entity_name,
+                what_was_learned=structured_model.what_was_learned,
+                why_it_matters=structured_model.why_it_matters,
+                how_to_apply=structured_model.how_to_apply,
+                root_cause=structured_model.root_cause,
+                evidence=structured_model.evidence,
+                container_name=structured_model.container_name
+            )
+            
+            # Handle the response
+            def success_handler(data):
+                observations = data.get("observations", [])
+                observations_by_type = data.get("observations_by_type", {})
+                return create_observation_response(
+                    entity_name=structured_model.entity_name,
+                    observations=observations,
+                    observations_by_type=observations_by_type,
+                    message=f"Structured observations added to entity '{structured_model.entity_name}'"
+                )
                 
-            return dict_to_json({
-                "status": "success",
-                "message": f"Module '{module_data['title']}' created successfully",
-                "module_id": result.get("module_id", ""),
-                "timestamp": datetime.datetime.now().isoformat()
-            })
+            return handle_lesson_response(
+                result=result,
+                success_handler=success_handler,
+                error_code="structured_observations_error"
+            )
             
         except Exception as e:
-            logger.error(f"Error creating module: {str(e)}")
-            error_response = ErrorResponse.create(
-                message=f"Failed to create module: {str(e)}",
-                code="module_creation_error"
+            logger.error(f"Error creating structured observations: {str(e)}")
+            error_response = create_lesson_error_response(
+                message=f"Failed to create structured observations: {str(e)}",
+                code="structured_observations_error"
             )
-            return dict_to_json(error_response)
+            return model_to_json(error_response)
     
-    # Lesson Relationship Tools
     @server.tool()
-    async def create_lesson_relationship(relationship_data: Dict[str, Any]) -> str:
+    async def create_lesson_relationship(relationship_data: Dict[str, Any], client_id: Optional[str] = None) -> str:
         """
-        Create a relationship between two lessons.
+        Create a relationship between lesson entities.
         
         Args:
             relationship_data: Dictionary containing relationship information
-                - source_id: Required. The ID of the source lesson
-                - target_id: Required. The ID of the target lesson
-                - relationship_type: Required. The type of relationship (e.g., "prerequisite", "related", "next")
-                - metadata: Optional. Metadata for the relationship
+                - source_name: Required. Name of the source entity
+                - target_name: Required. Name of the target entity
+                - relationship_type: Required. Type of relationship
+                - properties: Optional. Additional properties for the relationship
+            client_id: Optional client ID for identifying the connection
                 
         Returns:
             JSON response with operation result
         """
         try:
-            # Extract required fields
-            required_fields = ["source_id", "target_id", "relationship_type"]
-            missing_fields = [field for field in required_fields if field not in relationship_data]
+            # Validate input using Pydantic model
+            try:
+                # Create Pydantic model for validation
+                relationship_model = LessonRelationshipCreate(**relationship_data)
+            except Exception as e:
+                logger.error(f"Validation error for relationship data: {str(e)}")
+                error_response = create_lesson_error_response(
+                    message=f"Invalid relationship data: {str(e)}",
+                    code="validation_error"
+                )
+                return model_to_json(error_response)
             
-            if missing_fields:
-                return dict_to_json(ErrorResponse.create(
-                    message=f"Missing required fields: {', '.join(missing_fields)}",
-                    code="missing_required_fields"
-                ))
-                
-            result = graph_manager.create_lesson_relationship(relationship_data)
+            # Get the graph manager
+            client_graph_manager = get_client_manager(client_id)
             
-            if result["status"] == "error":
-                return dict_to_json(ErrorResponse.create(
-                    message=f"Failed to create lesson relationship: {result.get('message', 'Unknown error')}",
-                    code="relationship_creation_error"
-                ))
+            # Call the create method
+            result = client_graph_manager.lesson_memory.create_lesson_relationship(
+                source_name=relationship_model.source_name,
+                target_name=relationship_model.target_name,
+                relationship_type=relationship_model.relationship_type,
+                properties=relationship_model.properties
+            )
+            
+            # Handle the response
+            def success_handler(data):
+                relationship_data = data.get("relationship", {})
+                return create_relationship_response(
+                    relationship_data=relationship_data,
+                    message=f"Relationship created between '{relationship_model.source_name}' and '{relationship_model.target_name}'"
+                )
                 
-            return dict_to_json({
-                "status": "success",
-                "message": f"Relationship '{relationship_data['relationship_type']}' created successfully between lessons '{relationship_data['source_id']}' and '{relationship_data['target_id']}'",
-                "relationship_id": result.get("relationship_id", ""),
-                "timestamp": datetime.datetime.now().isoformat()
-            })
+            return handle_lesson_response(
+                result=result,
+                success_handler=success_handler,
+                error_code="relationship_creation_error"
+            )
             
         except Exception as e:
             logger.error(f"Error creating lesson relationship: {str(e)}")
-            error_response = ErrorResponse.create(
+            error_response = create_lesson_error_response(
                 message=f"Failed to create lesson relationship: {str(e)}",
                 code="relationship_creation_error"
             )
-            return dict_to_json(error_response)
-
-    # Lesson Content Analysis Tools
+            return model_to_json(error_response)
+    
     @server.tool()
-    async def analyze_lesson_prerequisites(lesson_id: str) -> str:
+    async def search_lesson_entities(search_data: Dict[str, Any], client_id: Optional[str] = None) -> str:
         """
-        Analyze a lesson's content to identify potential prerequisites.
+        Search for lesson entities based on various criteria.
         
         Args:
-            lesson_id: The ID of the lesson to analyze
+            search_data: Dictionary containing search parameters
+                - container_name: Optional. Container to search within
+                - search_term: Optional. Text to search for
+                - entity_type: Optional. Entity type to filter by
+                - tags: Optional. Tags to filter by
+                - limit: Optional. Maximum number of results
+                - semantic: Optional. Whether to use semantic search
+            client_id: Optional client ID for identifying the connection
                 
         Returns:
-            JSON response with analysis results
+            JSON response with search results
         """
         try:
-            result = graph_manager.analyze_lesson_prerequisites(lesson_id)
+            # Validate input using Pydantic model
+            try:
+                # Create Pydantic model for validation
+                search_model = SearchQuery(**search_data)
+            except Exception as e:
+                logger.error(f"Validation error for search query: {str(e)}")
+                error_response = create_lesson_error_response(
+                    message=f"Invalid search query: {str(e)}",
+                    code="validation_error"
+                )
+                return model_to_json(error_response)
             
-            if result["status"] == "error":
-                return dict_to_json(ErrorResponse.create(
-                    message=f"Failed to analyze lesson prerequisites: {result.get('message', 'Unknown error')}",
-                    code="analysis_error"
-                ))
+            # Get the graph manager
+            client_graph_manager = get_client_manager(client_id)
+            
+            # Call the search method
+            result = client_graph_manager.lesson_memory.search_lesson_entities(
+                container_name=search_model.container_name,
+                search_term=search_model.search_term,
+                entity_type=search_model.entity_type,
+                tags=search_model.tags,
+                limit=search_model.limit,
+                semantic=search_model.semantic
+            )
+            
+            # Handle the response
+            def success_handler(data):
+                results = data.get("results", [])
+                total = data.get("total", len(results))
+                return create_search_response(
+                    results=results,
+                    total_count=total,
+                    query_params=model_to_dict(search_model),
+                    message=f"Found {len(results)} lesson entities"
+                )
                 
-            return dict_to_json({
-                "status": "success",
-                "prerequisites": result["prerequisites"],
-                "confidence_scores": result.get("confidence_scores", {}),
-                "timestamp": datetime.datetime.now().isoformat()
-            })
+            return handle_lesson_response(
+                result=result,
+                success_handler=success_handler,
+                error_code="search_error"
+            )
+            
+        except Exception as e:
+            logger.error(f"Error searching lesson entities: {str(e)}")
+            error_response = create_lesson_error_response(
+                message=f"Failed to search lesson entities: {str(e)}",
+                code="search_error"
+            )
+            return model_to_json(error_response)
+    
+    @server.tool()
+    async def create_lesson_section(section_data: Dict[str, Any], client_id: Optional[str] = None) -> str:
+        """
+        Create a new section within a lesson container.
+        
+        Args:
+            section_data: Dictionary containing section information
+                - container_name: Required. Name of the lesson container
+                - title: Required. Title of the section
+                - order: Optional. Order of the section within the container (integer)
+                - content: Optional. Content of the section
+                - metadata: Optional. Additional metadata
+            client_id: Optional client ID for identifying the connection
+                
+        Returns:
+            JSON response with operation result
+        """
+        try:
+            # Add client_id to metadata if provided
+            if client_id:
+                if "metadata" not in section_data:
+                    section_data["metadata"] = {}
+                section_data["metadata"]["client_id"] = client_id
+            
+            # Get the graph manager with the appropriate client context
+            client_graph_manager = get_client_manager(client_id)
+            
+            # Call the create method
+            result = client_graph_manager.lesson_memory.create_lesson_section(section_data)
+            
+            # Handle the response
+            def success_handler(data):
+                section_data = data.get("section", {})
+                return create_lesson_error_response(
+                    message=f"Lesson section '{section_data.get('title', '')}' created successfully",
+                    code="success",
+                    details={"section": section_data}
+                )
+                
+            return handle_lesson_response(
+                result=result,
+                success_handler=success_handler,
+                error_code="section_creation_error"
+            )
+            
+        except Exception as e:
+            logger.error(f"Error creating lesson section: {str(e)}")
+            error_response = create_lesson_error_response(
+                message=f"Failed to create lesson section: {str(e)}",
+                code="section_creation_error"
+            )
+            return model_to_json(error_response)
+    
+    @server.tool()
+    async def update_lesson_section(section_data: Dict[str, Any], client_id: Optional[str] = None) -> str:
+        """
+        Update an existing section within a lesson container.
+        
+        Args:
+            section_data: Dictionary containing section information
+                - id: Required. ID of the section to update
+                - container_name: Optional. Name of the lesson container
+                - title: Optional. Updated title of the section
+                - order: Optional. Updated order of the section
+                - content: Optional. Updated content of the section
+                - metadata: Optional. Updated metadata
+            client_id: Optional client ID for identifying the connection
+                
+        Returns:
+            JSON response with operation result
+        """
+        try:
+            # Add client_id to metadata if provided
+            if client_id:
+                if "metadata" not in section_data:
+                    section_data["metadata"] = {}
+                section_data["metadata"]["client_id"] = client_id
+            
+            # Get the graph manager with the appropriate client context
+            client_graph_manager = get_client_manager(client_id)
+            
+            # Call the update method
+            result = client_graph_manager.lesson_memory.update_lesson_section(section_data)
+            
+            # Handle the response
+            def success_handler(data):
+                section_data = data.get("section", {})
+                return create_lesson_error_response(
+                    message=f"Lesson section updated successfully",
+                    code="success",
+                    details={"section": section_data}
+                )
+                
+            return handle_lesson_response(
+                result=result,
+                success_handler=success_handler,
+                error_code="section_update_error"
+            )
+            
+        except Exception as e:
+            logger.error(f"Error updating lesson section: {str(e)}")
+            error_response = create_lesson_error_response(
+                message=f"Failed to update lesson section: {str(e)}",
+                code="section_update_error"
+            )
+            return model_to_json(error_response)
+    
+    @server.tool()
+    async def create_module(module_data: Dict[str, Any], client_id: Optional[str] = None) -> str:
+        """
+        Create a module that groups multiple lesson containers.
+        
+        Args:
+            module_data: Dictionary containing module information
+                - name: Required. Name of the module
+                - description: Optional. Description of the module
+                - lessons: Optional. List of lesson IDs or names to include in the module
+                - prerequisites: Optional. List of prerequisite module IDs or names
+                - metadata: Optional. Additional metadata
+            client_id: Optional client ID for identifying the connection
+                
+        Returns:
+            JSON response with operation result
+        """
+        try:
+            # Add client_id to metadata if provided
+            if client_id:
+                if "metadata" not in module_data:
+                    module_data["metadata"] = {}
+                module_data["metadata"]["client_id"] = client_id
+            
+            # Get the graph manager with the appropriate client context
+            client_graph_manager = get_client_manager(client_id)
+            
+            # Call the create method
+            result = client_graph_manager.lesson_memory.create_module(module_data)
+            
+            # Handle the response
+            def success_handler(data):
+                module_data = data.get("module", {})
+                return create_lesson_error_response(
+                    message=f"Module '{module_data.get('name', '')}' created successfully",
+                    code="success",
+                    details={"module": module_data}
+                )
+                
+            return handle_lesson_response(
+                result=result,
+                success_handler=success_handler,
+                error_code="module_creation_error"
+            )
+            
+        except Exception as e:
+            logger.error(f"Error creating module: {str(e)}")
+            error_response = create_lesson_error_response(
+                message=f"Failed to create module: {str(e)}",
+                code="module_creation_error"
+            )
+            return model_to_json(error_response)
+    
+    @server.tool()
+    async def analyze_lesson_prerequisites(container_id: str, client_id: Optional[str] = None) -> str:
+        """
+        Analyze prerequisites for a lesson container.
+        
+        Args:
+            container_id: The ID or name of the lesson container
+            client_id: Optional client ID for identifying the connection
+                
+        Returns:
+            JSON response with prerequisite analysis
+        """
+        try:
+            # Get the graph manager with the appropriate client context
+            client_graph_manager = get_client_manager(client_id)
+            
+            # Call the analysis method
+            result = client_graph_manager.lesson_memory.analyze_lesson_prerequisites(container_id)
+            
+            # Handle the response
+            def success_handler(data):
+                prerequisites = data.get("prerequisites", [])
+                return create_lesson_error_response(
+                    message=f"Analyzed prerequisites for lesson '{container_id}'",
+                    code="success",
+                    details={"prerequisites": prerequisites}
+                )
+                
+            return handle_lesson_response(
+                result=result,
+                success_handler=success_handler,
+                error_code="prerequisite_analysis_error"
+            )
             
         except Exception as e:
             logger.error(f"Error analyzing lesson prerequisites: {str(e)}")
-            error_response = ErrorResponse.create(
+            error_response = create_lesson_error_response(
                 message=f"Failed to analyze lesson prerequisites: {str(e)}",
-                code="analysis_error"
+                code="prerequisite_analysis_error"
             )
-            return dict_to_json(error_response)
-            
+            return model_to_json(error_response)
+    
     @server.tool()
-    async def find_related_lessons(lesson_id: str, similarity_threshold: float = 0.7) -> str:
+    async def find_related_lessons(container_id: str, similarity_threshold: float = 0.7, client_id: Optional[str] = None) -> str:
         """
-        Find lessons related to the specified lesson based on content similarity.
+        Find lessons related to the specified lesson container based on content similarity.
         
         Args:
-            lesson_id: The ID of the lesson to find related lessons for
-            similarity_threshold: Minimum similarity score threshold (0.0 to 1.0)
+            container_id: The ID or name of the lesson container
+            similarity_threshold: Minimum similarity threshold (0.0-1.0, default 0.7)
+            client_id: Optional client ID for identifying the connection
                 
         Returns:
             JSON response with related lessons
         """
         try:
-            result = graph_manager.find_related_lessons(lesson_id, similarity_threshold)
+            # Validate input parameter
+            if not 0.0 <= similarity_threshold <= 1.0:
+                error_response = create_lesson_error_response(
+                    message=f"Invalid similarity threshold: {similarity_threshold}. Must be between 0.0 and 1.0.",
+                    code="validation_error"
+                )
+                return model_to_json(error_response)
             
-            if result["status"] == "error":
-                return dict_to_json(ErrorResponse.create(
-                    message=f"Failed to find related lessons: {result.get('message', 'Unknown error')}",
-                    code="related_lessons_error"
-                ))
+            # Get the graph manager with the appropriate client context
+            client_graph_manager = get_client_manager(client_id)
+            
+            # Call the search method
+            result = client_graph_manager.lesson_memory.find_related_lessons(container_id, similarity_threshold)
+            
+            # Handle the response
+            def success_handler(data):
+                related_lessons = data.get("related_lessons", [])
+                return create_lesson_error_response(
+                    message=f"Found {len(related_lessons)} related lessons for '{container_id}'",
+                    code="success",
+                    details={"related_lessons": related_lessons}
+                )
                 
-            return dict_to_json({
-                "status": "success",
-                "related_lessons": result["related_lessons"],
-                "similarity_scores": result.get("similarity_scores", {}),
-                "timestamp": datetime.datetime.now().isoformat()
-            })
+            return handle_lesson_response(
+                result=result,
+                success_handler=success_handler,
+                error_code="related_lessons_error"
+            )
             
         except Exception as e:
             logger.error(f"Error finding related lessons: {str(e)}")
-            error_response = ErrorResponse.create(
+            error_response = create_lesson_error_response(
                 message=f"Failed to find related lessons: {str(e)}",
                 code="related_lessons_error"
             )
-            return dict_to_json(error_response)
-            
+            return model_to_json(error_response)
+    
     @server.tool()
-    async def consolidate_related_lessons(lesson_ids: List[str]) -> str:
+    async def generate_learning_path(
+        topic: str, 
+        difficulty: Optional[str] = None, 
+        prerequisite_knowledge: Optional[List[str]] = None,
+        max_lessons: int = 5,
+        client_id: Optional[str] = None
+    ) -> str:
         """
-        Consolidate multiple related lessons into a structured knowledge graph.
+        Generate a learning path for a specific topic.
         
         Args:
-            lesson_ids: List of lesson IDs to consolidate
+            topic: The main topic for the learning path
+            difficulty: Optional difficulty level (e.g., "beginner", "intermediate", "advanced")
+            prerequisite_knowledge: Optional list of topics the user already knows
+            max_lessons: Maximum number of lessons to include in the path (default 5)
+            client_id: Optional client ID for identifying the connection
                 
         Returns:
-            JSON response with consolidated structure
+            JSON response with the generated learning path
         """
         try:
-            if not lesson_ids or not isinstance(lesson_ids, list):
-                return dict_to_json(ErrorResponse.create(
-                    message="Missing or invalid lesson_ids parameter",
-                    code="invalid_parameter"
-                ))
-                
-            result = graph_manager.consolidate_related_lessons(lesson_ids)
-            
-            if result["status"] == "error":
-                return dict_to_json(ErrorResponse.create(
-                    message=f"Failed to consolidate lessons: {result.get('message', 'Unknown error')}",
-                    code="consolidation_error"
-                ))
-                
-            return dict_to_json({
-                "status": "success",
-                "consolidated_structure": result["consolidated_structure"],
-                "relationships": result.get("relationships", []),
-                "timestamp": datetime.datetime.now().isoformat()
-            })
-            
-        except Exception as e:
-            logger.error(f"Error consolidating lessons: {str(e)}")
-            error_response = ErrorResponse.create(
-                message=f"Failed to consolidate lessons: {str(e)}",
-                code="consolidation_error"
-            )
-            return dict_to_json(error_response)
-            
-    # Learning Path Tools
-    @server.tool()
-    async def generate_learning_path(topic: str, difficulty: Optional[str] = None, 
-                                    max_lessons: int = 10) -> str:
-        """
-        Generate a personalized learning path for a given topic.
-        
-        Args:
-            topic: The topic to generate a learning path for
-            difficulty: Optional. Desired difficulty level
-            max_lessons: Maximum number of lessons to include in the path
-                
-        Returns:
-            JSON response with generated learning path
-        """
-        try:
-            # Build parameters
+            # Prepare parameters
             params = {
                 "topic": topic,
                 "max_lessons": max_lessons
             }
+            
             if difficulty:
                 params["difficulty"] = difficulty
                 
-            result = graph_manager.generate_learning_path(params)
+            if prerequisite_knowledge:
+                params["prerequisite_knowledge"] = prerequisite_knowledge
             
-            if result["status"] == "error":
-                return dict_to_json(ErrorResponse.create(
-                    message=f"Failed to generate learning path: {result.get('message', 'Unknown error')}",
-                    code="learning_path_error"
-                ))
+            # Get the graph manager with the appropriate client context
+            client_graph_manager = get_client_manager(client_id)
+            
+            # Call the generation method
+            result = client_graph_manager.lesson_memory.generate_learning_path(params)
+            
+            # Handle the response
+            def success_handler(data):
+                learning_path = data.get("learning_path", [])
+                return create_lesson_error_response(
+                    message=f"Generated learning path for topic '{topic}'",
+                    code="success",
+                    details={"learning_path": learning_path}
+                )
                 
-            return dict_to_json({
-                "status": "success",
-                "learning_path": result["learning_path"],
-                "estimated_completion_time": result.get("estimated_completion_time"),
-                "difficulty_progression": result.get("difficulty_progression", []),
-                "timestamp": datetime.datetime.now().isoformat()
-            })
+            return handle_lesson_response(
+                result=result,
+                success_handler=success_handler,
+                error_code="learning_path_error"
+            )
             
         except Exception as e:
             logger.error(f"Error generating learning path: {str(e)}")
-            error_response = ErrorResponse.create(
+            error_response = create_lesson_error_response(
                 message=f"Failed to generate learning path: {str(e)}",
                 code="learning_path_error"
             )
-            return dict_to_json(error_response) 
+            return model_to_json(error_response)
+    
+    @server.tool()
+    async def get_lesson_entity(entity_name: str, container_name: Optional[str] = None, client_id: Optional[str] = None) -> str:
+        """
+        Get details of a lesson entity.
+        
+        Args:
+            entity_name: Name of the entity to retrieve
+            container_name: Optional name of the container to narrow down the search
+            client_id: Optional client ID for identifying the connection
+                
+        Returns:
+            JSON response with entity details
+        """
+        try:
+            # Get the graph manager with the appropriate client context
+            client_graph_manager = get_client_manager(client_id)
+            
+            # Call the get entity method
+            result = client_graph_manager.lesson_memory.get_lesson_entity(entity_name, container_name)
+            
+            # Handle the response
+            def success_handler(data):
+                entity_data = data.get("entity", {})
+                return create_entity_response(
+                    entity_data=entity_data,
+                    message=f"Retrieved lesson entity '{entity_name}' successfully"
+                )
+                
+            return handle_lesson_response(
+                result=result,
+                success_handler=success_handler,
+                error_code="entity_retrieval_error"
+            )
+            
+        except Exception as e:
+            logger.error(f"Error retrieving lesson entity: {str(e)}")
+            error_response = create_lesson_error_response(
+                message=f"Failed to retrieve lesson entity: {str(e)}",
+                code="entity_retrieval_error"
+            )
+            return model_to_json(error_response)
+    
+    @server.tool()
+    async def get_lesson_observations(entity_name: str, container_name: Optional[str] = None, client_id: Optional[str] = None) -> str:
+        """
+        Get observations for a lesson entity.
+        
+        Args:
+            entity_name: Name of the entity to retrieve observations for
+            container_name: Optional name of the container to narrow down the search
+            client_id: Optional client ID for identifying the connection
+                
+        Returns:
+            JSON response with entity observations
+        """
+        try:
+            # Get the graph manager with the appropriate client context
+            client_graph_manager = get_client_manager(client_id)
+            
+            # Call the get observations method
+            result = client_graph_manager.lesson_memory.get_lesson_observations(entity_name, container_name)
+            
+            # Handle the response
+            def success_handler(data):
+                observations = data.get("observations", [])
+                return create_observation_response(
+                    entity_name=entity_name,
+                    observations=observations,
+                    message=f"Retrieved {len(observations)} observations for entity '{entity_name}'"
+                )
+                
+            return handle_lesson_response(
+                result=result,
+                success_handler=success_handler,
+                error_code="observation_retrieval_error"
+            )
+            
+        except Exception as e:
+            logger.error(f"Error retrieving lesson observations: {str(e)}")
+            error_response = create_lesson_error_response(
+                message=f"Failed to retrieve lesson observations: {str(e)}",
+                code="observation_retrieval_error"
+            )
+            return model_to_json(error_response)
+    
+    # Return registered tools
+    return {
+        "create_lesson_container": create_lesson_container,
+        "get_lesson_container": get_lesson_container,
+        "update_lesson_container": update_lesson_container,
+        "delete_lesson_container": delete_lesson_container,
+        "list_lesson_containers": list_lesson_containers,
+        "create_lesson_entity": create_lesson_entity,
+        "add_lesson_observation": add_lesson_observation,
+        "create_structured_lesson_observations": create_structured_lesson_observations,
+        "create_lesson_relationship": create_lesson_relationship,
+        "search_lesson_entities": search_lesson_entities,
+        "create_lesson_section": create_lesson_section,
+        "update_lesson_section": update_lesson_section,
+        "create_module": create_module,
+        "analyze_lesson_prerequisites": analyze_lesson_prerequisites,
+        "find_related_lessons": find_related_lessons,
+        "generate_learning_path": generate_learning_path,
+        "get_lesson_entity": get_lesson_entity,
+        "get_lesson_observations": get_lesson_observations,
+    } 

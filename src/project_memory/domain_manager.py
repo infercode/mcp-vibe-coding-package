@@ -48,7 +48,8 @@ class DomainManager:
             RETURN c
             """
             
-            container_records, _ = self.base_manager.safe_execute_query(
+            # Use safe_execute_read_query for validation (read-only operation)
+            container_records = self.base_manager.safe_execute_read_query(
                 container_query,
                 {"container_name": container_name}
             )
@@ -65,7 +66,8 @@ class DomainManager:
             RETURN d
             """
             
-            domain_records, _ = self.base_manager.safe_execute_query(
+            # Use safe_execute_read_query for validation (read-only operation)
+            domain_records = self.base_manager.safe_execute_read_query(
                 domain_check_query,
                 {"container_name": container_name, "name": name}
             )
@@ -103,7 +105,8 @@ class DomainManager:
             RETURN d
             """
             
-            create_records, _ = self.base_manager.safe_execute_query(
+            # Use safe_execute_write_query for validation (write operation)
+            create_records = self.base_manager.safe_execute_write_query(
                 create_query,
                 {"properties": domain_entity}
             )
@@ -121,14 +124,15 @@ class DomainManager:
             RETURN d
             """
             
-            add_records, _ = self.base_manager.safe_execute_query(
+            # Use safe_execute_write_query for validation (write operation)
+            add_records = self.base_manager.safe_execute_write_query(
                 add_to_container_query,
                 {"container_name": container_name, "domain_id": domain_id, "timestamp": timestamp}
             )
             
             if not add_records or len(add_records) == 0:
                 # Attempt to clean up the created entity
-                self.base_manager.safe_execute_query(
+                self.base_manager.safe_execute_write_query(
                     "MATCH (d:Entity {id: $domain_id}) DELETE d",
                     {"domain_id": domain_id}
                 )
@@ -173,7 +177,8 @@ class DomainManager:
             RETURN d, count(component) as component_count
             """
             
-            records, _ = self.base_manager.safe_execute_query(
+            # Use safe_execute_read_query for validation (read-only operation)
+            records = self.base_manager.safe_execute_read_query(
                 query,
                 {"container_name": container_name, "name": name}
             )
@@ -196,7 +201,8 @@ class DomainManager:
             RETURN component.entityType as type, count(component) as count
             """
             
-            component_records, _ = self.base_manager.safe_execute_query(
+            # Use safe_execute_read_query for validation (read-only operation)
+            component_records = self.base_manager.safe_execute_read_query(
                 component_query,
                 {"container_name": container_name, "name": name}
             )
@@ -245,7 +251,8 @@ class DomainManager:
             RETURN d
             """
             
-            domain_records, _ = self.base_manager.safe_execute_query(
+            # Use safe_execute_read_query for validation (read-only operation)
+            domain_records = self.base_manager.safe_execute_read_query(
                 domain_query,
                 {"container_name": container_name, "name": name}
             )
@@ -283,7 +290,8 @@ class DomainManager:
             # Add name and container_name to updates for the query
             params = {"name": name, "container_name": container_name, **updates}
             
-            update_records, _ = self.base_manager.safe_execute_query(
+            # Use safe_execute_write_query for validation (write operation)
+            update_records = self.base_manager.safe_execute_write_query(
                 update_query,
                 params
             )
@@ -329,7 +337,8 @@ class DomainManager:
             RETURN d
             """
             
-            domain_records, _ = self.base_manager.safe_execute_query(
+            # Use safe_execute_read_query for validation (read-only operation)
+            domain_records = self.base_manager.safe_execute_read_query(
                 domain_query,
                 {"container_name": container_name, "name": name}
             )
@@ -363,7 +372,8 @@ class DomainManager:
                 RETURN count(component) as deleted_count
                 """
                 
-                delete_records, _ = self.base_manager.safe_execute_query(
+                # Use safe_execute_write_query for validation (write operation)
+                delete_records = self.base_manager.safe_execute_write_query(
                     delete_components_query,
                     {"container_name": container_name, "domain_id": domain_id}
                 )
@@ -379,7 +389,8 @@ class DomainManager:
                 DELETE r
                 """
                 
-                self.base_manager.safe_execute_query(
+                # Use safe_execute_write_query for validation (write operation)
+                self.base_manager.safe_execute_write_query(
                     delete_domain_rels_query,
                     {"domain_id": domain_id}
                 )
@@ -390,7 +401,8 @@ class DomainManager:
                 DELETE d
                 """
                 
-                self.base_manager.safe_execute_query(
+                # Use safe_execute_write_query for validation (write operation)
+                self.base_manager.safe_execute_write_query(
                     delete_domain_query,
                     {"domain_id": domain_id}
                 )
@@ -407,7 +419,8 @@ class DomainManager:
                 RETURN count(component) as component_count
                 """
                 
-                component_records, _ = self.base_manager.safe_execute_query(
+                # Use safe_execute_read_query for validation (read-only operation)
+                component_records = self.base_manager.safe_execute_read_query(
                     check_components_query,
                     {"domain_id": domain_id}
                 )
@@ -428,7 +441,8 @@ class DomainManager:
                 DELETE r
                 """
                 
-                self.base_manager.safe_execute_query(
+                # Use safe_execute_write_query for validation (write operation)
+                self.base_manager.safe_execute_write_query(
                     delete_domain_rels_query,
                     {"domain_id": domain_id}
                 )
@@ -439,7 +453,8 @@ class DomainManager:
                 DELETE d
                 """
                 
-                self.base_manager.safe_execute_query(
+                # Use safe_execute_write_query for validation (write operation)
+                self.base_manager.safe_execute_write_query(
                     delete_domain_query,
                     {"domain_id": domain_id}
                 )
@@ -475,7 +490,8 @@ class DomainManager:
             RETURN c
             """
             
-            container_records, _ = self.base_manager.safe_execute_query(
+            # Use safe_execute_read_query for validation (read-only operation)
+            container_records = self.base_manager.safe_execute_read_query(
                 container_query,
                 {"container_name": container_name}
             )
@@ -501,7 +517,8 @@ class DomainManager:
             LIMIT $limit
             """
             
-            records, _ = self.base_manager.safe_execute_query(
+            # Use safe_execute_read_query for validation (read-only operation)
+            records = self.base_manager.safe_execute_read_query(
                 query,
                 {"container_name": container_name, "limit": limit}
             )
@@ -548,7 +565,8 @@ class DomainManager:
             RETURN d
             """
             
-            domain_records, _ = self.base_manager.safe_execute_query(
+            # Use safe_execute_read_query for validation (read-only operation)
+            domain_records = self.base_manager.safe_execute_read_query(
                 domain_query,
                 {"container_name": container_name, "domain_name": domain_name}
             )
@@ -564,7 +582,8 @@ class DomainManager:
             RETURN e
             """
             
-            entity_records, _ = self.base_manager.safe_execute_query(
+            # Use safe_execute_read_query for validation (read-only operation)
+            entity_records = self.base_manager.safe_execute_read_query(
                 entity_query,
                 {"entity_name": entity_name}
             )
@@ -583,7 +602,8 @@ class DomainManager:
             RETURN e
             """
             
-            check_records, _ = self.base_manager.safe_execute_query(
+            # Use safe_execute_read_query for validation (read-only operation)
+            check_records = self.base_manager.safe_execute_read_query(
                 check_query,
                 {"container_name": container_name, "domain_name": domain_name, "entity_name": entity_name}
             )
@@ -602,7 +622,8 @@ class DomainManager:
             RETURN exists((e)-[:PART_OF]->(c)) as in_container
             """
             
-            container_check_records, _ = self.base_manager.safe_execute_query(
+            # Use safe_execute_read_query for validation (read-only operation)
+            container_check_records = self.base_manager.safe_execute_read_query(
                 container_check_query,
                 {"container_name": container_name, "entity_name": entity_name}
             )
@@ -619,7 +640,8 @@ class DomainManager:
                 CREATE (e)-[:PART_OF {created: $timestamp}]->(c)
                 """
                 
-                self.base_manager.safe_execute_query(
+                # Use safe_execute_write_query for validation (write operation)
+                self.base_manager.safe_execute_write_query(
                     add_to_container_query,
                     {"container_name": container_name, "entity_name": entity_name, "timestamp": time.time()}
                 )
@@ -633,7 +655,8 @@ class DomainManager:
             RETURN e
             """
             
-            add_records, _ = self.base_manager.safe_execute_query(
+            # Use safe_execute_write_query for validation (write operation)
+            add_records = self.base_manager.safe_execute_write_query(
                 add_query,
                 {
                     "container_name": container_name, 
@@ -683,7 +706,8 @@ class DomainManager:
             RETURN r
             """
             
-            check_records, _ = self.base_manager.safe_execute_query(
+            # Use safe_execute_read_query for validation (read-only operation)
+            check_records = self.base_manager.safe_execute_read_query(
                 check_query,
                 {"container_name": container_name, "domain_name": domain_name, "entity_name": entity_name}
             )
@@ -702,7 +726,8 @@ class DomainManager:
             DELETE r
             """
             
-            self.base_manager.safe_execute_query(
+            # Use safe_execute_write_query for validation (write operation)
+            self.base_manager.safe_execute_write_query(
                 remove_query,
                 {"container_name": container_name, "domain_name": domain_name, "entity_name": entity_name}
             )
@@ -740,7 +765,8 @@ class DomainManager:
             RETURN d
             """
             
-            domain_records, _ = self.base_manager.safe_execute_query(
+            # Use safe_execute_read_query for validation (read-only operation)
+            domain_records = self.base_manager.safe_execute_read_query(
                 domain_query,
                 {"container_name": container_name, "domain_name": domain_name}
             )
@@ -777,7 +803,8 @@ class DomainManager:
                 
                 params = {"container_name": container_name, "domain_name": domain_name}
             
-            records, _ = self.base_manager.safe_execute_query(
+            # Use safe_execute_read_query for validation (read-only operation)
+            records = self.base_manager.safe_execute_read_query(
                 query,
                 params
             )
@@ -829,7 +856,8 @@ class DomainManager:
             RETURN from, to
             """
             
-            domains_records, _ = self.base_manager.safe_execute_query(
+            # Use safe_execute_read_query for validation (read-only operation)
+            domains_records = self.base_manager.safe_execute_read_query(
                 domains_query,
                 {"container_name": container_name, "from_domain": from_domain, "to_domain": to_domain}
             )
@@ -849,7 +877,8 @@ class DomainManager:
             RETURN r
             """
             
-            check_records, _ = self.base_manager.safe_execute_query(
+            # Use safe_execute_read_query for validation (read-only operation)
+            check_records = self.base_manager.safe_execute_read_query(
                 check_query,
                 {
                     "container_name": container_name, 
@@ -879,7 +908,8 @@ class DomainManager:
             RETURN r
             """
             
-            create_records, _ = self.base_manager.safe_execute_query(
+            # Use safe_execute_write_query for validation (write operation)
+            create_records = self.base_manager.safe_execute_write_query(
                 create_query,
                 {
                     "container_name": container_name, 

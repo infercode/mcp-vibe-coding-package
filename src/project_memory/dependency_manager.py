@@ -1,6 +1,7 @@
 from typing import Any, Dict, List, Optional, Union
 import time
 import json
+import logging
 
 from src.utils import dict_to_json, generate_id
 from src.graph_memory.base_manager import BaseManager
@@ -21,7 +22,7 @@ class DependencyManager:
             base_manager: Base manager for graph operations
         """
         self.base_manager = base_manager
-        self.logger = base_manager.logger
+        self.logger = logging.getLogger(__name__)
         self.entity_manager = EntityManager(base_manager)
         self.relation_manager = RelationManager(base_manager)
         
@@ -67,17 +68,17 @@ class DependencyManager:
             components_query = """
             MATCH (c:Entity {name: $container_name, entityType: 'ProjectContainer'})
             MATCH (d:Entity {name: $domain_name, entityType: 'Domain'})-[:PART_OF]->(c)
-            MATCH (from:Entity {name: $from_component})-[:BELONGS_TO]->(d)
-            MATCH (to:Entity {name: $to_component})-[:BELONGS_TO]->(d)
+            MATCH (from:Entity {name: $from_component, entityType: 'Component'})-[:BELONGS_TO]->(d)
+            MATCH (to:Entity {name: $to_component, entityType: 'Component'})-[:BELONGS_TO]->(d)
             RETURN from, to
             """
             
-            components_records, _ = self.base_manager.safe_execute_query(
+            components_records = self.base_manager.safe_execute_read_query(
                 components_query,
                 {
                     "container_name": container_name, 
-                    "domain_name": domain_name, 
-                    "from_component": from_component, 
+                    "domain_name": domain_name,
+                    "from_component": from_component,
                     "to_component": to_component
                 }
             )
@@ -91,19 +92,19 @@ class DependencyManager:
             check_query = """
             MATCH (c:Entity {name: $container_name, entityType: 'ProjectContainer'})
             MATCH (d:Entity {name: $domain_name, entityType: 'Domain'})-[:PART_OF]->(c)
-            MATCH (from:Entity {name: $from_component})-[:BELONGS_TO]->(d)
-            MATCH (to:Entity {name: $to_component})-[:BELONGS_TO]->(d)
+            MATCH (from:Entity {name: $from_component, entityType: 'Component'})-[:BELONGS_TO]->(d)
+            MATCH (to:Entity {name: $to_component, entityType: 'Component'})-[:BELONGS_TO]->(d)
             MATCH (from)-[r]->(to)
             WHERE type(r) = $dependency_type
             RETURN r
             """
             
-            check_records, _ = self.base_manager.safe_execute_query(
+            check_records = self.base_manager.safe_execute_read_query(
                 check_query,
                 {
                     "container_name": container_name, 
-                    "domain_name": domain_name, 
-                    "from_component": from_component, 
+                    "domain_name": domain_name,
+                    "from_component": from_component,
                     "to_component": to_component,
                     "dependency_type": dependency_type
                 }
@@ -112,30 +113,29 @@ class DependencyManager:
             if check_records and len(check_records) > 0:
                 return dict_to_json({
                     "status": "success",
-                    "message": f"Dependency of type '{dependency_type}' already exists from '{from_component}' to '{to_component}'"
+                    "message": f"Dependency of type '{dependency_type}' already exists between components '{from_component}' and '{to_component}'"
                 })
             
             # Prepare dependency properties
             dependency_props = properties or {}
             dependency_props["created"] = time.time()
-            dependency_props["domain"] = "project"
             
-            # Create dynamic dependency relationship
+            # Create dynamic relationship
             create_query = f"""
             MATCH (c:Entity {{name: $container_name, entityType: 'ProjectContainer'}})
             MATCH (d:Entity {{name: $domain_name, entityType: 'Domain'}})-[:PART_OF]->(c)
-            MATCH (from:Entity {{name: $from_component}})-[:BELONGS_TO]->(d)
-            MATCH (to:Entity {{name: $to_component}})-[:BELONGS_TO]->(d)
+            MATCH (from:Entity {{name: $from_component, entityType: 'Component'}})-[:BELONGS_TO]->(d)
+            MATCH (to:Entity {{name: $to_component, entityType: 'Component'}})-[:BELONGS_TO]->(d)
             CREATE (from)-[r:{dependency_type} $properties]->(to)
             RETURN r
             """
             
-            create_records, _ = self.base_manager.safe_execute_query(
+            create_records = self.base_manager.safe_execute_write_query(
                 create_query,
                 {
                     "container_name": container_name, 
-                    "domain_name": domain_name, 
-                    "from_component": from_component, 
+                    "domain_name": domain_name,
+                    "from_component": from_component,
                     "to_component": to_component,
                     "properties": dependency_props
                 }
@@ -143,12 +143,12 @@ class DependencyManager:
             
             if not create_records or len(create_records) == 0:
                 return dict_to_json({
-                    "error": f"Failed to create dependency from '{from_component}' to '{to_component}'"
+                    "error": f"Failed to create dependency between components '{from_component}' and '{to_component}'"
                 })
             
             return dict_to_json({
                 "status": "success",
-                "message": f"Dependency of type '{dependency_type}' created from '{from_component}' to '{to_component}'"
+                "message": f"Dependency of type '{dependency_type}' created between components '{from_component}' and '{to_component}'"
             })
                 
         except Exception as e:
@@ -191,11 +191,11 @@ class DependencyManager:
             component_query = """
             MATCH (c:Entity {name: $container_name, entityType: 'ProjectContainer'})
             MATCH (d:Entity {name: $domain_name, entityType: 'Domain'})-[:PART_OF]->(c)
-            MATCH (comp:Entity {name: $component_name})-[:BELONGS_TO]->(d)
+            MATCH (comp:Entity {name: $component_name, entityType: 'Component'})-[:BELONGS_TO]->(d)
             RETURN comp
             """
             
-            component_records, _ = self.base_manager.safe_execute_query(
+            component_records = self.base_manager.safe_execute_read_query(
                 component_query,
                 {"container_name": container_name, "domain_name": domain_name, "component_name": component_name}
             )
@@ -290,7 +290,7 @@ class DependencyManager:
                 "dependency_types": self.dependency_types
             }
             
-            records, _ = self.base_manager.safe_execute_query(query, params)
+            records = self.base_manager.safe_execute_read_query(query, params)
             
             # Process results
             dependencies = []
@@ -352,19 +352,19 @@ class DependencyManager:
             check_query = """
             MATCH (c:Entity {name: $container_name, entityType: 'ProjectContainer'})
             MATCH (d:Entity {name: $domain_name, entityType: 'Domain'})-[:PART_OF]->(c)
-            MATCH (from:Entity {name: $from_component})-[:BELONGS_TO]->(d)
-            MATCH (to:Entity {name: $to_component})-[:BELONGS_TO]->(d)
+            MATCH (from:Entity {name: $from_component, entityType: 'Component'})-[:BELONGS_TO]->(d)
+            MATCH (to:Entity {name: $to_component, entityType: 'Component'})-[:BELONGS_TO]->(d)
             MATCH (from)-[r]->(to)
             WHERE type(r) = $dependency_type
             RETURN r
             """
             
-            check_records, _ = self.base_manager.safe_execute_query(
+            check_records = self.base_manager.safe_execute_read_query(
                 check_query,
                 {
                     "container_name": container_name, 
-                    "domain_name": domain_name, 
-                    "from_component": from_component, 
+                    "domain_name": domain_name,
+                    "from_component": from_component,
                     "to_component": to_component,
                     "dependency_type": dependency_type
                 }
@@ -376,24 +376,22 @@ class DependencyManager:
                 })
             
             # Delete dependency
-            delete_query = """
-            MATCH (c:Entity {name: $container_name, entityType: 'ProjectContainer'})
-            MATCH (d:Entity {name: $domain_name, entityType: 'Domain'})-[:PART_OF]->(c)
-            MATCH (from:Entity {name: $from_component})-[:BELONGS_TO]->(d)
-            MATCH (to:Entity {name: $to_component})-[:BELONGS_TO]->(d)
-            MATCH (from)-[r]->(to)
-            WHERE type(r) = $dependency_type
+            delete_query = f"""
+            MATCH (c:Entity {{name: $container_name, entityType: 'ProjectContainer'}})
+            MATCH (d:Entity {{name: $domain_name, entityType: 'Domain'}})-[:PART_OF]->(c)
+            MATCH (from:Entity {{name: $from_component, entityType: 'Component'}})-[:BELONGS_TO]->(d)
+            MATCH (to:Entity {{name: $to_component, entityType: 'Component'}})-[:BELONGS_TO]->(d)
+            MATCH (from)-[r:{dependency_type}]->(to)
             DELETE r
             """
             
-            self.base_manager.safe_execute_query(
+            self.base_manager.safe_execute_write_query(
                 delete_query,
                 {
                     "container_name": container_name, 
-                    "domain_name": domain_name, 
-                    "from_component": from_component, 
-                    "to_component": to_component,
-                    "dependency_type": dependency_type
+                    "domain_name": domain_name,
+                    "from_component": from_component,
+                    "to_component": to_component
                 }
             )
             
@@ -428,7 +426,7 @@ class DependencyManager:
             RETURN d
             """
             
-            domain_records, _ = self.base_manager.safe_execute_query(
+            domain_records = self.base_manager.safe_execute_read_query(
                 domain_query,
                 {"container_name": container_name, "domain_name": domain_name}
             )
@@ -446,7 +444,7 @@ class DependencyManager:
             RETURN count(comp) as component_count
             """
             
-            count_records, _ = self.base_manager.safe_execute_query(
+            count_records = self.base_manager.safe_execute_read_query(
                 component_count_query,
                 {"container_name": container_name, "domain_name": domain_name}
             )
@@ -464,7 +462,7 @@ class DependencyManager:
             RETURN type(r) as type, count(r) as count
             """
             
-            dependency_records, _ = self.base_manager.safe_execute_query(
+            dependency_records = self.base_manager.safe_execute_read_query(
                 dependency_count_query,
                 {"container_name": container_name, "domain_name": domain_name, "dependency_types": self.dependency_types}
             )
@@ -493,7 +491,7 @@ class DependencyManager:
             LIMIT 5
             """
             
-            dependent_records, _ = self.base_manager.safe_execute_query(
+            dependent_records = self.base_manager.safe_execute_read_query(
                 most_dependent_query,
                 {"container_name": container_name, "domain_name": domain_name, "dependency_types": self.dependency_types}
             )
@@ -519,7 +517,7 @@ class DependencyManager:
             LIMIT 5
             """
             
-            depended_records, _ = self.base_manager.safe_execute_query(
+            depended_records = self.base_manager.safe_execute_read_query(
                 most_depended_query,
                 {"container_name": container_name, "domain_name": domain_name, "dependency_types": self.dependency_types}
             )
@@ -545,7 +543,7 @@ class DependencyManager:
             LIMIT 10
             """
             
-            cycle_records, _ = self.base_manager.safe_execute_query(
+            cycle_records = self.base_manager.safe_execute_read_query(
                 cycle_detection_query,
                 {"container_name": container_name, "domain_name": domain_name}
             )
@@ -617,17 +615,17 @@ class DependencyManager:
             components_query = """
             MATCH (c:Entity {name: $container_name, entityType: 'ProjectContainer'})
             MATCH (d:Entity {name: $domain_name, entityType: 'Domain'})-[:PART_OF]->(c)
-            MATCH (from:Entity {name: $from_component})-[:BELONGS_TO]->(d)
-            MATCH (to:Entity {name: $to_component})-[:BELONGS_TO]->(d)
+            MATCH (from:Entity {name: $from_component, entityType: 'Component'})-[:BELONGS_TO]->(d)
+            MATCH (to:Entity {name: $to_component, entityType: 'Component'})-[:BELONGS_TO]->(d)
             RETURN from, to
             """
             
-            components_records, _ = self.base_manager.safe_execute_query(
+            components_records = self.base_manager.safe_execute_read_query(
                 components_query,
                 {
                     "container_name": container_name, 
-                    "domain_name": domain_name, 
-                    "from_component": from_component, 
+                    "domain_name": domain_name,
+                    "from_component": from_component,
                     "to_component": to_component
                 }
             )
@@ -641,20 +639,20 @@ class DependencyManager:
             path_query = f"""
             MATCH (c:Entity {{name: $container_name, entityType: 'ProjectContainer'}})
             MATCH (d:Entity {{name: $domain_name, entityType: 'Domain'}})-[:PART_OF]->(c)
-            MATCH (from:Entity {{name: $from_component}})-[:BELONGS_TO]->(d)
-            MATCH (to:Entity {{name: $to_component}})-[:BELONGS_TO]->(d)
+            MATCH (from:Entity {{name: $from_component, entityType: 'Component'}})-[:BELONGS_TO]->(d)
+            MATCH (to:Entity {{name: $to_component, entityType: 'Component'}})-[:BELONGS_TO]->(d)
             MATCH path = (from)-[r:DEPENDS_ON|IMPORTS|USES|EXTENDS|IMPLEMENTS|CALLS|REFERENCES*1..{max_depth}]->(to)
             RETURN path, length(path) as path_length
             ORDER BY path_length
             LIMIT 10
             """
             
-            path_records, _ = self.base_manager.safe_execute_query(
+            path_records = self.base_manager.safe_execute_read_query(
                 path_query,
                 {
                     "container_name": container_name, 
-                    "domain_name": domain_name, 
-                    "from_component": from_component, 
+                    "domain_name": domain_name,
+                    "from_component": from_component,
                     "to_component": to_component
                 }
             )
@@ -722,7 +720,7 @@ class DependencyManager:
             RETURN d
             """
             
-            domain_records, _ = self.base_manager.safe_execute_query(
+            domain_records = self.base_manager.safe_execute_read_query(
                 domain_query,
                 {"container_name": container_name, "domain_name": domain_name}
             )
