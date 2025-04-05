@@ -636,9 +636,19 @@ class ProjectMemoryManager:
         """
         # Delegate to the ProjectContainer manager
         result_json = self.project_container.create_project_container(project_data)
-        # Convert JSON string to dictionary
-        result = json.loads(result_json)
-        return result
+        
+        # Handle result based on type
+        if isinstance(result_json, dict):
+            # Already a dictionary, return as is
+            return result_json
+        
+        # Try to convert JSON string to dictionary
+        try:
+            result = json.loads(result_json)
+            return result
+        except (json.JSONDecodeError, TypeError) as e:
+            # Return error dictionary if parsing fails
+            return {"error": f"Failed to parse result: {str(e)}", "raw_result": str(result_json)}
     
     def get_project_container(self, name: str) -> Dict[str, Any]:
         """
@@ -651,8 +661,19 @@ class ProjectMemoryManager:
             Dictionary with the project container details
         """
         result_json = self.project_container.get_project_container(name)
-        result = json.loads(result_json)
-        return result
+        
+        # Handle result based on type
+        if isinstance(result_json, dict):
+            # Already a dictionary, return as is
+            return result_json
+        
+        # Try to convert JSON string to dictionary
+        try:
+            result = json.loads(result_json)
+            return result
+        except (json.JSONDecodeError, TypeError) as e:
+            # Return error dictionary if parsing fails
+            return {"error": f"Failed to parse result: {str(e)}", "raw_result": str(result_json)}
     
     def update_project_container(self, name: str, updates: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -666,8 +687,19 @@ class ProjectMemoryManager:
             Dictionary with the updated project container
         """
         result_json = self.project_container.update_project_container(name, updates)
-        result = json.loads(result_json)
-        return result
+        
+        # Handle result based on type
+        if isinstance(result_json, dict):
+            # Already a dictionary, return as is
+            return result_json
+        
+        # Try to convert JSON string to dictionary
+        try:
+            result = json.loads(result_json)
+            return result
+        except (json.JSONDecodeError, TypeError) as e:
+            # Return error dictionary if parsing fails
+            return {"error": f"Failed to parse result: {str(e)}", "raw_result": str(result_json)}
     
     def delete_project_container(self, name: str, delete_contents: bool = False) -> Dict[str, Any]:
         """
@@ -681,8 +713,19 @@ class ProjectMemoryManager:
             Dictionary with the deletion result
         """
         result_json = self.project_container.delete_project_container(name, delete_contents)
-        result = json.loads(result_json)
-        return result
+        
+        # Handle result based on type
+        if isinstance(result_json, dict):
+            # Already a dictionary, return as is
+            return result_json
+        
+        # Try to convert JSON string to dictionary
+        try:
+            result = json.loads(result_json)
+            return result
+        except (json.JSONDecodeError, TypeError) as e:
+            # Return error dictionary if parsing fails
+            return {"error": f"Failed to parse result: {str(e)}", "raw_result": str(result_json)}
     
     def list_project_containers(self, sort_by: str = "name", limit: int = 100) -> Dict[str, Any]:
         """
@@ -696,8 +739,19 @@ class ProjectMemoryManager:
             Dictionary with the list of project containers
         """
         result_json = self.project_container.list_project_containers(sort_by, limit)
-        result = json.loads(result_json)
-        return result
+        
+        # Handle result based on type
+        if isinstance(result_json, dict):
+            # Already a dictionary, return as is
+            return result_json
+        
+        # Try to convert JSON string to dictionary
+        try:
+            result = json.loads(result_json)
+            return result
+        except (json.JSONDecodeError, TypeError) as e:
+            # Return error dictionary if parsing fails
+            return {"error": f"Failed to parse result: {str(e)}", "raw_result": str(result_json)}
     
     def get_project_status(self, container_name: str) -> Dict[str, Any]:
         """

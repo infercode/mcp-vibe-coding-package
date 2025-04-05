@@ -6,7 +6,7 @@ It exposes a set of managers for different graph memory operations, as well
 as a facade class that maintains backward compatibility with the original API.
 """
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union, cast
 import json
 import datetime
 import time
@@ -66,10 +66,36 @@ class GraphMemoryManager:
         self._database = database
         self._embedding_index_name = embedding_index_name
         
-        # Initialize embedding adapter
+        # Store logger for consistent logging
+        self.logger = logger
+        
+        # Detect operating mode (SSE or STDIO)
+        self._is_sse_mode = self._detect_sse_mode()
+        
+        # Configure embedding based on mode
+        if self._is_sse_mode:
+            # In SSE mode, we default to disabled but will load from config files later
+            if self.logger:
+                self.logger.info("Running in SSE mode, will load embedding config from files")
+            self.embedding_enabled = False
+            self.embedder_provider = "openai"  # Default, will be overridden by config
+        else:
+            # In STDIO mode, check environment variables
+            import os
+            if self.logger:
+                self.logger.info("Running in STDIO mode, using environment variables")
+            env_embedder_provider = os.environ.get("EMBEDDER_PROVIDER", "none").lower()
+            self.embedding_enabled = env_embedder_provider != "none"
+            self.embedder_provider = env_embedder_provider if env_embedder_provider and env_embedder_provider != "none" else "openai"
+        
+        # Initialize embedding adapter - will be configured in initialize
         self.embedding_adapter = EmbeddingAdapter(logger=logger)
         
-        # Initialize specialized managers
+        # Store embedding configuration for later use
+        self.embedding_api_key = embedding_api_key
+        self.embedding_model = embedding_model
+        
+        # Initialize specialized managers - ensure proper object instantiation
         self.entity_manager = EntityManager(self.base_manager)
         self.relation_manager = RelationManager(self.base_manager)
         self.observation_manager = ObservationManager(self.base_manager)
@@ -79,68 +105,201 @@ class GraphMemoryManager:
         self.lesson_memory = LessonMemoryManager(self.base_manager)
         self.project_memory = ProjectMemoryManager(self.base_manager)
         
-        # Store configuration
-        self.embedding_api_key = embedding_api_key
-        self.embedding_model = embedding_model
-        self.logger = logger
-        
         # Required attributes for backward compatibility
         self.default_project_name = "default"
-        self.embedding_enabled = True
         self.neo4j_uri = neo4j_uri or "bolt://localhost:7687"
         self.neo4j_user = neo4j_username or "neo4j"
         self.neo4j_password = neo4j_password or "password"
         self.neo4j_database = database or "neo4j"
-        self.embedder_provider = "openai"
         self.neo4j_driver = None
+        
+        # Client-specific state tracking
+        self._client_id = None
+        self._client_projects = {}
     
-    # Connection Management
+    def _detect_sse_mode(self) -> bool:
+        """
+        Detect if running in SSE mode by checking for common indicators.
+        
+        Returns:
+            True if in SSE mode, False for STDIO mode
+        """
+        import os
+        
+        # Check for presence of environment variable that would only be in STDIO mode
+        stdio_indicators = ["MCP_STDIO_MODE", "STDIO_MODE"]
+        for indicator in stdio_indicators:
+            if os.environ.get(indicator, "").lower() in ("1", "true", "yes"):
+                return False
+                
+        # Default to SSE mode if no clear indicators
+        return True
     
-    def initialize(self) -> bool:
+    def initialize(self, client_id=None) -> bool:
         """
         Initialize connections to Neo4j and embedding services.
         
+        Args:
+            client_id: Optional client ID for client isolation
+            
+        Returns:
+            True if initialization successful, False otherwise
+        """
+        # Track client ID for isolation
+        self._client_id = client_id
+        
+        # Use different initialization approaches based on mode
+        if self._is_sse_mode:
+            return self._initialize_sse_mode(client_id)
+        else:
+            return self._initialize_stdio_mode(client_id)
+    
+    def _initialize_sse_mode(self, client_id=None) -> bool:
+        """
+        Initialize in SSE mode with default settings.
+        
+        In SSE mode, we start with default values and wait for configuration 
+        to be provided by the client through the get_unified_config tool.
+        
+        Args:
+            client_id: Optional client ID for client isolation
+            
+        Returns:
+            True if initialization successful, False otherwise
+        """
+        try:
+            # In SSE mode, we start with defaults and wait for config from client
+            if self.logger:
+                self.logger.info("Initializing in SSE mode with defaults - waiting for client configuration")
+            
+            # Store client ID for later use
+            if client_id:
+                self._client_id = client_id
+            
+            # Initialize base manager for Neo4j connection - critical for all operations
+            try:
+                if not self.base_manager.initialize():
+                    if self.logger:
+                        self.logger.error("Failed to initialize base manager")
+                    return False
+            except Exception as e:
+                if self.logger:
+                    self.logger.error(f"Failed to initialize base manager: {str(e)}")
+                return False
+            
+            # Update forwarded properties from base manager
+            self._update_properties_from_base_manager()
+            
+            # Ensure all manager object references are proper instances
+            if not self._ensure_managers_initialized():
+                return False
+                
+            # Client isolation: Store client-specific project memory if client_id is provided
+            if client_id and client_id not in self._client_projects:
+                self._client_projects[client_id] = self.project_memory
+                
+            return True
+            
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"Error during SSE initialization: {str(e)}")
+            return False
+    
+    def _initialize_stdio_mode(self, client_id=None) -> bool:
+        """
+        Initialize in STDIO mode using environment variables.
+        
+        Args:
+            client_id: Optional client ID for client isolation
+            
         Returns:
             True if initialization successful, False otherwise
         """
         # Override configuration if provided in constructor
+        import os
+        
         if self._neo4j_uri:
-            # Set environment variables or direct properties if accessible
-            import os
             os.environ["NEO4J_URI"] = self._neo4j_uri
         
         if self._neo4j_username:
-            import os
             os.environ["NEO4J_USER"] = self._neo4j_username
             
         if self._neo4j_password:
-            import os
             os.environ["NEO4J_PASSWORD"] = self._neo4j_password
             
         if self._database:
-            import os
             os.environ["NEO4J_DATABASE"] = self._database
             
-        # Initialize embedding adapter
-        if not self.embedding_adapter.init_embedding_manager(
-            api_key=self.embedding_api_key,
-            model_name=self.embedding_model
-        ):
+        # Check if embeddings disabled via environment variable (takes precedence)
+        env_embedder_provider = os.environ.get("EMBEDDER_PROVIDER", "").lower()
+        if env_embedder_provider == "none":
+            # Explicitly disabled via environment
+            self.embedding_enabled = False
             if self.logger:
-                self.logger.error("Failed to initialize embedding manager")
+                self.logger.info("Embeddings explicitly disabled via EMBEDDER_PROVIDER=none")
+        
+        # Handle embedding initialization when enabled
+        if self.embedding_enabled:
+            # Try to initialize embedding adapter
+            adapter_success = self.embedding_adapter.init_embedding_manager(
+                api_key=self.embedding_api_key,
+                model_name=self.embedding_model
+            )
+            
+            if not adapter_success:
+                # Log failure but continue without embeddings
+                self.embedding_enabled = False
+                if self.logger:
+                    self.logger.error("Failed to initialize embedding manager, continuing without embeddings")
+        else:
+            # Log that embeddings are skipped
+            if self.logger:
+                self.logger.info("Embeddings disabled - skipping embedding adapter initialization")
+        
+        # Initialize base manager for Neo4j connection - critical for all operations
+        try:
+            if not self.base_manager.initialize():
+                if self.logger:
+                    self.logger.error("Failed to initialize base manager")
+                return False
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"Failed to initialize base manager: {str(e)}")
             return False
         
-        # Initialize base manager and Neo4j
-        self.base_manager.initialize()
+        # Update forwarded properties from base manager
+        self._update_properties_from_base_manager()
         
-        # Update forwarded properties after initialization
+        # Ensure all manager object references are proper instances
+        if not self._ensure_managers_initialized():
+            return False
+        
+        # Client isolation: Store client-specific project memory if client_id is provided
+        if client_id and client_id not in self._client_projects:
+            self._client_projects[client_id] = self.project_memory
+            
+        return True
+    
+    def _update_properties_from_base_manager(self):
+        """Update forwarded properties from base manager."""
         self.neo4j_uri = getattr(self.base_manager, "neo4j_uri", "bolt://localhost:7687")
         self.neo4j_user = getattr(self.base_manager, "neo4j_user", "neo4j")
         self.neo4j_password = getattr(self.base_manager, "neo4j_password", "password")
         self.neo4j_database = getattr(self.base_manager, "neo4j_database", "neo4j")
-        self.embedder_provider = getattr(self.base_manager, "embedder_provider", "none")
+        self.embedder_provider = getattr(self.base_manager, "embedder_provider", "openai")
         self.neo4j_driver = getattr(self.base_manager, "neo4j_driver", None)
-        
+    
+    def _ensure_managers_initialized(self) -> bool:
+        """Ensure all manager objects are properly initialized."""
+        if not isinstance(self.project_memory, object) or callable(self.project_memory):
+            if self.logger:
+                self.logger.warn("Project memory manager not properly initialized, recreating")
+            try:
+                self.project_memory = ProjectMemoryManager(self.base_manager)
+            except Exception as e:
+                if self.logger:
+                    self.logger.error(f"Failed to re-initialize project memory manager: {str(e)}")
+                return False
         return True
     
     def close(self) -> None:
@@ -426,13 +585,18 @@ class GraphMemoryManager:
         
     # Additional methods for backward compatibility with original GraphManager
     
-    def set_project_name(self, project_name: str) -> None:
+    def set_project_name(self, project_name: str, client_id: Optional[str] = None) -> None:
         """
         Set the default project name for memory operations.
         
         Args:
             project_name: The project name to use
+            client_id: Optional client ID for isolation
         """
+        # Store client ID for future reference if provided
+        if client_id:
+            self._client_id = client_id
+            
         self.base_manager.set_project_name(project_name)
         self.default_project_name = self.base_manager.default_project_name
     
@@ -538,18 +702,103 @@ class GraphMemoryManager:
             Dictionary with status of configuration application
         """
         try:
-            # Apply embedding configuration if present
-            embeddings = config.get("embeddings", {})
-            if embeddings:
-                provider = embeddings.get("provider")
-                model = embeddings.get("model")
-                api_key = embeddings.get("api_key")
+            # Store client ID for isolation if provided
+            client_id = config.get("client_id")
+            if client_id:
+                self._client_id = client_id
+            
+            # Apply project name if present
+            if "project_name" in config:
+                project_name = config["project_name"]
+                self.default_project_name = project_name
+                self.base_manager.set_project_name(project_name)
+            
+            # Apply Neo4j configuration if present
+            if "neo4j" in config:
+                neo4j_config = config["neo4j"]
+                neo4j_changed = False
                 
-                if provider and model and api_key:
-                    # Configure embedding adapter
-                    result = self.embedding_adapter.init_embedding_manager(api_key, model)
-                    if not result:
-                        return {"status": "error", "message": "Failed to initialize embedding manager"}
+                if "uri" in neo4j_config:
+                    self.neo4j_uri = neo4j_config["uri"]
+                    neo4j_changed = True
+                if "username" in neo4j_config:
+                    self.neo4j_user = neo4j_config["username"]
+                    neo4j_changed = True
+                if "password" in neo4j_config:
+                    # Ensure password is properly handled as a string to preserve special characters
+                    password = neo4j_config["password"]
+                    if password is not None:
+                        self.neo4j_password = str(password)
+                    else:
+                        self.neo4j_password = ""
+                    neo4j_changed = True
+                if "database" in neo4j_config:
+                    self.neo4j_database = neo4j_config["database"]
+                    neo4j_changed = True
+                
+                # Reinitialize Neo4j connection if configuration changed
+                if neo4j_changed:
+                    if self.logger:
+                        self.logger.info("Neo4j configuration changed, reinitializing connection")
+                        if "password" in neo4j_config:
+                            self.logger.debug(f"Using password with length: {len(self.neo4j_password)} characters")
+                    # Close existing connection safely
+                    try:
+                        self.close()
+                    except Exception as e:
+                        if self.logger:
+                            self.logger.warn(f"Error closing existing connection (can be ignored for initial setup): {str(e)}")
+                    
+                    # Initialize with new settings
+                    self.base_manager.neo4j_uri = self.neo4j_uri
+                    self.base_manager.neo4j_user = self.neo4j_user
+                    self.base_manager.neo4j_password = self.neo4j_password
+                    self.base_manager.neo4j_database = self.neo4j_database
+                    
+                    # The initialize method returns a boolean now
+                    try:
+                        if not self.base_manager.initialize():
+                            if self.logger:
+                                self.logger.error("Failed to initialize Neo4j with new configuration")
+                            return {"status": "error", "message": "Failed to initialize Neo4j with new configuration"}
+                        # Update forwarded properties from base manager
+                        self._update_properties_from_base_manager()
+                    except Exception as e:
+                        if self.logger:
+                            self.logger.error(f"Failed to initialize Neo4j with new configuration: {str(e)}")
+                        return {"status": "error", "message": f"Failed to initialize Neo4j with new configuration: {str(e)}"}
+            
+            # Apply embedding configuration if present
+            if "embeddings" in config:
+                embedding_config = config.get("embeddings", {})
+                self.embedding_enabled = embedding_config.get("enabled", False)
+                
+                if self.embedding_enabled:
+                    provider = embedding_config.get("provider", "openai")
+                    model = embedding_config.get("model", "text-embedding-ada-002")
+                    api_key = embedding_config.get("api_key")
+                    
+                    self.embedder_provider = provider
+                    self.embedding_model = model
+                    
+                    # Initialize embedding adapter if enabled and API key provided
+                    if api_key:
+                        self.embedding_api_key = api_key
+                        adapter_success = self.embedding_adapter.init_embedding_manager(
+                            api_key=api_key,
+                            model_name=model
+                        )
+                        
+                        if not adapter_success:
+                            # Log failure but continue without embeddings
+                            self.embedding_enabled = False
+                            if self.logger:
+                                self.logger.error("Failed to initialize embedding manager with client configuration")
+                            return {"status": "warning", "message": "Failed to initialize embedding manager"}
+                    elif self.logger:
+                        self.logger.warning("Embeddings enabled but no API key provided")
+                elif self.logger:
+                    self.logger.info("Embeddings disabled by client configuration")
             
             return {"status": "success", "message": "Configuration applied successfully"}
             
@@ -590,19 +839,30 @@ class GraphMemoryManager:
             Dictionary with current configuration
         """
         config = {
-            "embeddings": {
+            "project_name": self.default_project_name,
+            "client_id": self._client_id,
+            "timestamp": datetime.datetime.now().isoformat(),
+            "neo4j": {
+                "uri": self.neo4j_uri,
+                "username": self.neo4j_user,
+                "password": self.neo4j_password,  # Return actual password
+                "database": self.neo4j_database
+            }
+        }
+        
+        # Only include detailed embedding configuration when enabled
+        if self.embedding_enabled:
+            config["embeddings"] = {
                 "provider": self.embedder_provider,
                 "model": self.embedding_model,
                 "dimensions": getattr(self.embedding_adapter.embedding_manager, "dimensions", 0),
-                "enabled": self.embedding_enabled
-            },
-            "database": {
-                "uri": self.neo4j_uri,
-                "username": self.neo4j_user,
-                "database": self.neo4j_database
-            },
-            "project": self.default_project_name
-        }
+                "enabled": True
+            }
+        else:
+            # Just indicate embeddings are disabled
+            config["embeddings"] = {
+                "enabled": False
+            }
         
         return config
     
@@ -937,7 +1197,7 @@ class GraphMemoryManager:
     
     def create_project_container(self, project_data: Dict[str, Any]) -> str:
         """
-        Create a project container in the knowledge graph.
+        Create a new project container.
         
         Args:
             project_data: Dictionary containing project information
@@ -947,114 +1207,94 @@ class GraphMemoryManager:
                 - tags: Optional. List of tags for categorizing the project
             
         Returns:
-            JSON string with operation result
+            JSON string with the created container
         """
         try:
-            # Ensure we're initialized
             self._ensure_initialized()
+            # Store client_id in project_data for isolation
+            if self._client_id:
+                if "metadata" not in project_data:
+                    project_data["metadata"] = {}
+                project_data["metadata"]["client_id"] = self._client_id
             
-            # Extract required fields
-            if "name" not in project_data:
-                return dict_to_json({"error": "Missing required field: name"})
-                
-            # Delegate directly to project memory manager
-            result = self.project_memory.create_project_container(project_data)
-            
-            return dict_to_json(result)
-            
+            result = self.get_client_project_memory().create_project_container(project_data)
+            # Ensure we return a string
+            if isinstance(result, dict):
+                return json.dumps(result)
+            return result
         except Exception as e:
             if self.logger:
                 self.logger.error(f"Error creating project container: {str(e)}")
-            return dict_to_json({"error": f"Failed to create project container: {str(e)}"})
+            return json.dumps({"error": f"Failed to create project container: {str(e)}"})
     
-    def get_project_container(self, name: str) -> str:
+    def get_project_container(self, project_id: str) -> str:
         """
-        Retrieve a project container by name.
+        Get a project container.
         
         Args:
-            name: Name of the project container
+            project_id: The ID of the project
             
         Returns:
             JSON string with the project container
         """
-        try:
-            self._ensure_initialized()
-            result = self.project_memory.get_project_container(name)
-            
-            # Convert to string if needed
-            if isinstance(result, dict):
-                return dict_to_json(result)
-            return result
-        except Exception as e:
-            if self.logger:
-                self.logger.error(f"Error getting project container: {str(e)}")
-            return dict_to_json({"error": f"Failed to get project container: {str(e)}"})
+        result = self.get_client_project_memory().get_project_container(project_id)
+        # Ensure we return a string
+        if isinstance(result, dict):
+            return json.dumps(result)
+        return result
     
-    def update_project_container(self, name: str, updates: Dict[str, Any]) -> str:
+    def update_project_container(self, project_id: str, updates: Dict[str, Any]) -> str:
         """
-        Update a project container's properties.
+        Update a project container.
         
         Args:
-            name: Name of the project container
-            updates: Dictionary of properties to update
+            project_id: The ID of the project
+            updates: Dictionary with updates
             
         Returns:
-            JSON string with the updated project container
+            JSON string with the result
         """
-        try:
-            self._ensure_initialized()
-            result = self.project_memory.update_project_container(name, updates)
-            if isinstance(result, dict):
-                return dict_to_json(result)
-            return result
-        except Exception as e:
-            if self.logger:
-                self.logger.error(f"Error updating project container: {str(e)}")
-            return dict_to_json({"error": f"Failed to update project container: {str(e)}"})
+        result = self.get_client_project_memory().update_project_container(project_id, updates)
+        # Ensure we return a string
+        if isinstance(result, dict):
+            return json.dumps(result)
+        return result
     
-    def delete_project_container(self, name: str, delete_contents: bool = False) -> str:
+    def delete_project_container(self, project_id: str) -> str:
         """
         Delete a project container.
         
         Args:
-            name: Name of the project container
-            delete_contents: If True, delete all domains and components in the container
+            project_id: The ID of the project
             
         Returns:
-            JSON string with the deletion result
+            JSON string with the result
         """
-        try:
-            self._ensure_initialized()
-            result = self.project_memory.delete_project_container(name, delete_contents)
-            if isinstance(result, dict):
-                return dict_to_json(result)
-            return result
-        except Exception as e:
-            if self.logger:
-                self.logger.error(f"Error deleting project container: {str(e)}")
-            return dict_to_json({"error": f"Failed to delete project container: {str(e)}"})
+        result = self.get_client_project_memory().delete_project_container(project_id, False)
+        # Ensure we return a string
+        if isinstance(result, dict):
+            return json.dumps(result)
+        return result
     
-    def list_project_containers(self, sort_by: str = "name", limit: int = 100) -> str:
+    def list_project_containers(self) -> str:
         """
-        List all project containers.
+        List project containers.
         
-        Args:
-            sort_by: Field to sort by ('name', 'created', or 'lastUpdated')
-            limit: Maximum number of containers to return
-            
         Returns:
-            JSON string with the list of project containers
+            JSON string with the project containers
         """
         try:
-            self._ensure_initialized()
-            result = self.project_memory.list_project_containers(sort_by, limit)
+            # Get the result from the project memory manager
+            result = self.get_client_project_memory().list_project_containers("name", 100)
+            
+            # Ensure we return a string
             if isinstance(result, dict):
-                return dict_to_json(result)
+                return json.dumps(result)
             return result
         except Exception as e:
             if self.logger:
                 self.logger.error(f"Error listing project containers: {str(e)}")
-            return dict_to_json({"error": f"Failed to list project containers: {str(e)}"})
+            return json.dumps({"error": f"Failed to list project containers: {str(e)}"})
     
     def get_project_status(self, container_name: str) -> str:
         """
@@ -1854,3 +2094,14 @@ class GraphMemoryManager:
             if self.logger:
                 self.logger.error(f"Error creating version: {str(e)}")
             return dict_to_json({"error": f"Failed to create version: {str(e)}"})
+
+    def get_client_project_memory(self):
+        """
+        Get the appropriate project memory manager for the current client.
+        
+        Returns:
+            The correct ProjectMemoryManager for this client
+        """
+        if self._client_id and self._client_id in self._client_projects:
+            return self._client_projects[self._client_id]
+        return self.project_memory

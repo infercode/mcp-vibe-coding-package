@@ -157,16 +157,44 @@ class BaseManager:
         else:
             self.logger.warn("Cannot set empty project name")
 
-    def initialize(self) -> None:
-        """Initialize the base manager and connect to the graph database."""
+    def initialize(self) -> bool:
+        """
+        Initialize the base manager and connect to the graph database.
+        
+        Returns:
+            True if initialization was successful, False otherwise
+        """
         if self.initialized:
-            return
+            self.logger.info("Already initialized, skipping")
+            return True
 
         try:
+            self.logger.debug(f"Initializing with Neo4j URI: {self.neo4j_uri}, User: {self.neo4j_user}, DB: {self.neo4j_database}")
+            
+            # Make sure password is properly handled as a string
+            # This ensures special characters are treated correctly
+            if self.neo4j_password is not None:
+                # Convert to string first to handle any data type
+                password = str(self.neo4j_password)
+                
+                # Some special characters need special handling
+                # Particularly problematic are: !, $, &, *, (, ), |, ;, <, >, ', ", \, etc.
+                # Neo4j driver will handle the escaping internally for most cases,
+                # but we need to make sure the password is passed as is without shell interpretation
+                
+                # Log password length but not content for security
+                self.logger.debug(f"Password length: {len(password)} characters")
+                if any(char in password for char in "!$&*();|<>'\"\\"):
+                    self.logger.debug("Password contains special characters that may require escaping")
+            else:
+                password = ""
+                
+            self.logger.debug(f"Password length: {len(password)} characters")
+            
             # Initialize Neo4j driver with connection pooling parameters
             self.neo4j_driver = GraphDatabase.driver(
                 self.neo4j_uri,
-                auth=(self.neo4j_user, self.neo4j_password),
+                auth=(self.neo4j_user, password),
                 # Connection pooling parameters
                 max_connection_lifetime=30 * 60,  # 30 minutes
                 max_connection_pool_size=50,      # Max 50 connections in the pool
@@ -174,21 +202,28 @@ class BaseManager:
                 keep_alive=True                   # Keep connections alive
             )
             
+            self.logger.debug("Driver initialized, testing connection")
+            
             # Test the Neo4j connection with retry
             self._test_neo4j_connection_with_retry(max_retries=3)
             
+            self.logger.debug("Connection successful, checking embeddings config")
+            
             # Setup vector index if embeddings are enabled
             if self.embedding_enabled:
+                self.logger.debug(f"Setting up vector index with provider: {self.embedder_provider}")
                 self._setup_vector_index()
                 self.logger.info(f"Memory graph manager initialized successfully with {self.embedder_provider} embedder")
             else:
                 self.logger.info("Memory graph manager initialized successfully without embeddings")
                 
             self.initialized = True
+            self.logger.debug("Initialization complete")
+            return True
             
         except Exception as e:
             self.logger.error(f"Failed to initialize memory manager: {str(e)}")
-            raise e
+            return False
 
     def _test_neo4j_connection_with_retry(self, max_retries=3, initial_delay=1.0):
         """Test Neo4j connection with exponential backoff retry mechanism."""
@@ -277,7 +312,7 @@ class BaseManager:
             return
         
         try:
-            self.logger.debug("Testing Neo4j connection with simple query")
+            self.logger.debug(f"Testing Neo4j connection to {self.neo4j_uri} with user {self.neo4j_user} and database {self.neo4j_database}")
             result_data = self.neo4j_driver.execute_query(
                 "RETURN 'Connection successful' AS message",
                 database_=self.neo4j_database
@@ -292,12 +327,16 @@ class BaseManager:
             
         except Exception as e:
             error_message = str(e)
+            self.logger.debug(f"Raw connection error: {error_message}")
+            
             if "Authentication failed" in error_message:
                 self.logger.error(f"Neo4j authentication failed. Please check your credentials: {error_message}")
             elif "Connection refused" in error_message:
                 self.logger.error(f"Neo4j connection refused. Is the database running? {error_message}")
             elif "Failed to establish connection" in error_message:
                 self.logger.error(f"Failed to establish Neo4j connection. Check network and server: {error_message}")
+            elif "AuthenticationRateLimit" in error_message:
+                self.logger.error(f"Neo4j authentication rate limit reached. Wait a few seconds and try again: {error_message}")
             else:
                 self.logger.error(f"Neo4j connection test failed: {error_message}")
             
