@@ -130,6 +130,8 @@ def use_base_entity_models():
     class ProjectEntity(BaseEntity):
         allowed_entity_types = {"TASK", "MILESTONE", "RESOURCE", "DOCUMENT"}
         
+        # TODO: Update to model_config when we can ensure compatibility
+        # @deprecated in Pydantic v2, will be removed in v3
         class Config:
             validate_assignment = True
     
@@ -183,6 +185,8 @@ def use_relationship_models():
     class TaskRelationship(BaseRelationship):
         allowed_relationship_types = {"DEPENDS_ON", "BLOCKS", "RELATED_TO", "PART_OF"}
         
+        # TODO: Update to model_config when we can ensure compatibility
+        # @deprecated in Pydantic v2, will be removed in v3
         class Config:
             validate_assignment = True
     

@@ -143,6 +143,8 @@ class ClientConfig(BaseModel):
     graph_config: GraphConfig = Field(..., description="Graph configuration for this client")
     metadata: Optional[Dict[str, Any]] = Field(None, description="Additional metadata for the client")
     
+    # TODO: Update to model_config when we can ensure compatibility
+    # @deprecated in Pydantic v2, will be removed in v3
     class Config:
         arbitrary_types_allowed = True
 

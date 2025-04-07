@@ -3,7 +3,7 @@ import os
 import sys
 import asyncio
 import json
-from typing import Dict, List, Any, Optional, AsyncIterator, Callable
+from typing import Dict, List, Any, Optional, AsyncIterator, Callable, Union
 from contextlib import asynccontextmanager
 import datetime
 
@@ -11,7 +11,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.lowlevel import NotificationOptions, Server
 from mcp.server.models import InitializationOptions
 from mcp.types import TextContent, PromptMessage
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 from src.graph_memory import GraphMemoryManager
 from src.logger import LogLevel, get_logger
@@ -376,10 +376,12 @@ class Relation(BaseModel):
     to_entity: str = Field(..., description="The name of the target entity", alias="to")
     relationType: str = Field(..., description="The type of the relation")
     
+    # TODO: Update to model_config when we can ensure compatibility
+    # @deprecated in Pydantic v2, will be removed in v3
     class Config:
         populate_by_name = True
         allow_population_by_field_name = True
-        
+    
     def to_text_content(self) -> TextContent:
         """Convert to MCP TextContent format."""
         return TextContent(
