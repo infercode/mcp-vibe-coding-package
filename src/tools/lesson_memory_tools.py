@@ -147,18 +147,17 @@ def register_lesson_tools(server, get_client_manager):
     async def update_lesson_container(container_data: Dict[str, Any], client_id: Optional[str] = None) -> str:
         """
         Update an existing lesson container.
-        
+
         Args:
-            container_data: Dictionary containing container information
-                - id: Required. The ID of the container to update
-                - name: Optional. New name for the container
-                - description: Optional. New description for the container
-                - tags: Optional. Updated list of tags
-                - metadata: Optional. Updated metadata
+            container_data: Dictionary containing container data. Required fields:
+                - container_name: Name of the container to update
+                Optional fields:
+                - description: Updated description for the container
+                - metadata: Additional metadata for the container
             client_id: Optional client ID for identifying the connection
-                
+
         Returns:
-            JSON response with operation result
+            JSON string containing updated container information with status, message, and container details
         """
         try:
             # Validate input using Pydantic model

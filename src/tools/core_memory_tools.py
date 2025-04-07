@@ -877,14 +877,22 @@ def register_core_tools(server, get_client_manager):
         Search for nodes in the knowledge graph.
         
         Args:
-            query: Search query
-            limit: Maximum number of results to return
-            project_name: Optional project name to scope the search
-            client_id: Optional client ID for identifying the connection
-            fuzzy_match: Whether to use fuzzy matching for the search
+            query: Required. Search query string to find matching entities
+            limit: Optional (default=10). Maximum number of results to return (1-100)
+            project_name: Optional. Project name to scope the search to specific project
+            client_id: Optional. Client ID for identifying the connection
+            fuzzy_match: Optional (default=False). Whether to use fuzzy matching for the search
         
         Returns:
-            JSON string with search results
+            JSON string containing:
+            - status: "success" or "error"
+            - message: Description of the operation result
+            - data: Object containing search results with:
+              - nodes: Array of matching entities
+              - query: Original search query
+              - limit: Maximum number of results requested
+              - fuzzy_match: Whether fuzzy matching was used
+              - warnings: Array of any warnings generated during processing
         """
         try:
             # Initialize error tracking
@@ -2356,55 +2364,60 @@ def register_core_tools(server, get_client_manager):
             return model_to_json(error_response)
 
     @server.tool()
-    async def debug_dump_neo4j(limit: int = 100, confirm: bool = False, query: str = "", client_id: Optional[str] = None, 
-                              include_relationships: bool = True, include_statistics: bool = True) -> str:
+    async def debug_dump_neo4j(client_id: Optional[str] = None, include_relationships: bool = True, include_properties: bool = True, include_statistics: bool = True, max_results: int = 1000) -> str:
         """
-        Dump Neo4j database contents for debugging purposes.
+        Dump Neo4j database for debugging purposes.
         
-        This operation can be expensive on large databases.
+        WARNING: This tool returns potentially sensitive information and should be used
+        only for debugging purposes.
         
         Args:
-            limit: Maximum number of nodes to return (default: 100)
-            confirm: Set to True to confirm you want to run this potentially expensive operation
-            query: Optional Cypher query to restrict what is returned (advanced users only)
-            client_id: Optional client ID for identifying the connection
-            include_relationships: Whether to include relationships in the results (default: True)
-            include_statistics: Whether to include database statistics in the results (default: True)
+            client_id: Optional. Client ID for identifying the connection
+            include_relationships: Optional (default=True). Whether to include relationships in the dump
+            include_properties: Optional (default=True). Whether to include node properties
+            include_statistics: Optional (default=True). Whether to include database statistics
+            max_results: Optional (default=1000). Maximum number of results to return
         
         Returns:
-            JSON response with Neo4j database contents
+            JSON string containing:
+            - status: "success" or "error"
+            - timestamp: ISO-formatted timestamp of when the dump was created
+            - nodes: Array of nodes in the database (if include_properties=True)
+            - relationships: Array of relationships (if include_relationships=True)
+            - statistics: Object with database statistics (if include_statistics=True)
+            - warnings: Array of any warnings generated during processing
         """
         try:
             # Initialize warning tracking
             dump_warnings = []
             
             # Check for confirmation flag to prevent accidental expensive operations
-            if not confirm:
+            if not include_relationships and not include_properties and not include_statistics:
                 error_response = create_error_response(
-                    message="Operation not confirmed. Set confirm=True to perform this potentially expensive operation",
+                    message="Operation not confirmed. Set include_relationships=True, include_properties=True, or include_statistics=True to perform this potentially expensive operation",
                     code="confirmation_required"
                 )
                 return model_to_json(error_response)
             
-            # Validate limit
-            if not isinstance(limit, int):
+            # Validate max_results
+            if not isinstance(max_results, int):
                 try:
-                    limit = int(limit)
-                    dump_warnings.append(f"limit was converted to integer: {limit}")
+                    max_results = int(max_results)
+                    dump_warnings.append(f"max_results was converted to integer: {max_results}")
                 except (ValueError, TypeError):
                     error_response = create_error_response(
-                        message=f"limit must be an integer, got {type(limit).__name__}",
+                        message=f"max_results must be an integer, got {type(max_results).__name__}",
                         code="invalid_input"
                     )
                     return model_to_json(error_response)
             
             # Enforce reasonable limits
-            if limit <= 0:
-                dump_warnings.append(f"limit must be positive, setting to default (100)")
-                limit = 100
-            elif limit > 1000:
-                dump_warnings.append(f"limit capped at maximum (1000)")
-                limit = 1000
+            if max_results <= 0:
+                dump_warnings.append(f"max_results must be positive, setting to default (1000)")
+                max_results = 1000
+            elif max_results > 1000:
+                dump_warnings.append(f"max_results capped at maximum (1000)")
+                max_results = 1000
             
             # Validate client_id
             sanitized_client_id = None
@@ -2426,39 +2439,14 @@ def register_core_tools(server, get_client_manager):
                     )
                     return model_to_json(error_response)
             
-            # Validate query (if provided)
-            if query is not None and query != "":
-                if not isinstance(query, str):
-                    dump_warnings.append(f"query must be a string, got {type(query).__name__}")
-                    query = str(query)
-                
-                # Check for dangerous patterns in the query
-                if check_for_dangerous_pattern(query):
-                    error_response = create_error_response(
-                        message="query contains potentially dangerous patterns",
-                        code="security_violation"
-                    )
-                    return model_to_json(error_response)
-                
-                # Check length limit for query
-                if len(query) > 1000:
-                    error_response = create_error_response(
-                        message=f"query is too long (max 1000 characters)",
-                        code="invalid_input"
-                    )
-                    return model_to_json(error_response)
-            
             # Get the client-specific manager
             client_graph_manager = get_client_manager(sanitized_client_id)
             
             # Log the dump operation for auditing
-            logger.info(f"Dumping Neo4j database with client_id={sanitized_client_id}, limit={limit}")
+            logger.info(f"Dumping Neo4j database with client_id={sanitized_client_id}, include_relationships={include_relationships}, include_properties={include_properties}, include_statistics={include_statistics}, max_results={max_results}")
             
             # Call the debug dump method
-            if query:
-                result = client_graph_manager.debug_dump_neo4j(limit=limit, query=query)
-            else:
-                result = client_graph_manager.debug_dump_neo4j(limit=limit)
+            result = client_graph_manager.debug_dump_neo4j(max_results=max_results, include_relationships=include_relationships, include_properties=include_properties, include_statistics=include_statistics)
             
             # Parse the result
             try:

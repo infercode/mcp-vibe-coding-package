@@ -207,26 +207,30 @@ def register_project_tools(server, get_client_manager):
             return model_to_json(error_response)
             
     @server.tool()
-    async def update_project_container(project_data: Dict[str, Any]) -> str:
+    async def update_project_container(container_data: Dict[str, Any], client_id: Optional[str] = None) -> str:
         """
         Update an existing project container.
-        
+
         Args:
-            project_data: Dictionary containing project information
-                - id: Required. The ID of the project container to update
-                - name: Optional. New name for the project
-                - description: Optional. New description for the project
-                - metadata: Optional. Updated metadata for the project
-                - tags: Optional. Updated list of tags
-                
+            container_data: Dictionary containing container data. Required fields:
+                - container_name: Name of the container to update
+                Optional fields:
+                - description: Updated description for the container
+                - metadata: Additional metadata for the container
+            client_id: Optional. Client ID for identifying the connection
+
         Returns:
-            JSON response with operation result
+            JSON string containing:
+            - status: "success" or "error"
+            - message: Description of the operation result
+            - container: Object containing the updated container details
+            - warnings: Array of any warnings generated during processing
         """
         try:
             # Validate input using Pydantic model
             try:
                 # Create Pydantic model for validation
-                project_container = ProjectContainerUpdate(**project_data)
+                project_container = ProjectContainerUpdate(**container_data)
             except Exception as e:
                 logger.error(f"Validation error for project update data: {str(e)}")
                 error_response = create_error_response(
@@ -237,8 +241,8 @@ def register_project_tools(server, get_client_manager):
                 
             # Get the client ID from metadata if present
             client_id = None
-            if project_data.get("metadata") and isinstance(project_data["metadata"], dict):
-                client_id = project_data["metadata"].get("client_id")
+            if container_data.get("metadata") and isinstance(container_data["metadata"], dict):
+                client_id = container_data["metadata"].get("client_id")
             
             # Get the graph manager with the appropriate client context
             client_graph_manager = get_client_manager(client_id)
@@ -264,7 +268,7 @@ def register_project_tools(server, get_client_manager):
             
             # Create success response
             response = create_success_response(
-                message=f"Project container '{project_data.get('name', project_data['id'])}' updated successfully",
+                message=f"Project container '{container_data.get('name', container_data['id'])}' updated successfully",
                 data={}
             )
             return model_to_json(response)
@@ -812,21 +816,27 @@ def register_project_tools(server, get_client_manager):
             return model_to_json(error_response)
 
     @server.tool()
-    async def create_domain_entity(entity_data: Dict[str, Any], client_id: Optional[str] = None) -> str:
+    async def create_project_entity(entity_data: Dict[str, Any], client_id: Optional[str] = None) -> str:
         """
-        Create a domain entity in the project.
+        Create a project entity.
         
         Args:
-            entity_data: Dictionary containing entity information
-                - project_id: Required. The ID or name of the project
-                - name: Required. Name of the entity
-                - entity_type: Required. Type of entity
-                - properties: Optional. Additional properties for the entity
-                - metadata: Optional. Additional metadata
-            client_id: Optional client ID for identifying the connection
-                
+            entity_data: Dictionary containing entity information. Required fields:
+                - name: Entity name
+                - container: Container name this entity belongs to
+                Optional fields:
+                - type: Entity type (default: "DEFAULT")
+                - description: Entity description
+                - properties: Dictionary of properties to associate with the entity
+                - metadata: Additional metadata
+            client_id: Optional. Client ID for identifying the connection
+            
         Returns:
-            JSON response with operation result
+            JSON string containing:
+            - status: "success" or "error"
+            - message: Description of the operation result
+            - entity: Object containing the created entity details
+            - warnings: Array of any warnings generated during processing
         """
         try:
             # Validate input using Pydantic model
@@ -1090,7 +1100,7 @@ def register_project_tools(server, get_client_manager):
         "update_component": update_component,
         "delete_component": delete_component,
         "list_components": list_components,
-        "create_domain_entity": create_domain_entity,
+        "create_project_entity": create_project_entity,
         "create_domain_relationship": create_domain_relationship,
         "create_component_relationship": create_component_relationship,
     } 

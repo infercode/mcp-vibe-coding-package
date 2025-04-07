@@ -99,29 +99,26 @@ def register_config_tools(server, get_config_manager):
             return model_to_json(error_response)
 
     @server.tool()
-    async def get_unified_config(project_name: str = "", config_content: str = "") -> str:
+    async def get_unified_config(project_name: Optional[str] = None, config_content: Optional[str] = None) -> str:
         """
-        Retrieve and apply the unified configuration file from the client's project.
+        Retrieves and applies unified configuration file for a client's project.
         
-        IMPORTANT: This tool only needs to be called ONCE PER SESSION. The configuration 
-        will persist for all subsequent tool calls in the same session. You only need to
-        call it again when:
-        1. Starting a new session
-        2. Changing to a different project
-        3. Needing to update configuration settings
-        
-        This tool serves two purposes:
-        1. When called without config_content: It requests the client to read the configuration file
-        2. When called with config_content: It applies the received configuration to the memory manager
+        This function should typically be called once per session unless the configuration
+        has changed or you need to switch to a different project.
         
         Args:
-            project_name: Optional project name to determine the config file name.
-                          If not provided, uses the default config file.
-            config_content: Optional JSON string with the configuration content from the client.
-                          When provided, applies the configuration to the memory system.
-                
+            project_name: Optional. Name of the project to configure 
+                           (alphanumeric, underscores, and hyphens only)
+            config_content: Optional. JSON string containing configuration settings.
+                           If provided, this will be used instead of loading from storage.
+                           Must include required fields like "projectName" and "llmSettings".
+        
         Returns:
-            JSON string with the configuration file content or instructions to create one
+            JSON string containing:
+            - status: "success" or "error"
+            - message: Description of the operation result
+            - config: Object containing the unified configuration
+            - warnings: Array of any warnings generated during processing
         """
         try:
             # Initialize warning tracking

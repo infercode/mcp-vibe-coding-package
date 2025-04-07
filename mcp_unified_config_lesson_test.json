@@ -1,0 +1,1 @@
+{  "project_name": "lesson_test",  "client_id": "default_user",  "timestamp": "2025-04-07T14:39:16.866366",  "neo4j": {    "uri": "bolt://localhost:7687",    "username": "neo4j",    "password": "P@ssW0rd2025!",    "database": "neo4j"  },  "embeddings": {    "provider": "none",    "model": null,    "enabled": false  }}

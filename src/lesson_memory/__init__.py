@@ -211,6 +211,77 @@ class LessonMemoryManager:
                     "code": "container_deletion_error"
                 })
     
+    def create_lesson_container(self, container_data: Dict[str, Any]) -> str:
+        """
+        Create a new lesson container.
+        
+        Args:
+            container_data: Dictionary containing container information
+                
+        Returns:
+            JSON string with operation result
+        """
+        try:
+            # Extract required fields from container_data
+            name = container_data.get("name")
+            description = container_data.get("description")
+            metadata = container_data.get("metadata")
+            
+            if not name:
+                return json.dumps({
+                    "status": "error",
+                    "error": "Container name is required"
+                })
+                
+            # Delegate to the existing create_container method
+            response = self.create_container(name, description, metadata)
+            return response
+            
+        except Exception as e:
+            self.logger.error(f"Error creating lesson container: {str(e)}")
+            error_response = create_error_response(
+                message=f"Failed to create lesson container: {str(e)}",
+                code="container_creation_error"
+            )
+            try:
+                return json.dumps(error_response.model_dump(), default=str)
+            except TypeError:
+                # If JSON serialization fails due to non-serializable objects, use str
+                return json.dumps({
+                    "error": f"Failed to create lesson container: {str(e)}",
+                    "code": "container_creation_error"
+                })
+    
+    def get_lesson_container(self, container_id: str) -> str:
+        """
+        Retrieve a lesson container by ID or name.
+        
+        Args:
+            container_id: The ID or name of the lesson container
+                
+        Returns:
+            JSON response with lesson container data
+        """
+        try:
+            # Delegate to the existing get_container method
+            response = self.get_container(container_id)
+            return response
+            
+        except Exception as e:
+            self.logger.error(f"Error retrieving lesson container: {str(e)}")
+            error_response = create_error_response(
+                message=f"Failed to retrieve lesson container: {str(e)}",
+                code="container_retrieval_error"
+            )
+            try:
+                return json.dumps(error_response.model_dump(), default=str)
+            except TypeError:
+                # If JSON serialization fails due to non-serializable objects, use str
+                return json.dumps({
+                    "error": f"Failed to retrieve lesson container: {str(e)}",
+                    "code": "container_retrieval_error"
+                })
+    
     def list_containers(self, limit: int = 100, sort_by: str = "created") -> Dict[str, Any]:
         """
         List all lesson containers.
