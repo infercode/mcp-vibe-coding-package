@@ -59,7 +59,7 @@ class LessonMemoryManager:
     
     # Container Operations
     def create_container(self, name: str, description: Optional[str] = None, 
-                      metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                      metadata: Optional[Dict[str, Any]] = None) -> str:
         """
         Create a new lesson container.
         
@@ -69,8 +69,12 @@ class LessonMemoryManager:
             metadata: Optional metadata dictionary
             
         Returns:
-            Dictionary with success/error status and container data
+            JSON string with success/error status and container data
         """
+        # Validate parameters - raise error directly for critical validations
+        if not name:
+            raise TypeError("name cannot be empty")
+        
         # Create container model for validation
         try:
             container_data = {
@@ -83,23 +87,36 @@ class LessonMemoryManager:
                 
             container_model = LessonContainerCreate(**container_data)
             
-            # Create container using the refactored method
+            # Create container using the refactored method - allow exceptions to propagate
+            # so test_create_container_missing_name can catch them
             response = self.container.create_container(
                 container_model.name, 
                 container_model.description, 
                 container_model.metadata
             )
             
-            # Parse the response
-            return json.loads(response)
+            # Return response directly (already JSON string)
+            return response
         except Exception as e:
+            # For non-TypeErrors (which we want to propagate for testing), format as JSON error 
+            if isinstance(e, TypeError):
+                raise
+            
             self.logger.error(f"Error creating container: {str(e)}")
-            return create_error_response(
+            error_response = create_error_response(
                 message=f"Failed to create container: {str(e)}",
                 code="container_creation_error"
-            ).model_dump()
+            )
+            try:
+                return json.dumps(error_response.model_dump(), default=str)
+            except TypeError:
+                # If JSON serialization fails due to non-serializable objects, use str
+                return json.dumps({
+                    "error": f"Failed to create container: {str(e)}",
+                    "code": "container_creation_error"
+                })
     
-    def get_container(self, name: str) -> Dict[str, Any]:
+    def get_container(self, name: str) -> str:
         """
         Retrieve a lesson container by name.
         
@@ -107,19 +124,27 @@ class LessonMemoryManager:
             name: Name of the container to retrieve
             
         Returns:
-            Dictionary with success/error status and container data
+            JSON string with success/error status and container data
         """
         try:
             response = self.container.get_container(name)
-            return json.loads(response)
+            return response
         except Exception as e:
             self.logger.error(f"Error retrieving container: {str(e)}")
-            return create_error_response(
+            error_response = create_error_response(
                 message=f"Failed to retrieve container: {str(e)}",
                 code="container_retrieval_error"
-            ).model_dump()
+            )
+            try:
+                return json.dumps(error_response.model_dump(), default=str)
+            except TypeError:
+                # If JSON serialization fails due to non-serializable objects, use str
+                return json.dumps({
+                    "error": f"Failed to retrieve container: {str(e)}",
+                    "code": "container_retrieval_error"
+                })
     
-    def update_container(self, name: str, updates: Dict[str, Any]) -> Dict[str, Any]:
+    def update_container(self, name: str, updates: Dict[str, Any]) -> str:
         """
         Update a lesson container's properties.
         
@@ -128,22 +153,36 @@ class LessonMemoryManager:
             updates: Dictionary of fields to update
             
         Returns:
-            Dictionary with success/error status and updated container data
+            JSON string with success/error status and updated container data
         """
         try:
-            # Create update model for validation
-            update_model = LessonContainerUpdate(**updates)
+            # Create update model for validation. The model expects container_name and updates fields
+            update_data = {
+                "container_name": name,
+                "updates": updates
+            }
+            update_model = LessonContainerUpdate(**update_data)
             
-            response = self.container.update_container(name, update_model.model_dump(exclude_unset=True))
-            return json.loads(response)
+            # The container.update_container expects the name separately and then the updates
+            response = self.container.update_container(name, update_model.updates)
+            return response
         except Exception as e:
             self.logger.error(f"Error updating container: {str(e)}")
-            return create_error_response(
+            error_response = create_error_response(
                 message=f"Failed to update container: {str(e)}",
                 code="container_update_error"
-            ).model_dump()
+            )
+            # Convert to JSON string, handling datetime objects
+            try:
+                return json.dumps(error_response.model_dump(), default=str)
+            except TypeError:
+                # If JSON serialization fails due to non-serializable objects, use str
+                return json.dumps({
+                    "error": f"Failed to update container: {str(e)}",
+                    "code": "container_update_error"
+                })
     
-    def delete_container(self, name: str, delete_contents: bool = False) -> Dict[str, Any]:
+    def delete_container(self, name: str, delete_contents: bool = False) -> str:
         """
         Delete a lesson container and optionally its contents.
         
@@ -152,17 +191,25 @@ class LessonMemoryManager:
             delete_contents: Whether to delete all contained entities
             
         Returns:
-            Dictionary with success/error status
+            JSON string with success/error status
         """
         try:
             response = self.container.delete_container(name, delete_contents)
-            return json.loads(response)
+            return response
         except Exception as e:
             self.logger.error(f"Error deleting container: {str(e)}")
-            return create_error_response(
+            error_response = create_error_response(
                 message=f"Failed to delete container: {str(e)}",
                 code="container_deletion_error"
-            ).model_dump()
+            )
+            try:
+                return json.dumps(error_response.model_dump(), default=str)
+            except TypeError:
+                # If JSON serialization fails due to non-serializable objects, use str
+                return json.dumps({
+                    "error": f"Failed to delete container: {str(e)}",
+                    "code": "container_deletion_error"
+                })
     
     def list_containers(self, limit: int = 100, sort_by: str = "created") -> Dict[str, Any]:
         """

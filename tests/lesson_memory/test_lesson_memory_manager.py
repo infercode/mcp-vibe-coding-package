@@ -84,11 +84,11 @@ def test_create_container(mock_base_manager, mock_logger):
     manager.container = mock_container
     
     # Call create_container
-    result = manager.create_container("Test Lesson Container", "This is a test container", {})
+    result = manager.create_container("Test Lesson Container", "This is a test container", None)
     
     # Verify container.create_container was called with correct args
     mock_container.create_container.assert_called_once_with(
-        "Test Lesson Container", "This is a test container", {}
+        "Test Lesson Container", "This is a test container", None
     )
     
     # Verify result
@@ -103,17 +103,21 @@ def test_create_container_missing_name(mock_base_manager):
     # Create manager with mock container
     manager = LessonMemoryManager(base_manager=mock_base_manager)
     
-    # Create a mock for the container component that would raise an exception
+    # Create a mock for the container component
     mock_container = MagicMock()
-    mock_container.create_container.side_effect = TypeError("name cannot be empty")
     manager.container = mock_container
     
-    # Attempt to create container with empty string as name (which would fail)
-    with pytest.raises(TypeError):
-        manager.create_container("", "This is a test container", {})
+    # Attempt to create container with empty string as name (which will fail)
+    # The manager now has its own validation that will raise TypeError before 
+    # calling the container component
+    with pytest.raises(TypeError) as exc_info:
+        manager.create_container("", "This is a test container", None)
     
-    # Verify container.create_container was called with empty string
-    mock_container.create_container.assert_called_once_with("", "This is a test container", {})
+    assert "name cannot be empty" in str(exc_info.value)
+    
+    # The mock_container.create_container should NOT be called because 
+    # the validation in the manager should fail first
+    mock_container.create_container.assert_not_called()
 
 
 def test_get_container(mock_base_manager):
@@ -189,7 +193,9 @@ def test_update_container(mock_base_manager):
     result = manager.update_container("Test Lesson Container", updates)
     
     # Verify container.update_container was called with correct args
-    mock_container.update_container.assert_called_once_with("Test Lesson Container", updates)
+    mock_container.update_container.assert_called_once_with(
+        "Test Lesson Container", updates
+    )
     
     # Verify result
     result_dict = json.loads(result)

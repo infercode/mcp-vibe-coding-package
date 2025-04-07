@@ -9,6 +9,7 @@ import os
 import sys
 import logging
 from typing import Dict, Any, List, Optional
+import pytest
 
 # Add the project root to the Python path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
@@ -74,7 +75,7 @@ def test_relationship_type_with_destructive_word():
         logger.error(f"ERROR: Unexpected exception: {str(e)}")
         return False
 
-def test_property_with_destructive_word():
+def test_property_with_destructive_word(mock_logger):
     """Test that property names containing words like 'created_at' are now allowed."""
     logger.info("Testing property name with 'created_at'...")
     
@@ -87,89 +88,102 @@ def test_property_with_destructive_word():
     LIMIT 10
     """
     
-    try:
-        # Validate the query - this would have failed before
-        validated_query = validate_query(
-            query=query,
-            parameters={"start_date": "2023-01-01"},
-            read_only=True
-        )
-        logger.info("SUCCESS: Query with 'created_at' properties was validated correctly")
-        return True
-    except ValueError as e:
-        logger.error(f"FAILED: Query validation still rejects 'created_at': {str(e)}")
-        return False
-    except Exception as e:
-        logger.error(f"ERROR: Unexpected exception: {str(e)}")
-        return False
+    # Validate the query - this should pass now
+    validated_query = validate_query(
+        query=query,
+        parameters={"start_date": "2023-01-01"},
+        read_only=True
+    )
+    assert validated_query is not None
+    assert "created_at" in validated_query.query
 
-def test_actual_destructive_operations():
+def test_actual_destructive_operations(mock_logger):
     """Test that actual destructive operations are still caught properly."""
     logger.info("Testing actual destructive operations...")
     
-    # Test 1: CREATE operation
+    # Test CREATE operation
     create_query = """
     CREATE (u:User {name: 'Test User'})
     RETURN u
     """
     
-    try:
+    with pytest.raises(ValueError) as exc_info:
         validate_query(query=create_query, read_only=True)
-        logger.error("FAILED: Destructive CREATE operation was not caught!")
-        return False
-    except ValueError as e:
-        logger.info(f"SUCCESS: Caught destructive CREATE operation: {str(e)}")
-        
-    # Test 2: DELETE operation
+    assert "CREATE" in str(exc_info.value)
+    
+    # Test DELETE operation
     delete_query = """
     MATCH (u:User {name: 'Test User'})
     DELETE u
     """
     
-    try:
+    with pytest.raises(ValueError) as exc_info:
         validate_query(query=delete_query, read_only=True)
-        logger.error("FAILED: Destructive DELETE operation was not caught!")
-        return False
-    except ValueError as e:
-        logger.info(f"SUCCESS: Caught destructive DELETE operation: {str(e)}")
-        
-    # Test 3: SET operation
+    assert "DELETE" in str(exc_info.value)
+    
+    # Test SET operation
     set_query = """
     MATCH (u:User {name: 'Test User'})
     SET u.active = true
     RETURN u
     """
     
-    try:
+    with pytest.raises(ValueError) as exc_info:
         validate_query(query=set_query, read_only=True)
-        logger.error("FAILED: Destructive SET operation was not caught!")
-        return False
-    except ValueError as e:
-        logger.info(f"SUCCESS: Caught destructive SET operation: {str(e)}")
-    
-    return True
+    assert "SET" in str(exc_info.value)
 
-def main():
-    """Run all tests to verify the validation fixes."""
-    logger.info("=== Testing Neo4j Query Validation Fixes ===")
+def test_relationship_types_with_destructive_words(mock_logger):
+    """Test that relationship types containing words like 'CREATED' are allowed."""
+    # Test relationship type containing 'CREATED'
+    query = """
+    MATCH (u:User)-[r:CREATED]->(p:Post)
+    RETURN u, p
+    """
     
-    results = {
-        "relationship_type_test": test_relationship_type_with_destructive_word(),
-        "property_name_test": test_property_with_destructive_word(),
-        "destructive_operations_test": test_actual_destructive_operations()
-    }
+    validated_query = validate_query(
+        query=query,
+        parameters={},
+        read_only=True
+    )
+    assert validated_query is not None
+    assert "CREATED" in validated_query.query
     
-    all_passed = all(results.values())
+    # Test relationship type with past tense
+    query = """
+    MATCH (u:User)-[r:WAS_CREATED_BY]->(p:Post)
+    RETURN u, p
+    """
     
-    if all_passed:
-        logger.info("✅ ALL TESTS PASSED: Validation fixes are working correctly")
-    else:
-        logger.error("❌ TESTS FAILED: Some validation fixes are not working")
-        for test, result in results.items():
-            status = "✅ PASSED" if result else "❌ FAILED"
-            logger.info(f"{test}: {status}")
-            
-    return 0 if all_passed else 1
+    validated_query = validate_query(
+        query=query,
+        parameters={},
+        read_only=True
+    )
+    assert validated_query is not None
+    assert "WAS_CREATED_BY" in validated_query.query
 
-if __name__ == "__main__":
-    sys.exit(main()) 
+def test_property_names_with_destructive_words(mock_logger):
+    """Test that property names containing destructive words are allowed."""
+    # Test property names with various destructive words
+    query = """
+    MATCH (n:Node)
+    WHERE n.created_at > $start_date
+    AND n.deleted_at IS NULL
+    AND n.set_by = 'admin'
+    AND n.removed_flag = false
+    AND n.merged_at < $end_date
+    RETURN n
+    """
+    
+    validated_query = validate_query(
+        query=query,
+        parameters={
+            "start_date": "2023-01-01",
+            "end_date": "2023-12-31"
+        },
+        read_only=True
+    )
+    assert validated_query is not None
+    assert all(word in validated_query.query for word in [
+        "created_at", "deleted_at", "set_by", "removed_flag", "merged_at"
+    ]) 

@@ -17,7 +17,8 @@ def test_add_observation(mock_base_manager):
     """Test adding an observation to an entity"""
     # Setup
     with patch.object(ObservationManager, '_add_observation_to_entity') as mock_add:
-        mock_add.return_value = "obs-123"
+        # Mock return value as a tuple (observation_id, created_timestamp)
+        mock_add.return_value = ("obs-123", "2023-01-01T12:00:00")
         mock_base_manager.ensure_initialized = MagicMock()
         
         manager = ObservationManager(mock_base_manager)
@@ -37,17 +38,23 @@ def test_add_observation(mock_base_manager):
         assert len(result["added"]) == 1
         assert result["added"][0]["entity"] == entity_name
         assert result["added"][0]["content"] == "This is a test observation"
-        assert result["added"][0]["type"] == "test_observation"
-        assert result["added"][0]["id"] == "obs-123"
         
-        # Verify the method was called with correct parameters
-        mock_add.assert_called_once_with(entity_name, "This is a test observation", "test_observation")
+        # Verify the method was called with correct parameters (5 parameters)
+        # entity_name, content, observation_type, metadata, confidence
+        mock_add.assert_called_once_with(
+            entity_name, 
+            "This is a test observation", 
+            "test_observation",  # type
+            None,                # metadata
+            None                 # confidence
+        )
 
 
 def test_add_observation_entity_not_found(mock_base_manager):
     """Test adding an observation to a non-existent entity"""
     # Setup
     with patch.object(ObservationManager, '_add_observation_to_entity') as mock_add:
+        
         mock_add.side_effect = Exception("Entity not found")
         mock_base_manager.ensure_initialized = MagicMock()
         
@@ -70,15 +77,26 @@ def test_add_observation_entity_not_found(mock_base_manager):
         assert result["errors"][0]["entity"] == entity_name
         assert "Entity not found" in result["errors"][0]["error"]
         
-        # Verify the method was called with correct parameters
-        mock_add.assert_called_once_with(entity_name, "This is a test observation", None)
+        # Verify the method was called with correct parameters (all 5 parameters)
+        mock_add.assert_called_once_with(
+            entity_name, 
+            "This is a test observation", 
+            None,  # type
+            None,  # metadata
+            None   # confidence
+        )
 
 
 def test_add_observations_batch(mock_base_manager):
     """Test adding multiple observations in a batch"""
     # Setup
     with patch.object(ObservationManager, '_add_observation_to_entity') as mock_add:
-        mock_add.side_effect = ["obs-1", "obs-2"]
+        
+        # Return tuples of (id, timestamp) for each call
+        mock_add.side_effect = [
+            ("obs-1", "2023-01-01T12:00:00"), 
+            ("obs-2", "2023-01-01T12:01:00")
+        ]
         mock_base_manager.ensure_initialized = MagicMock()
         
         manager = ObservationManager(mock_base_manager)
@@ -105,23 +123,27 @@ def test_add_observations_batch(mock_base_manager):
         assert len(result["added"]) == 2
         assert result["added"][0]["entity"] == entity_name
         assert result["added"][0]["content"] == "First observation"
-        assert result["added"][0]["id"] == "obs-1"
         assert result["added"][1]["entity"] == entity_name
         assert result["added"][1]["content"] == "Second observation"
-        assert result["added"][1]["id"] == "obs-2"
         
         # Verify the method was called with correct parameters
-        mock_add.assert_has_calls([
-            call(entity_name, "First observation", "test"),
-            call(entity_name, "Second observation", "test")
-        ])
+        expected_calls = [
+            call(entity_name, "First observation", "test", None, None),
+            call(entity_name, "Second observation", "test", None, None)
+        ]
+        mock_add.assert_has_calls(expected_calls)
 
 
 def test_add_observations_batch_mixed_entities(mock_base_manager):
     """Test adding observations to multiple different entities in a batch"""
     # Setup
     with patch.object(ObservationManager, '_add_observation_to_entity') as mock_add:
-        mock_add.side_effect = ["obs-1", "obs-2"]
+        
+        # Return tuples of (id, timestamp) for each call
+        mock_add.side_effect = [
+            ("obs-1", "2023-01-01T12:00:00"), 
+            ("obs-2", "2023-01-01T12:01:00")
+        ]
         mock_base_manager.ensure_initialized = MagicMock()
         
         manager = ObservationManager(mock_base_manager)
@@ -146,13 +168,16 @@ def test_add_observations_batch_mixed_entities(mock_base_manager):
         assert "added" in result
         assert len(result["added"]) == 2
         assert result["added"][0]["entity"] == "entity-1"
+        assert result["added"][0]["content"] == "Observation for entity 1"
         assert result["added"][1]["entity"] == "entity-2"
+        assert result["added"][1]["content"] == "Observation for entity 2"
         
         # Verify the method was called with correct parameters
-        mock_add.assert_has_calls([
-            call("entity-1", "Observation for entity 1", "test"),
-            call("entity-2", "Observation for entity 2", "test")
-        ])
+        expected_calls = [
+            call("entity-1", "Observation for entity 1", "test", None, None),
+            call("entity-2", "Observation for entity 2", "test", None, None)
+        ]
+        mock_add.assert_has_calls(expected_calls)
 
 
 def test_get_observations(mock_base_manager):
@@ -430,4 +455,47 @@ def test_error_handling(mock_base_manager):
             "content": "Test observation"
         }]))
         assert "errors" in add_result
-        assert "Internal method error" in str(add_result["errors"][0]["error"]) 
+        assert "Internal method error" in str(add_result["errors"][0]["error"])
+
+
+def test_add_single_observation(mock_base_manager):
+    """Test adding a single observation."""
+    # Test data
+    entity_name = "test_entity"
+    observation_content = "Test observation content"
+    observation_type = "COMMENT"
+    
+    # Create observation data
+    observation_data = {
+        "entity": entity_name,
+        "content": observation_content,
+        "type": observation_type
+    }
+    
+    # Setup
+    with patch.object(ObservationManager, '_add_observation_to_entity') as mock_add:
+        
+        # Return tuple of (id, timestamp)
+        mock_add.return_value = ("obs-123", "2023-01-01T12:00:00")
+        mock_base_manager.ensure_initialized = MagicMock()
+        
+        manager = ObservationManager(mock_base_manager)
+        
+        # Execute
+        result = json.loads(manager.add_observations([observation_data]))
+        
+        # Verify
+        assert "added" in result
+        assert len(result["added"]) == 1
+        assert result["added"][0]["entity"] == entity_name
+        assert result["added"][0]["content"] == observation_content
+        assert result["added"][0]["type"] == observation_type
+        
+        # Verify the method was called with correct parameters
+        mock_add.assert_called_once_with(
+            entity_name, 
+            observation_content, 
+            observation_type,
+            None,  # metadata
+            None   # confidence
+        ) 

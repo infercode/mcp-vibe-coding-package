@@ -2,14 +2,16 @@ import os
 import time
 import json
 import datetime
-from typing import Any, Dict, List, Optional, Tuple, cast
+from typing import Any, Dict, List, Optional, Tuple, cast, Union
 from typing_extensions import LiteralString
 from neo4j import GraphDatabase, Session, Transaction
+import traceback
 
 from src.logger import Logger, get_logger
 from src.embedding_manager import LiteLLMEmbeddingManager
 # Import neo4j query validation utilities
 from src.models.neo4j_queries import CypherQuery, CypherParameters
+from src.utils import dict_to_json
 
 class BaseManager:
     """Base manager for Neo4j graph database connections and core functionality."""
@@ -621,4 +623,13 @@ class BaseManager:
         
         # Execute query with the appropriate database
         db = query_model.database or self.neo4j_database
-        return self.safe_execute_query(query_model.query, parameters, db) 
+        return self.safe_execute_query(query_model.query, parameters, db)
+
+    def _handle_error(self, e: Exception, operation: str) -> str:
+        """Handle exceptions and return a formatted error response."""
+        error_msg = f"Error during {operation}: {str(e)}"
+        self.logger.error(error_msg)
+        return dict_to_json({
+            "status": "error",
+            "message": error_msg
+        }) 

@@ -417,18 +417,43 @@ class GraphMemoryManager:
     
     def create_relationship(self, relationship_data: Dict[str, Any]) -> str:
         """
-        Create a relationship between two entities.
+        Create a new relationship in the knowledge graph.
         
         Args:
-            relationship_data: Dictionary with the relationship data
+            relationship_data: Relationship information
             
         Returns:
-            JSON string with the result
+            JSON response with operation result
         """
         self._ensure_initialized()
+        return self.relation_manager.create_relationship(relationship_data)
         
-        # Use the relation manager to create the relationship
-        return self.relation_manager.create_relations([relationship_data])
+    def create_relations(self, relations: List[Dict[str, Any]]) -> str:
+        """
+        Create multiple new relationships in the knowledge graph.
+        
+        Args:
+            relations: List of relation objects
+            
+        Returns:
+            JSON response with operation result
+        """
+        self._ensure_initialized()
+        return self.relation_manager.create_relations(relations)
+    
+    def create_relationships(self, relationships: List[Dict[str, Any]]) -> str:
+        """
+        Create multiple new relationships in the knowledge graph.
+        This is an alias for create_relations to maintain API compatibility.
+        
+        Args:
+            relationships: List of relationship objects
+            
+        Returns:
+            JSON response with operation result
+        """
+        self._ensure_initialized()
+        return self.relation_manager.create_relations(relationships)
     
     def get_relationships(self, entity_name: str, relation_type: Optional[str] = None) -> str:
         """
@@ -1928,23 +1953,23 @@ class GraphMemoryManager:
                 self.logger.error(f"Error getting component: {str(e)}")
             return dict_to_json({"error": f"Failed to get component: {str(e)}"})
     
-    def update_component(self, name: str, domain_name: str, container_name: str, 
-                        updates: Dict[str, Any]) -> str:
+    def update_component(self, name: str, container_name: str, updates: Dict[str, Any], domain_name: Optional[str] = None) -> str:
         """
         Update a component's properties.
         
         Args:
             name: Name of the component
-            domain_name: Name of the domain
             container_name: Name of the project container
             updates: Dictionary of properties to update
+            domain_name: Optional name of the domain
             
         Returns:
             JSON string with the updated component
         """
         try:
             self._ensure_initialized()
-            result = self.project_memory.update_component(name, domain_name, container_name, updates)
+            # The project_memory.update_component expects: name, container_name, updates, domain_name
+            result = self.project_memory.update_component(name, container_name, updates, domain_name)
             if isinstance(result, dict):
                 return dict_to_json(result)
             return result
@@ -1953,21 +1978,21 @@ class GraphMemoryManager:
                 self.logger.error(f"Error updating component: {str(e)}")
             return dict_to_json({"error": f"Failed to update component: {str(e)}"})
     
-    def delete_component(self, name: str, domain_name: str, container_name: str) -> str:
+    def delete_component(self, component_id: str, domain_name: Optional[str] = None, container_name: Optional[str] = None) -> str:
         """
         Delete a component from a domain.
         
         Args:
-            name: Name of the component
-            domain_name: Name of the domain
-            container_name: Name of the project container
+            component_id: ID or name of the component to delete
+            domain_name: Optional name of the domain
+            container_name: Optional name of the project container
             
         Returns:
             JSON string with the deletion result
         """
         try:
             self._ensure_initialized()
-            result = self.project_memory.delete_component(name, domain_name, container_name)
+            result = self.project_memory.delete_component(component_id, domain_name, container_name)
             if isinstance(result, dict):
                 return dict_to_json(result)
             return result
@@ -2269,41 +2294,78 @@ class GraphMemoryManager:
                     # Silently continue to fallback methods
                     pass
             
-            # Fallback: Use a consolidated query with UNION to find entities by various association methods
-            query = """
-            // Method 1: Find entities with project property matching project name
+            # Method 1: Find entities with project property matching project name
+            query1 = """
             MATCH (e:Entity)
             WHERE e.project = $project_name
-            
-            UNION
-            
-            // Method 2: Find entities with names starting with project name
-            MATCH (e:Entity)
-            WHERE e.name STARTS WITH $name_prefix
-            
-            UNION
-            
-            // Method 3: Find entities with container property matching project name
-            MATCH (e:Entity)
-            WHERE e.container = $project_name
-            
             RETURN DISTINCT e
             ORDER BY e.name
             """
             
-            records = self.base_manager.safe_execute_read_query(
-                query,
-                {
-                    "project_name": project_name,
-                    "name_prefix": project_name + "_"
-                }
+            records1 = self.base_manager.safe_execute_read_query(
+                query1,
+                {"project_name": project_name}
             )
             
-            # Process the results
-            for record in records:
+            # Process the results from query1
+            for record in records1:
                 if 'e' in record:
                     entity = dict(record['e'].items())
+                    # Convert any DateTime objects to strings
+                    for key, value in entity.items():
+                        if hasattr(value, 'iso_format'):  # Check if it's a datetime-like object
+                            entity[key] = value.iso_format()
                     entities.append(entity)
+            
+            # Method 2: Find entities with names starting with project name prefix
+            query2 = """
+            MATCH (e:Entity)
+            WHERE e.name STARTS WITH $name_prefix
+            RETURN DISTINCT e
+            ORDER BY e.name
+            """
+            
+            records2 = self.base_manager.safe_execute_read_query(
+                query2,
+                {"name_prefix": project_name + "_"}
+            )
+            
+            # Process the results from query2
+            for record in records2:
+                if 'e' in record:
+                    entity = dict(record['e'].items())
+                    # Convert any DateTime objects to strings
+                    for key, value in entity.items():
+                        if hasattr(value, 'iso_format'):  # Check if it's a datetime-like object
+                            entity[key] = value.iso_format()
+                    # Check if already added
+                    if not any(e.get('name') == entity.get('name') for e in entities):
+                        entities.append(entity)
+            
+            # Method 3: Find entities with container property matching project name
+            query3 = """
+            MATCH (e:Entity)
+            WHERE e.container = $project_name
+            RETURN DISTINCT e
+            ORDER BY e.name
+            """
+            
+            records3 = self.base_manager.safe_execute_read_query(
+                query3,
+                {"project_name": project_name}
+            )
+            
+            # Process the results from query3
+            for record in records3:
+                if 'e' in record:
+                    entity = dict(record['e'].items())
+                    # Convert any DateTime objects to strings
+                    for key, value in entity.items():
+                        if hasattr(value, 'iso_format'):  # Check if it's a datetime-like object
+                            entity[key] = value.iso_format()
+                    # Check if already added
+                    if not any(e.get('name') == entity.get('name') for e in entities):
+                        entities.append(entity)
             
             # Reset original project context
             self.set_project_name(original_project)
@@ -2359,3 +2421,92 @@ class GraphMemoryManager:
                 "status": "error",
                 "error": f"Failed to retrieve lesson container: {str(e)}"
             })
+
+    def get_entity_observations(self, entity_name: str, observation_type: Optional[str] = None) -> str:
+        """
+        Get observations for an entity from the knowledge graph.
+        This is an alias for get_observations to maintain backward compatibility.
+        
+        Args:
+            entity_name: The name of the entity
+            observation_type: Optional type of observation to filter by
+            
+        Returns:
+            JSON string with the observations
+        """
+        return self.get_observations(entity_name, observation_type)
+
+    def get_entities(self, query: Optional[str] = None, limit: int = 10) -> List[Dict[str, Any]]:
+        """
+        Get entities from the knowledge graph.
+        
+        Args:
+            query: Optional search query to filter entities
+            limit: Maximum number of entities to return
+            
+        Returns:
+            List of entity dictionaries
+        """
+        self._ensure_initialized()
+        
+        try:
+            # If query is provided, search for entities
+            if query:
+                search_result = json.loads(self.search_nodes(query, limit))
+                if "results" in search_result:
+                    return search_result["results"]
+                return []
+            
+            # Otherwise, get all entities
+            query = """
+            MATCH (e:Entity)
+            RETURN e
+            LIMIT $limit
+            """
+            
+            records = self.base_manager.safe_execute_read_query(
+                query,
+                {"limit": limit}
+            )
+            
+            entities = []
+            if records:
+                for record in records:
+                    # Handle different record types
+                    entity = None
+                    if isinstance(record, dict) and "e" in record:
+                        # Dictionary access for dict type records
+                        entity = record["e"]
+                    elif hasattr(record, "get") and callable(record.get):
+                        # Use get method for Neo4j Record objects
+                        entity = record.get("e")
+                    
+                    if entity:
+                        # Handle different entity types
+                        if hasattr(entity, "items") and callable(entity.items):
+                            # Convert Neo4j Node to dictionary
+                            entities.append(dict(entity.items()))
+                        elif isinstance(entity, dict):
+                            # Already a dictionary
+                            entities.append(entity)
+            
+            return entities
+        except Exception as e:
+            if self.logger and hasattr(self.logger, "error") and callable(self.logger.error):
+                self.logger.error(f"Error retrieving entities: {str(e)}")
+            return []
+
+    def add_observation(self, observation: Dict[str, Any]) -> str:
+        """
+        Add a single observation to an entity.
+        This is a convenience method that wraps add_observations.
+        
+        Args:
+            observation: Dictionary with observation data
+            
+        Returns:
+            JSON string with the result
+        """
+        self._ensure_initialized()
+        # Call add_observations with a list containing the single observation
+        return self.observation_manager.add_observations([observation])

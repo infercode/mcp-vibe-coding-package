@@ -65,7 +65,6 @@ class ProjectContainer:
             
             # Generate a unique ID for the container
             container_id = generate_id("prj")
-            timestamp = time.time()
             
             # Prepare container properties
             container_properties = {
@@ -73,8 +72,6 @@ class ProjectContainer:
                 "name": name,
                 "entityType": "ProjectContainer",
                 "domain": "project",
-                "created": timestamp,
-                "lastUpdated": timestamp,
                 "status": "active"
             }
             
@@ -94,6 +91,8 @@ class ProjectContainer:
             # Create container
             create_query = """
             CREATE (c:Entity $properties)
+            SET c.created = datetime(),
+                c.lastUpdated = datetime()
             RETURN c
             """
             
@@ -244,7 +243,7 @@ class ProjectContainer:
             # Build update query
             update_query = f"""
             MATCH (c:Entity {{name: $name, entityType: 'ProjectContainer'}})
-            SET {', '.join(set_parts)}
+            SET {', '.join(set_parts)}, c.lastUpdated = datetime()
             RETURN c
             """
             

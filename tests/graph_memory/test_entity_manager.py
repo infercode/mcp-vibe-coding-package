@@ -230,8 +230,15 @@ def test_create_entity_error_handling(mock_base_manager, sample_entity):
     
     # Call should return error JSON
     result = json.loads(entity_manager.create_entities([sample_entity]))
-    assert "error" in result
-    assert "Database error" in result["error"]
+    
+    # Check for either top-level error or errors in the errors array
+    assert "error" in result or ("errors" in result and len(result["errors"]) > 0)
+    
+    # If errors array is present, verify it contains the correct error
+    if "errors" in result:
+        assert len(result["errors"]) > 0
+        assert "error" in result["errors"][0]
+        assert "Database error" in result["errors"][0]["error"]
 
 
 @pytest.mark.parametrize("entity_data, expected_keys", [

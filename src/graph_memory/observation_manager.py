@@ -1,4 +1,7 @@
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union, Tuple
+import json
+import uuid
+from datetime import datetime
 
 from src.utils import dict_to_json, generate_id
 from src.utils.neo4j_query_utils import sanitize_query_parameters
@@ -41,16 +44,25 @@ class ObservationManager:
                 entity_name = observation_dict.get("entity", observation_dict.get("entityName", ""))
                 content = observation_dict.get("content", "")
                 observation_type = observation_dict.get("type", None)
+                metadata = observation_dict.get("metadata", None)
+                confidence = observation_dict.get("confidence", None)
                 
                 if entity_name and content:
                     # Add the observation in Neo4j
                     try:
-                        observation_id = self._add_observation_to_entity(entity_name, content, observation_type)
+                        observation_id, created_timestamp = self._add_observation_to_entity(
+                            entity_name, 
+                            content, 
+                            observation_type,
+                            metadata,
+                            confidence
+                        )
                         
                         # Format for response
                         added_observation = {
                             "entity": entity_name,
-                            "content": content
+                            "content": content,
+                            "created": created_timestamp
                         }
                         
                         if observation_type:
@@ -58,6 +70,12 @@ class ObservationManager:
                             
                         if observation_id:
                             added_observation["id"] = observation_id
+                            
+                        if metadata:
+                            added_observation["metadata"] = metadata
+                            
+                        if confidence is not None:
+                            added_observation["confidence"] = confidence
                         
                         added_observations.append(added_observation)
                         self.logger.info(f"Added observation to entity: {entity_name}")
@@ -126,7 +144,8 @@ class ObservationManager:
                 {query_parts[0]}
                 {' '.join(query_parts[1:])}
                 RETURN o.id as id, o.content as content, o.type as type, 
-                       o.created as created, o.lastUpdated as lastUpdated
+                       o.created as created, o.lastUpdated as lastUpdated,
+                       o.metadata as metadata, o.confidence as confidence
                 """
                 
                 # Sanitize query parameters
@@ -151,6 +170,26 @@ class ObservationManager:
                         for field in ["id", "type", "created", "lastUpdated"]:
                             if record.get(field):
                                 observation[field] = record.get(field)
+                        
+                        # Handle metadata (stored as JSON string)
+                        if record.get("metadata"):
+                            try:
+                                metadata_str = str(record.get("metadata"))
+                                metadata = json.loads(metadata_str)
+                                observation["metadata"] = metadata
+                            except json.JSONDecodeError:
+                                # If not valid JSON, store as is
+                                observation["metadata"] = record.get("metadata")
+                        
+                        # Handle confidence
+                        if record.get("confidence"):
+                            try:
+                                confidence_str = str(record.get("confidence"))
+                                confidence = float(confidence_str)
+                                observation["confidence"] = confidence
+                            except ValueError:
+                                # If not a valid float, store as is
+                                observation["confidence"] = record.get("confidence")
                         
                         observations.append(observation)
                 
@@ -207,9 +246,9 @@ class ObservationManager:
                         "error": f"Observation with ID '{observation_id}' not found for entity '{entity_name}'"
                     })
                 
-                # Build update query
+                # Update observation with new values
                 update_parts = ["o.content = $content", "o.lastUpdated = datetime()"]
-                params = {
+                update_params = {
                     "entity_name": entity_name,
                     "observation_id": observation_id,
                     "content": content
@@ -217,36 +256,40 @@ class ObservationManager:
                 
                 if observation_type:
                     update_parts.append("o.type = $type")
-                    params["type"] = observation_type
+                    update_params["type"] = observation_type
                 
                 update_query = f"""
                 MATCH (e:Entity {{name: $entity_name}})-[:HAS_OBSERVATION]->(o:Observation {{id: $observation_id}})
                 SET {', '.join(update_parts)}
-                RETURN o
+                RETURN o, o.lastUpdated as lastUpdated
                 """
                 
                 # Sanitize parameters
-                sanitized_params = sanitize_query_parameters(params)
+                sanitized_update_params = sanitize_query_parameters(update_params)
                 
                 # Execute write query with validation
                 updated_records = self.base_manager.safe_execute_write_query(
                     update_query,
-                    sanitized_params
+                    sanitized_update_params
                 )
                 
+                # Extract updated time from results
+                last_updated = None
                 if updated_records and len(updated_records) > 0:
-                    observation = updated_records[0].get("o")
-                    
-                    if observation:
-                        # Convert to dictionary
-                        observation_dict = dict(observation.items())
-                        observation_dict["entity"] = entity_name
-                        
-                        return dict_to_json({"observation": observation_dict})
+                    last_updated = updated_records[0].get("lastUpdated")
                 
-                return dict_to_json({
-                    "error": f"Failed to update observation"
-                })
+                # Format response
+                observation = {
+                    "entity": entity_name,
+                    "id": observation_id,
+                    "content": content,
+                    "lastUpdated": last_updated
+                }
+                
+                if observation_type:
+                    observation["type"] = observation_type
+                
+                return dict_to_json({"observation": observation})
             except ValueError as e:
                 error_msg = f"Query validation error: {str(e)}"
                 self.logger.error(error_msg)
@@ -328,7 +371,9 @@ class ObservationManager:
             return dict_to_json({"error": error_msg})
     
     def _add_observation_to_entity(self, entity_name: str, content: str, 
-                                 observation_type: Optional[str] = None) -> Optional[str]:
+                                 observation_type: Optional[str] = None,
+                                 metadata: Optional[Dict[str, Any]] = None,
+                                 confidence: Optional[float] = None) -> Tuple[Optional[str], Optional[str]]:
         """
         Add an observation to an entity.
         
@@ -336,81 +381,107 @@ class ObservationManager:
             entity_name: The name of the entity
             content: The content of the observation
             observation_type: Optional type of the observation
+            metadata: Optional metadata for the observation
+            confidence: Optional confidence score (0-1)
             
         Returns:
-            The ID of the created observation, or None if creation failed
+            Tuple of (observation_id, created_timestamp)
+            
+        Raises:
+            Exception: If the entity does not exist or there is an error adding the observation
         """
-        if not self.base_manager.neo4j_driver:
-            self.logger.debug("Neo4j driver not initialized, skipping observation creation")
-            return None
+        # Validate entity exists
+        check_query = """
+        MATCH (e:Entity {name: $name})
+        RETURN e
+        """
         
-        if not content or not entity_name:
-            return None
+        sanitized_params = sanitize_query_parameters({"name": entity_name})
         
-        try:
-            # First check if entity exists
-            entity_query = """
-            MATCH (e:Entity {name: $name})
-            RETURN e
-            """
+        # Execute read query with validation
+        entity_records = self.base_manager.safe_execute_read_query(
+            check_query,
+            sanitized_params
+        )
+        
+        if not entity_records or len(entity_records) == 0:
+            self.logger.error(f"Validation error adding observation to entity: Entity '{entity_name}' not found")
+            raise Exception(f"Entity '{entity_name}' not found")
+        
+        # Generate a unique ID for the observation
+        observation_id = str(uuid.uuid4())
+        
+        # Current timestamp
+        timestamp = datetime.now().isoformat()
+        
+        # Handle metadata
+        metadata_json = None
+        if metadata:
+            try:
+                metadata_json = json.dumps(metadata)
+            except (TypeError, json.JSONDecodeError):
+                self.logger.error(f"Could not encode metadata for observation: {metadata}")
+        
+        # Create observation node
+        params = {
+            "entity_name": entity_name,
+            "observation_id": observation_id,
+            "content": content,
+            "created": timestamp,
+            "lastUpdated": timestamp
+        }
+        
+        if observation_type:
+            params["type"] = observation_type
             
-            # Sanitize parameters
-            sanitized_entity_params = sanitize_query_parameters({"name": entity_name})
+        if metadata_json:
+            params["metadata"] = metadata_json
             
-            # Execute read query with validation
-            entity_records = self.base_manager.safe_execute_read_query(
-                entity_query,
-                sanitized_entity_params
-            )
+        if confidence is not None:
+            params["confidence"] = str(confidence)
+        
+        # Building the SET clause dynamically for optional parameters
+        set_clauses = [
+            "o.id = $observation_id",
+            "o.content = $content",
+            "o.created = $created",
+            "o.lastUpdated = $lastUpdated"
+        ]
+        
+        if observation_type:
+            set_clauses.append("o.type = $type")
             
-            if not entity_records or len(entity_records) == 0:
-                raise ValueError(f"Entity '{entity_name}' not found")
+        if metadata_json:
+            set_clauses.append("o.metadata = $metadata")
             
-            # Generate unique ID for observation
-            observation_id = generate_id()
-            
-            # Build query
-            query_parts = [
-                "MATCH (e:Entity {name: $entity_name})",
-                "CREATE (o:Observation {",
-                "id: $id,",
-                "content: $content,",
-                "created: datetime()"
-            ]
-            
-            params = {
-                "entity_name": entity_name,
-                "id": observation_id,
-                "content": content
-            }
-            
-            if observation_type:
-                query_parts.append(",type: $type")
-                params["type"] = observation_type
-            
-            query_parts.append("})")
-            query_parts.append("CREATE (e)-[r:HAS_OBSERVATION]->(o)")
-            query_parts.append("RETURN o")
-            
-            query = "\n".join(query_parts)
-            
-            # Sanitize parameters
-            sanitized_params = sanitize_query_parameters(params)
-            
-            # Execute write query with validation
-            self.base_manager.safe_execute_write_query(
-                query,
-                sanitized_params
-            )
-            
-            return observation_id
-            
-        except ValueError as e:
-            self.logger.error(f"Validation error adding observation to entity: {str(e)}")
-            raise
-        except Exception as e:
-            self.logger.error(f"Error adding observation to entity: {str(e)}")
-            raise
+        if confidence is not None:
+            set_clauses.append("o.confidence = $confidence")
+        
+        # Create observation and link to entity
+        query = f"""
+        MATCH (e:Entity {{name: $entity_name}})
+        CREATE (o:Observation)
+        SET {', '.join(set_clauses)}
+        CREATE (e)-[r:HAS_OBSERVATION]->(o)
+        RETURN o.id as id, o.created as created
+        """
+        
+        # Sanitize query parameters
+        sanitized_query_params = sanitize_query_parameters(params)
+        
+        # Execute write query with validation
+        records = self.base_manager.safe_execute_write_query(
+            query,
+            sanitized_query_params
+        )
+        
+        if records and len(records) > 0:
+            # Get observation_id and timestamp
+            result_id = records[0].get("id")
+            result_created = records[0].get("created")
+            return result_id, result_created
+        
+        return None, None
     
     def _convert_to_dict(self, observation: Any) -> Dict[str, Any]:
         """Convert an observation object to a dictionary."""
@@ -435,4 +506,92 @@ class ObservationManager:
                 except (AttributeError, TypeError):
                     pass
             
-            return result 
+            return result
+
+    def get_observations(self, entity_name: str, observation_type: Optional[str] = None) -> str:
+        """
+        Get observations for an entity.
+        
+        Args:
+            entity_name: Name of the entity to get observations for
+            observation_type: Optional type of observations to retrieve
+            
+        Returns:
+            JSON string with the observations
+        """
+        try:
+            self.base_manager.ensure_initialized()
+            
+            # Build query based on filters
+            query_parts = []
+            params = {"entity_name": entity_name}
+            
+            # Match entity and its observations
+            query_parts.append("(e:Entity {name: $entity_name})-[:HAS_OBSERVATION]->(o:Observation)")
+            
+            if observation_type:
+                query_parts.append("o.type = $observation_type")
+                params["observation_type"] = observation_type
+            
+            query = f"""
+            MATCH {query_parts[0]}
+            {' WHERE ' + ' AND '.join(query_parts[1:]) if len(query_parts) > 1 else ''}
+            RETURN o.content as content, o.type as type, o.metadata as metadata,
+                   o.confidence as confidence, o.created as created, 
+                   o.lastUpdated as lastUpdated, id(o) as id
+            """
+            
+            try:
+                # Use safe_execute_read_query for validation
+                records = self.base_manager.safe_execute_read_query(
+                    query,
+                    params
+                )
+                
+                observations = []
+                if records:
+                    for record in records:
+                        observation = {
+                            "content": record.get("content", ""),
+                            "type": record.get("type", "GENERAL"),
+                            "id": str(record.get("id", ""))
+                        }
+                        
+                        # Add optional properties if they exist
+                        if record.get("metadata"):
+                            try:
+                                metadata_str = str(record.get("metadata"))
+                                metadata = json.loads(metadata_str)
+                                observation["metadata"] = metadata
+                            except json.JSONDecodeError:
+                                # If not valid JSON, store as is
+                                observation["metadata"] = record.get("metadata")
+                        
+                        if record.get("confidence") is not None:
+                            try:
+                                confidence_str = str(record.get("confidence"))
+                                confidence = float(confidence_str)
+                                observation["confidence"] = confidence
+                            except ValueError:
+                                # If not a valid float, store as is
+                                observation["confidence"] = record.get("confidence")
+                        
+                        # Add timestamps
+                        if record.get("created"):
+                            observation["created"] = record.get("created")
+                        
+                        if record.get("lastUpdated"):
+                            observation["lastUpdated"] = record.get("lastUpdated")
+                        
+                        observations.append(observation)
+                
+                return dict_to_json({"observations": observations})
+            except ValueError as e:
+                error_msg = f"Query validation error: {str(e)}"
+                self.logger.error(error_msg)
+                return dict_to_json({"error": error_msg})
+        
+        except Exception as e:
+            error_msg = f"Error retrieving observations: {str(e)}"
+            self.logger.error(error_msg)
+            return dict_to_json({"error": error_msg}) 

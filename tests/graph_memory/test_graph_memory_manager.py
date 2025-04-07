@@ -106,17 +106,17 @@ def test_entity_operations(mock_graph_memory_manager, sample_entity, sample_enti
 def test_relation_operations(mock_graph_memory_manager, sample_relation, sample_relations):
     """Test relation operations delegation."""
     # Configure mocks - set return values directly on mock_graph_memory_manager
-    mock_graph_memory_manager.create_relations.return_value = '{"status": "success"}'
-    mock_graph_memory_manager.get_relations.return_value = '[{"type": "CONNECTS_TO"}]'
+    mock_graph_memory_manager.create_relationship.return_value = '{"status": "success"}'
+    mock_graph_memory_manager.get_relationships.return_value = '[{"type": "CONNECTS_TO"}]'
     mock_graph_memory_manager.delete_relation.return_value = '{"status": "success"}'
     
-    # Test create_relations
-    result = mock_graph_memory_manager.create_relations(sample_relations)
+    # Test create_relationship
+    result = mock_graph_memory_manager.create_relationship(sample_relation)
     assert result == '{"status": "success"}'
     
-    # Test get_relations
+    # Test get_relationships
     relation_type = sample_relation["relationType"]
-    result = mock_graph_memory_manager.get_relations("test_entity", relation_type)
+    result = mock_graph_memory_manager.get_relationships("test_entity", relation_type)
     assert result == '[{"type": "CONNECTS_TO"}]'
     
     # Test delete_relation
@@ -300,8 +300,8 @@ def test_error_handling(mock_logger):
     ("create_entities", [[{"name": "test"}]], {}, '{"status": "success"}'),
     ("get_entity", ["test_entity"], {}, '{"name": "test_entity"}'),
     ("delete_entity", ["test_entity"], {}, '{"status": "success"}'),
-    ("create_relations", [[{"from": "a", "to": "b", "relationType": "R"}]], {}, '{"status": "success"}'),
-    ("get_relations", ["test_entity"], {}, '[{"type": "RELATION"}]'),
+    ("create_relationship", [{"from": "a", "to": "b", "relationType": "R"}], {}, '{"status": "success"}'),
+    ("get_relationships", ["test_entity"], {}, '[{"type": "RELATION"}]'),
     ("add_observations", [[{"entity": "e", "content": "c"}]], {}, '{"status": "success"}'),
     ("get_entity_observations", ["test_entity"], {}, '[{"content": "Test"}]'),
 ])
@@ -538,7 +538,7 @@ def test_add_observations(mock_graph_memory_manager, sample_observations):
     mock_observation_manager.add_observations_batch.assert_called_once_with(sample_observations)
 
 
-def test_get_observations(mock_graph_memory_manager):
+def test_get_entity_observations(mock_graph_memory_manager):
     """Test observation retrieval delegation."""
     # Configure mocks
     mock_observation_manager = mock_graph_memory_manager.observation_manager
@@ -548,8 +548,8 @@ def test_get_observations(mock_graph_memory_manager):
     expected_result = json.dumps([{"id": "obs-1"}, {"id": "obs-2"}])
     mock_observation_manager.get_observations.return_value = expected_result
     
-    # Call get_observations
-    result = mock_graph_memory_manager.get_observations(entity_id)
+    # Call get_entity_observations
+    result = mock_graph_memory_manager.get_entity_observations(entity_id)
     
     # Verify result
     assert result == expected_result

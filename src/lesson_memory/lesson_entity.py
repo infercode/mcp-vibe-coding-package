@@ -75,24 +75,19 @@ class LessonEntity:
             entity_dict["domain"] = "lesson"
             
             # Create entity
-            entity_result = self.entity_manager.create_entities([entity_dict])
-            entity_json = json.loads(entity_result)
-            
-            if "error" in entity_json:
-                return entity_result
-            
-            # Add entity to container
-            relation_query = """
+            query = """
             MATCH (c:LessonContainer {name: $container_name})
-            MATCH (e:Entity {name: $entity_name})
-            MERGE (c)-[r:CONTAINS {added: datetime()}]->(e)
-            RETURN r
+            CREATE (e:Entity $entity_props)
+            CREATE (e)-[r:BELONGS_TO]->(c)
+            SET e.created = datetime(), 
+                e.lastUpdated = datetime()
+            RETURN e, c
             """
             
             # Use safe_execute_write_query for validation (write operation)
             self.base_manager.safe_execute_write_query(
-                relation_query,
-                {"container_name": container_name, "entity_name": entity_name}
+                query,
+                {"container_name": container_name, "entity_props": entity_dict}
             )
             
             # Get the created entity
@@ -229,12 +224,31 @@ class LessonEntity:
             # Ensure domain remains lesson
             updates["domain"] = "lesson"
             
-            # Update the entity
-            update_result = self.entity_manager.update_entity(entity_name, updates)
-            update_json = json.loads(update_result)
+            # Build update query
+            set_parts = []
+            params = {"name": entity_name}
             
-            if "error" in update_json:
-                return update_result
+            # Add update properties
+            for i, (key, value) in enumerate(updates.items()):
+                param_name = f"p{i}"
+                set_parts.append(f"e.{key} = ${param_name}")
+                params[param_name] = value
+            
+            # Add lastUpdated timestamp
+            set_parts.append("e.lastUpdated = datetime()")
+            
+            # Build and execute query
+            query = f"""
+            MATCH (e:Entity {{name: $name}})
+            SET {', '.join(set_parts)}
+            RETURN e
+            """
+            
+            # Use safe_execute_write_query for validation (write operation)
+            self.base_manager.safe_execute_write_query(
+                query,
+                params
+            )
             
             # Get the updated entity with lesson context
             return self.get_lesson_entity(entity_name, container_name)

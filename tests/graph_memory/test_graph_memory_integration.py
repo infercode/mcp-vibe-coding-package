@@ -136,10 +136,8 @@ def test_create_and_get_entity(graph_manager):
     # Create test entity
     entity = {
         "name": entity_name,
-        "entityType": "TestEntity",
-        "description": "A test entity for integration testing",
-        "test_property": "test value",
-        "created_at": datetime.now().isoformat()
+        "type": "TestEntity",
+        "description": "A test entity for integration testing"
     }
 
     # Create the entity
@@ -155,7 +153,7 @@ def test_create_and_get_entity(graph_manager):
     # Verify entity data
     assert "entity" in get_result, f"Entity retrieval failed: {get_result}"
     assert get_result["entity"]["name"] == entity_name
-    assert get_result["entity"]["entityType"] == "TestEntity"
+    assert get_result["entity"]["type"] == "TestEntity"
     
     # Not all properties might be returned in the same structure
     # Depending on how they are stored in the database
@@ -172,7 +170,7 @@ def test_create_multiple_entities(graph_manager):
     entities = [
         {
             "name": f"{base_name}_entity_{i}",
-            "entityType": "BatchEntity",
+            "type": "BatchEntity",
             "description": f"Batch entity {i}",
             "index": i
         }
@@ -194,7 +192,7 @@ def test_create_multiple_entities(graph_manager):
         
         # Only verify that we can get the entity and it has the correct name and type
         # Don't check for nested properties as the structure might vary
-        assert get_result["entity"]["entityType"] == "BatchEntity"
+        assert get_result["entity"]["type"] == "BatchEntity"
         assert "error" not in get_result, f"Error in get_result: {get_result.get('error')}"
 
 
@@ -206,13 +204,13 @@ def test_create_and_query_relationship(graph_manager):
     
     entity1 = {
         "name": entity1_name,
-        "entityType": "SourceEntity",
+        "type": "SourceEntity",
         "description": "Source entity for relationship test"
     }
     
     entity2 = {
         "name": entity2_name,
-        "entityType": "TargetEntity",
+        "type": "TargetEntity",
         "description": "Target entity for relationship test"
     }
     
@@ -262,50 +260,65 @@ def test_add_and_query_observations(graph_manager):
     
     entity = {
         "name": entity_name,
-        "entityType": "ObservationEntity",
+        "type": "ObservationEntity",
         "description": "Entity for observation tests"
     }
     
     graph_manager.create_entity(entity)
     
-    # Add observations
+    # Create observations for testing
     observations = [
         {
             "entity": entity_name,
             "content": "First observation about the entity",
+            "type": "GENERAL",
             "metadata": {
-                "source": "integration_test",
-                "confidence": 0.9
+                "source": "user",
+                "importance": "high",
+                "tags": ["important", "first"]
             }
         },
         {
             "entity": entity_name,
-            "content": "Second observation with different details",
+            "content": "Second observation with more details",
+            "type": "ANALYSIS",
             "metadata": {
-                "source": "integration_test",
-                "confidence": 0.8
+                "source": "system",
+                "importance": "medium",
+                "tags": ["followup", "analysis"]
             }
         }
     ]
     
-    # Add observations in batch
+    # Add observations
     add_result = json.loads(graph_manager.add_observations(observations))
-    
-    # Verify observations were added
     assert "added" in add_result
     assert len(add_result["added"]) == 2
     
-    # Query observations
-    obs_result = json.loads(graph_manager.get_observations(entity_name))
+    # Get observations for the entity
+    obs_result = json.loads(graph_manager.get_entity_observations(entity_name))
     
     # Verify observation data
     assert "observations" in obs_result
-    assert len(obs_result["observations"]) >= 2
+    assert len(obs_result["observations"]) == 2
     
-    # Check content of observations
-    contents = [obs["content"] for obs in obs_result["observations"]]
-    assert "First observation about the entity" in contents
-    assert "Second observation with different details" in contents
+    # Verify metadata is preserved
+    metadata_found = False
+    timestamps_found = False
+    
+    for obs in obs_result["observations"]:
+        if "metadata" in obs:
+            metadata_found = True
+            assert isinstance(obs["metadata"], dict)
+            assert "source" in obs["metadata"]
+            
+        # Check for timestamps
+        if "created" in obs:
+            timestamps_found = True
+            assert obs["created"] is not None
+            
+    assert metadata_found, "Metadata not found in any observation"
+    assert timestamps_found, "Timestamps not found in any observation"
 
 
 def test_search_nodes(graph_manager):
@@ -317,18 +330,18 @@ def test_search_nodes(graph_manager):
     entities = [
         {
             "name": f"{base_name}_machine_learning",
-            "entityType": "SearchEntity",
+            "type": "SearchEntity",
             "description": "Entity about machine learning algorithms and neural networks"
             
         },
         {
             "name": f"{base_name}_database",
-            "entityType": "SearchEntity",
+            "type": "SearchEntity",
             "description": "Entity about database systems and SQL queries"
         },
         {
             "name": f"{base_name}_web_dev",
-            "entityType": "SearchEntity",
+            "type": "SearchEntity",
             "description": "Entity about web development, JavaScript and frameworks"
         }
     ]
@@ -476,7 +489,7 @@ def test_create_lesson_section(graph_manager):
     section_name = f"{TEST_PREFIX}_section_1"
     section_data = {
         "name": section_name,
-        "entityType": "LessonSection",
+        "type": "LessonSection",
         "description": "Introduction section",
         "container_id": container_id  # Link to the container
     }
@@ -500,7 +513,7 @@ def test_lesson_relationship(graph_manager):
     # Create first lesson as an entity
     lesson1_data = {
         "name": lesson1_name,
-        "entityType": "Lesson",
+        "type": "Lesson",
         "description": "A prerequisite lesson",
         "difficulty": "beginner"
     }
@@ -509,7 +522,7 @@ def test_lesson_relationship(graph_manager):
     # Create second lesson as an entity
     lesson2_data = {
         "name": lesson2_name,
-        "entityType": "Lesson",
+        "type": "Lesson",
         "description": "An advanced lesson",
         "difficulty": "advanced"
     }
@@ -559,7 +572,7 @@ def test_full_workflow(graph_manager):
     entities = [
         {
             "name": f"{project_name}_entity_{i}",
-            "entityType": "WorkflowEntity",
+            "type": "WorkflowEntity",
             "description": f"Workflow test entity {i}"
         }
         for i in range(3)
@@ -589,11 +602,9 @@ def test_full_workflow(graph_manager):
     query_result = json.loads(graph_manager.get_project_entities(project_name))
     assert "error" not in query_result
     
-    # There should be entities in the response - format may vary
+    # Verify we can get the project entities
     assert "entities" in query_result
-    
-    # Verify some entities exist (exact count might vary)
-    assert len(query_result["entities"]) > 0
+    assert len(query_result["entities"]) >= 3  # We created at least 3 entities for this project
 
 
 def test_complex_knowledge_graph(graph_manager):
@@ -618,7 +629,7 @@ def test_complex_knowledge_graph(graph_manager):
             entity_name = f"{base_name}_{entity_type.lower()}_{i}"
             entity = {
                 "name": entity_name,
-                "entityType": entity_type,
+                "type": entity_type,
                 "description": f"A {entity_type.lower()} entity for complex graph testing"
             }
             graph_manager.create_entity(entity)

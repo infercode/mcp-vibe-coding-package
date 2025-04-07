@@ -97,11 +97,10 @@ def mock_entity_manager(mock_base_manager, mock_logger):
 def mock_relation_manager(mock_base_manager, mock_entity_manager, mock_logger):
     """Mock relation manager."""
     relation_manager = MagicMock()
-    relation_manager.create_relationship.return_value = json.dumps({"status": "success", "relation_id": "rel-1"})
-    relation_manager.get_relationships.return_value = json.dumps([
-        {"relation": {"id": "rel-1", "type": "RELATED_TO"}, "target": {"id": "entity-2", "name": "Related Entity"}}
-    ])
-    relation_manager.create_relationships.return_value = json.dumps({"status": "success", "created": 2, "relation_ids": ["rel-1", "rel-2"]})
+    relation_manager.create_relationship.return_value = json.dumps({"status": "success"})
+    relation_manager.get_relationships.return_value = json.dumps([{"type": "CONNECTS_TO"}])
+    relation_manager.update_relation.return_value = json.dumps({"status": "success"})
+    relation_manager.delete_relation.return_value = json.dumps({"status": "success"})
     
     return relation_manager
 
@@ -216,11 +215,13 @@ def mock_graph_memory_manager(
     graph_memory_manager.create_entities.side_effect = mock_entity_manager.create_entities
     
     graph_memory_manager.create_relationship.side_effect = mock_relation_manager.create_relationship
-    graph_memory_manager.get_relationships.side_effect = mock_relation_manager.get_relationships
     graph_memory_manager.create_relationships.side_effect = mock_relation_manager.create_relationships
+    graph_memory_manager.get_relationships.side_effect = mock_relation_manager.get_relationships
+    graph_memory_manager.update_relation.side_effect = mock_relation_manager.update_relation
+    graph_memory_manager.delete_relation.side_effect = mock_relation_manager.delete_relation
     
     graph_memory_manager.add_observation.side_effect = mock_observation_manager.add_observation
-    graph_memory_manager.get_observations.side_effect = mock_observation_manager.get_observations
+    graph_memory_manager.get_entity_observations.side_effect = mock_observation_manager.get_observations
     graph_memory_manager.add_observations.side_effect = mock_observation_manager.add_observations_batch
     
     graph_memory_manager.search_nodes.side_effect = mock_search_manager.search_nodes

@@ -86,7 +86,6 @@ class ComponentManager:
             
             # Generate component ID
             component_id = generate_id("cmp")
-            timestamp = time.time()
             
             # Prepare component entity
             component_entity = {
@@ -94,8 +93,8 @@ class ComponentManager:
                 "name": name,
                 "entityType": component_type,
                 "domain": "project",
-                "created": timestamp,
-                "lastUpdated": timestamp
+                "created": time.time(),
+                "lastUpdated": time.time()
             }
             
             if description:
@@ -109,10 +108,16 @@ class ComponentManager:
                     if key not in component_entity:
                         component_entity[key] = value
             
-            # Create component entity
-            create_query = """
-            CREATE (comp:Entity $properties)
-            RETURN comp
+            # Create component query
+            create_query = f"""
+            MATCH (d:Entity {{name: $domain_name, entityType: 'Domain'}})
+            MATCH (c:Entity {{name: $container_name, entityType: 'ProjectContainer'}})
+            CREATE (e:Entity $properties)
+            CREATE (e)-[:PART_OF]->(d)
+            CREATE (e)-[:BELONGS_TO]->(c)
+            SET e.created = datetime(),
+                e.lastUpdated = datetime()
+            RETURN e
             """
             
             create_records = self.base_manager.safe_execute_write_query(
@@ -125,60 +130,8 @@ class ComponentManager:
                     "error": "Failed to create component entity"
                 })
             
-            # Add component to project container
-            add_to_container_query = """
-            MATCH (c:Entity {name: $container_name, entityType: 'ProjectContainer'})
-            MATCH (comp:Entity {id: $component_id})
-            CREATE (comp)-[:PART_OF {created: $timestamp}]->(c)
-            RETURN comp
-            """
-            
-            add_records = self.base_manager.safe_execute_write_query(
-                add_to_container_query,
-                {"container_name": container_name, "component_id": component_id, "timestamp": timestamp}
-            )
-            
-            if not add_records or len(add_records) == 0:
-                # Attempt to clean up the created entity
-                self.base_manager.safe_execute_write_query(
-                    "MATCH (comp:Entity {id: $component_id}) DELETE comp",
-                    {"component_id": component_id}
-                )
-                
-                return dict_to_json({
-                    "error": f"Failed to add component '{name}' to container '{container_name}'"
-                })
-            
-            # Add component to domain
-            add_to_domain_query = """
-            MATCH (d:Entity {name: $domain_name, entityType: 'Domain'})
-            MATCH (comp:Entity {id: $component_id})
-            CREATE (comp)-[:BELONGS_TO {created: $timestamp}]->(d)
-            RETURN comp
-            """
-            
-            domain_add_records = self.base_manager.safe_execute_write_query(
-                add_to_domain_query,
-                {"domain_name": domain_name, "component_id": component_id, "timestamp": timestamp}
-            )
-            
-            if not domain_add_records or len(domain_add_records) == 0:
-                # Attempt to clean up the created relationships and entity
-                self.base_manager.safe_execute_write_query(
-                    """
-                    MATCH (comp:Entity {id: $component_id})
-                    OPTIONAL MATCH (comp)-[r]-()
-                    DELETE r, comp
-                    """,
-                    {"component_id": component_id}
-                )
-                
-                return dict_to_json({
-                    "error": f"Failed to add component '{name}' to domain '{domain_name}'"
-                })
-            
             # Get created component
-            component = dict(domain_add_records[0]["comp"].items())
+            component = dict(create_records[0]["e"].items())
             
             return dict_to_json({
                 "status": "success",
@@ -321,13 +274,14 @@ class ComponentManager:
             for key, value in updates.items():
                 set_parts.append(f"comp.{key} = ${key}")
             
-            # Build update query
+            # Update entity
             update_query = f"""
-            MATCH (c:Entity {{name: $container_name, entityType: 'ProjectContainer'}})
-            MATCH (d:Entity {{name: $domain_name, entityType: 'Domain'}})-[:PART_OF]->(c)
-            MATCH (comp:Entity {{name: $name}})-[:BELONGS_TO]->(d)
-            SET {', '.join(set_parts)}
-            RETURN comp
+            MATCH (e:Entity)
+            WHERE e.name = $name
+            AND EXISTS(()-[:PART_OF]->(d:Entity {{name: $domain_name, entityType: 'Domain'}}))
+            AND EXISTS(()-[:BELONGS_TO]->(c:Entity {{name: $container_name, entityType: 'ProjectContainer'}}))
+            SET {', '.join(set_parts)}, e.lastUpdated = datetime()
+            RETURN e
             """
             
             # Add name, domain_name and container_name to updates for the query
@@ -344,7 +298,7 @@ class ComponentManager:
                 })
             
             # Return updated component
-            component = dict(update_records[0]["comp"].items())
+            component = dict(update_records[0]["e"].items())
             
             return dict_to_json({
                 "status": "success",

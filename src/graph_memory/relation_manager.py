@@ -16,6 +16,67 @@ class RelationManager:
         self.base_manager = base_manager
         self.logger = base_manager.logger
     
+    def create_relationship(self, relation: Dict[str, Any]) -> str:
+        """
+        Create a relationship in the knowledge graph.
+        
+        Args:
+            relation: Dictionary with relationship information
+            
+        Returns:
+            JSON string with the created relationship
+        """
+        try:
+            self.base_manager.ensure_initialized()
+            
+            # Standardize field names to support multiple conventions
+            standardized_relation = {}
+            
+            # Source entity - could be 'from' or 'from_entity'
+            if "from" in relation:
+                standardized_relation["from"] = relation["from"]
+            elif "from_entity" in relation:
+                standardized_relation["from"] = relation["from_entity"]
+            else:
+                return dict_to_json({"error": "Missing source entity (from/from_entity)"})
+            
+            # Target entity - could be 'to' or 'to_entity'
+            if "to" in relation:
+                standardized_relation["to"] = relation["to"]
+            elif "to_entity" in relation:
+                standardized_relation["to"] = relation["to_entity"]
+            else:
+                return dict_to_json({"error": "Missing target entity (to/to_entity)"})
+            
+            # Relationship type - could be 'relationType', 'type', or 'relationship_type'
+            if "relationType" in relation:
+                standardized_relation["relationType"] = relation["relationType"]
+            elif "type" in relation:
+                standardized_relation["relationType"] = relation["type"]
+            elif "relationship_type" in relation:
+                standardized_relation["relationType"] = relation["relationship_type"]
+            else:
+                return dict_to_json({"error": "Missing relationship type (relationType/type/relationship_type)"})
+            
+            # Copy other properties
+            for key, value in relation.items():
+                if key not in ["from", "from_entity", "to", "to_entity", "relationType", "type", "relationship_type"]:
+                    standardized_relation[key] = value
+            
+            # If properties are in a separate field, include them
+            if "properties" in relation and isinstance(relation["properties"], dict):
+                for prop_key, prop_value in relation["properties"].items():
+                    if prop_key not in standardized_relation:
+                        standardized_relation[prop_key] = prop_value
+            
+            # Call create_relations with the standardized relation
+            return self.create_relations([standardized_relation])
+        
+        except Exception as e:
+            error_msg = f"Error creating relationship: {str(e)}"
+            self.logger.error(error_msg)
+            return dict_to_json({"error": error_msg})
+    
     def create_relations(self, relations: List[Union[Dict, Any]]) -> str:
         """
         Create multiple relationships in the knowledge graph.
@@ -85,6 +146,23 @@ class RelationManager:
             self.logger.error(error_msg)
             return dict_to_json({"error": error_msg})
     
+    def create_relationships(self, relationships: List[Union[Dict, Any]]) -> str:
+        """
+        Create multiple relationships in the knowledge graph.
+        This is an alias for create_relations to maintain API compatibility.
+        
+        Args:
+            relationships: List of relationships to create
+            
+        Returns:
+            JSON string with the created relationships
+        """
+        return self.create_relations(relationships)
+    
+    def get_relationships(self, entity_name: Optional[str] = None, relation_type: Optional[str] = None) -> str:
+        """Get relationships from the knowledge graph (alias for get_relations)."""
+        return self.get_relations(entity_name, relation_type)
+    
     def get_relations(self, entity_name: Optional[str] = None, relation_type: Optional[str] = None) -> str:
         """
         Get relationships from the knowledge graph.
@@ -149,7 +227,11 @@ class RelationManager:
                         
                         relations.append(relation)
                 
-                return dict_to_json({"relations": relations})
+                # Return with both 'relationships' and 'relations' keys for backward compatibility
+                return dict_to_json({
+                    "relationships": relations,
+                    "relations": relations
+                })
             except ValueError as e:
                 error_msg = f"Query validation error: {str(e)}"
                 self.logger.error(error_msg)

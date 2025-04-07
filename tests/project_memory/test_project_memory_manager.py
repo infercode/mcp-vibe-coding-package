@@ -32,7 +32,9 @@ def test_create_project_container(mock_base_manager, mock_logger):
         "message": "Project container 'Test Project' created successfully",
         "container": {
             "id": "prj123", 
-            "name": "Test Project"
+            "name": "Test Project",
+            "created": "2022-01-20T12:00:00.000000",
+            "lastUpdated": "2022-01-20T12:00:00.000000"
         }
     })
     
@@ -67,6 +69,18 @@ def test_create_project_container(mock_base_manager, mock_logger):
     assert result["status"] == "success"
     assert "message" in result
     assert "container" in result
+    
+    # Verify container has timestamp fields in ISO format
+    if "container" in result and isinstance(result["container"], dict):
+        if "created" in result["container"]:
+            assert isinstance(result["container"]["created"], str)
+            # Check it looks like an ISO datetime
+            assert "T" in result["container"]["created"]
+        
+        if "lastUpdated" in result["container"]:
+            assert isinstance(result["container"]["lastUpdated"], str)
+            # Check it looks like an ISO datetime
+            assert "T" in result["container"]["lastUpdated"]
 
 
 def test_create_project_container_with_default_values(mock_base_manager, mock_logger):
@@ -186,7 +200,7 @@ def test_update_project_container(mock_base_manager, mock_logger):
             "name": "Original Project Name", # Name can't be changed
             "entityType": "ProjectContainer",
             "description": "Updated description",
-            "lastUpdated": 1625097600.0
+            "lastUpdated": "2022-01-20T12:00:00.000000"  # ISO datetime format
         }
     })
     
@@ -476,69 +490,91 @@ def test_get_component(mock_base_manager, mock_logger):
 
 def test_update_component(mock_base_manager, mock_logger):
     """Test updating a component."""
-    # Set logger on mock_base_manager
-    mock_base_manager.logger = mock_logger
+    # Set up mock responses
+    get_project_response = json.dumps({
+        "container": {
+            "id": "project-123",
+            "name": "Test Project"
+        }
+    })
     
-    # Create manager
-    manager = ProjectMemoryManager(base_manager=mock_base_manager)
+    list_components_response = json.dumps({
+        "components": [{
+            "id": "comp-123",
+            "name": "TestComponent",
+            "description": "Original description",
+            "type": "SERVICE",
+            "properties": {"foo": "bar"},
+            "created": "2022-01-20T10:00:00.000000",
+            "lastUpdated": "2022-01-20T10:00:00.000000"
+        }]
+    })
     
-    # Initial component data (before update)
-    original_component_data = {
-        "id": "component-123",
-        "name": "Original Component Name",
-        "component_type": "library",
-        "description": "Original description"
-    }
+    update_component_response = json.dumps({
+        "status": "success",
+        "message": "Component 'TestComponent' updated successfully",
+        "component": {
+            "id": "comp-123",
+            "name": "TestComponent",
+            "description": "Updated description",
+            "type": "SERVICE",
+            "properties": {"foo": "baz"},
+            "created": "2022-01-20T10:00:00.000000",
+            "lastUpdated": "2022-01-20T12:00:00.000000"  # ISO format datetime string
+        }
+    })
     
-    # Updated component data
-    updated_component_data = {
-        "id": "component-123",
-        "name": "Original Component Name",  # Name can't be changed
-        "component_type": "service",
-        "description": "Updated description"
-    }
+    # Create mock for project_container and component_manager
+    mock_project_container = MagicMock()
+    mock_project_container.get_project_container.return_value = get_project_response
     
-    # Create mock records for the component retrieval and update
-    mock_original = MagicMock()
-    mock_original.items.return_value = original_component_data.items()
+    mock_component_manager = MagicMock()
+    mock_component_manager.list_components.return_value = list_components_response
+    mock_component_manager.update_component.return_value = update_component_response
     
-    mock_updated = MagicMock()
-    mock_updated.items.return_value = updated_component_data.items()
+    # Create ProjectMemoryManager and inject mocks
+    manager = ProjectMemoryManager(mock_base_manager)
+    manager.project_container = mock_project_container
+    manager.component_manager = mock_component_manager
     
-    # Create mock records
-    record1 = MagicMock()
-    record1.get.return_value = mock_original
-    
-    record2 = MagicMock()
-    record2.get.return_value = mock_updated
-    
-    # Set up the mock to return different values for each call
-    mock_base_manager.safe_execute_query.side_effect = [
-        ([record1], None),  # First call - get existing component
-        ([record2], None)   # Second call - update component
-    ]
-    
-    # Update data for component (don't try to change the name)
+    # Component updates
     updates = {
-        "component_type": "service",
-        "description": "Updated description"
+        "description": "Updated description",
+        "properties": {"foo": "baz"}
     }
     
-    # Update component
-    result = manager.update_component(
-        "component-123",
-        domain_name="TestDomain",
-        container_name="TestProject",
-        updates=updates
-    )
+    # Call update_component - note that we're explicitly passing None for domain_name to test the optional parameter
+    result = manager.update_component("TestComponent", "Test Project", updates, domain_name=None)
     
-    # Verify result
-    assert isinstance(result, dict)
+    # Assert that the methods were called with correct args
+    mock_project_container.get_project_container.assert_called_once_with("Test Project")
+    mock_component_manager.list_components.assert_called_once_with(domain_name="", container_name="Test Project")
+    
+    # The update_component should pass the component's name, empty string for domain_name, container_name, and updates
+    mock_component_manager.update_component.assert_called_once_with("TestComponent", "", "Test Project", updates)
+    
+    # Verify result structure
     assert "status" in result
     assert result["status"] == "success"
+    assert "message" in result
+    assert "component" in result
     
-    # Verify safe_execute_query was called twice
-    assert mock_base_manager.safe_execute_query.call_count == 2
+    # Verify component properties
+    component = result["component"]
+    assert component["name"] == "TestComponent"
+    assert component["description"] == "Updated description"
+    assert component["properties"]["foo"] == "baz"
+    
+    # Verify timestamp fields in ISO format
+    assert "created" in component
+    assert "lastUpdated" in component
+    assert isinstance(component["created"], str)
+    assert isinstance(component["lastUpdated"], str)
+    assert "T" in component["created"]
+    assert "T" in component["lastUpdated"]
+    
+    # Verify lastUpdated timestamp is newer than the created timestamp
+    assert component["lastUpdated"] > component["created"], "lastUpdated should be newer than created timestamp"
 
 
 def test_delete_component(mock_base_manager, mock_logger):
@@ -549,49 +585,33 @@ def test_delete_component(mock_base_manager, mock_logger):
     # Create manager
     manager = ProjectMemoryManager(base_manager=mock_base_manager)
     
-    # Component data for retrieval
-    component_data = {
-        "id": "component-123",
-        "name": "Test Component",
-        "component_type": "service"
-    }
+    # Configure delete component mock response
+    mock_delete_response = json.dumps({
+        "status": "success",
+        "message": "Component 'Test Component' deleted successfully"
+    })
     
-    # Mock component retrieval and deletion
-    mock_component = MagicMock()
-    mock_component.items.return_value = component_data.items()
+    # Mock component_manager delete_component
+    mock_component_manager = MagicMock()
+    mock_component_manager.delete_component.return_value = mock_delete_response
+    manager.component_manager = mock_component_manager
     
-    record1 = MagicMock()
-    record1.get.return_value = mock_component
-    
-    # Mock deletion record
-    delete_record = MagicMock()
-    delete_record.__getitem__.return_value = 1  # Number of relationships deleted
-    
-    # Set up the mock to return different values for each call
-    mock_base_manager.safe_execute_query.side_effect = [
-        ([record1], None),       # First call - get component
-        ([delete_record], None)  # Second call - check relationships
-    ]
-    
-    # Delete component
+    # Delete component using the domain_name and container_name
     result = manager.delete_component(
         "component-123",
         domain_name="TestDomain",
         container_name="TestProject"
     )
     
+    # Verify component_manager.delete_component was called with correct parameters
+    mock_component_manager.delete_component.assert_called_once_with(
+        "component-123", "TestDomain", "TestProject"
+    )
+    
     # Verify result structure
     assert isinstance(result, dict)
-    
-    # Check for either success or appropriate error about relationships
-    if "status" in result and result["status"] == "success":
-        assert "message" in result
-    elif "error" in result:
-        # If error response, make sure it mentions relationships
-        assert "relationships" in result["error"].lower()
-    
-    # Verify safe_execute_query was called at least once
-    assert mock_base_manager.safe_execute_query.call_count >= 1
+    assert result["status"] == "success"
+    assert "message" in result
 
 
 def test_list_components(mock_base_manager, mock_logger):

@@ -1,6 +1,10 @@
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, List, Optional, Union, Tuple
+import json
+import logging
+from datetime import datetime
 
 from src.utils import dict_to_json
+from src.utils.neo4j_query_utils import sanitize_query_parameters
 from src.graph_memory.base_manager import BaseManager
 
 class EntityManager:
@@ -18,7 +22,7 @@ class EntityManager:
     
     def create_entities(self, entities: List[Union[Dict, Any]]) -> str:
         """
-        Create multiple entities in the knowledge graph.
+        Create entities in the knowledge graph.
         
         Args:
             entities: List of entities to create
@@ -28,23 +32,49 @@ class EntityManager:
         """
         try:
             self.base_manager.ensure_initialized()
-            
             created_entities = []
+            errors = []
             
-            for entity in entities:
-                # Process entity
-                entity_dict = self._convert_to_dict(entity)
-                
-                # Extract entity information
-                entity_name = entity_dict.get("name", "")
-                entity_type = entity_dict.get("entityType", "")
-                observations = entity_dict.get("observations", [])
-                
-                if entity_name and entity_type:
-                    # Create the entity in Neo4j
+            for entity_dict in entities:
+                try:
+                    # Get entity data from dictionary
+                    entity_name = entity_dict.get("name", "")
+                    
+                    # Handle type field, which could be either "type" or "entityType"
+                    entity_type = entity_dict.get("entityType", entity_dict.get("type", ""))
+                    
+                    if not entity_name:
+                        raise ValueError("Entity name is required")
+                    
+                    if not entity_type:
+                        raise ValueError("Entity type is required")
+                    
+                    # Get observations if any
+                    observations = []
+                    if "observations" in entity_dict:
+                        observations = entity_dict["observations"]
+                    
+                    # Create entity in Neo4j
                     self._create_entity_in_neo4j(entity_name, entity_type, observations)
                     
-                    # Add entity with embedding if embeddings are enabled
+                    # Add all other properties
+                    additional_properties = {}
+                    for key, value in entity_dict.items():
+                        if key not in ["name", "entityType", "type", "observations"]:
+                            additional_properties[key] = value
+                    
+                    if additional_properties:
+                        update_query = """
+                        MATCH (e:Entity {name: $name})
+                        SET e += $properties
+                        """
+                        
+                        self.base_manager.safe_execute_write_query(
+                            update_query,
+                            {"name": entity_name, "properties": additional_properties}
+                        )
+                    
+                    # Generate and store embedding if enabled
                     if self.base_manager.embedding_enabled:
                         # Generate description for embedding
                         description = f"{entity_name} is a {entity_type}."
@@ -58,11 +88,36 @@ class EntityManager:
                         if embedding:
                             self._update_entity_embedding(entity_name, embedding)
                     
-                    created_entities.append(entity_dict)
+                    # Create a standardized entity object for the response
+                    created_entity = {
+                        "name": entity_name,
+                        "type": entity_type,
+                        "entityType": entity_type
+                    }
+                    
+                    # Include observations in the response if they exist
+                    if observations:
+                        created_entity["observations"] = observations
+                    
+                    # Include additional properties in the response
+                    for key, value in additional_properties.items():
+                        created_entity[key] = value
+                    
+                    created_entities.append(created_entity)
                     self.logger.info(f"Created entity: {entity_name}")
+                except Exception as e:
+                    errors.append({
+                        "name": entity_dict.get("name", "unknown"),
+                        "error": str(e)
+                    })
+                    self.logger.error(f"Error creating entity: {entity_dict.get('name', 'unknown')}: {str(e)}")
             
-            return dict_to_json({"created": created_entities})
-                
+            response = {"created": created_entities}
+            if errors:
+                response["errors"] = errors
+            
+            return dict_to_json(response)
+            
         except Exception as e:
             error_msg = f"Error creating entities: {str(e)}"
             self.logger.error(error_msg)
@@ -98,6 +153,17 @@ class EntityManager:
                 if entity:
                     # Convert entity to dictionary
                     entity_dict = dict(entity.items())
+                    
+                    # Ensure both 'type' and 'entityType' fields exist
+                    if "entityType" in entity_dict and "type" not in entity_dict:
+                        entity_dict["type"] = entity_dict["entityType"]
+                    elif "type" in entity_dict and "entityType" not in entity_dict:
+                        entity_dict["entityType"] = entity_dict["type"]
+                    
+                    # If we still don't have type fields, add default type
+                    if "type" not in entity_dict:
+                        entity_dict["type"] = "Entity"
+                        entity_dict["entityType"] = "Entity"
                     
                     # Get observations
                     observations = self._get_entity_observations(entity_name)
@@ -266,34 +332,48 @@ class EntityManager:
             self.logger.error(error_msg)
             return dict_to_json({"error": error_msg})
     
-    def _create_entity_in_neo4j(self, name: str, entity_type: str, observations: List[str]) -> None:
-        """Create an entity directly in Neo4j."""
-        if not self.base_manager.neo4j_driver:
-            self.logger.debug("Neo4j driver not initialized, skipping entity creation")
-            return
+    def _create_entity_in_neo4j(self, name: str, entity_type: str, observations: Optional[List[str]] = None) -> None:
+        """
+        Create an entity in Neo4j.
+        
+        Args:
+            name: The name of the entity
+            entity_type: The type of the entity
+            observations: Optional list of observation strings
+            
+        Raises:
+            Exception: If there is an error creating the entity
+        """
+        # Create the entity node
+        query = """
+        MERGE (e:Entity {name: $name})
+        SET e.entityType = $entity_type,
+            e.type = $entity_type,
+            e.created = datetime(),
+            e.lastUpdated = datetime()
+        RETURN e
+        """
         
         try:
-            # Create the entity node
-            self.logger.debug(f"Creating entity node in Neo4j: {name}", context={"entity_type": entity_type})
-            query = """
-            MERGE (e:Entity {name: $name})
-            SET e.entityType = $entity_type
-            RETURN e
-            """
+            # Sanitize parameters
+            sanitized_params = sanitize_query_parameters({
+                "name": name,
+                "entity_type": entity_type
+            })
             
-            # Use safe_execute_write_query for validation
+            # Execute write query with validation
             self.base_manager.safe_execute_write_query(
                 query,
-                {"name": name, "entity_type": entity_type}
+                sanitized_params
             )
             
             # Add observations if provided
             if observations:
                 for observation in observations:
                     self._add_observation_to_entity(name, observation)
-                    
+        
         except Exception as e:
-            self.logger.error(f"Error creating entity in Neo4j: {str(e)}")
+            self.logger.error(f"Error creating entity '{name}': {str(e)}")
             raise
     
     def _add_observation_to_entity(self, entity_name: str, observation_content: str) -> None:
