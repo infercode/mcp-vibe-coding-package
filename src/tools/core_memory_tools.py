@@ -925,7 +925,7 @@ def register_core_tools(server, get_client_manager):
             high_risk_patterns = [";", "--", "DROP ", "DELETE ", "INSERT ", "UPDATE ", "UNION ", "MERGE ", "MATCH "]
             for pattern in high_risk_patterns:
                 if pattern.lower() in query.lower():
-                    logger.warn(f"Security violation in search query: {pattern}")
+                    logger.warning(f"Security violation in search query: {pattern}")
                     error_response = create_error_response(
                         message=f"Search query contains high-risk pattern: {pattern}",
                         code="security_violation",
@@ -948,7 +948,7 @@ def register_core_tools(server, get_client_manager):
                     "warning": "query_truncated",
                     "message": f"Query truncated from {original_length} to {max_query_length} characters"
                 })
-                logger.warn(f"Search query truncated from {original_length} to {max_query_length} characters")
+                logger.warning(f"Search query truncated from {original_length} to {max_query_length} characters")
                 
             # Validate and sanitize limit parameter
             try:
@@ -977,7 +977,7 @@ def register_core_tools(server, get_client_manager):
                         "message": f"Limit reduced from {original_limit} to maximum allowed value of 100"
                     })
             except (ValueError, TypeError):
-                logger.warn(f"Invalid limit value: {limit}, using default of 10")
+                logger.warning(f"Invalid limit value: {limit}, using default of 10")
                 limit = 10  # Default if conversion fails
                 search_warnings.append({
                     "warning": "invalid_limit",
@@ -999,7 +999,7 @@ def register_core_tools(server, get_client_manager):
                 # Basic validation - only allow alphanumeric, underscore, and hyphen
                 invalid_chars = [c for c in project_name if not (c.isalnum() or c in ['_', '-', ' '])]
                 if invalid_chars:
-                    logger.warn(f"Invalid characters in project name: {invalid_chars}")
+                    logger.warning(f"Invalid characters in project name: {invalid_chars}")
                     error_response = create_error_response(
                         message=f"Project name contains invalid characters: {', '.join(invalid_chars)}",
                         code="invalid_project_name"
@@ -1073,7 +1073,7 @@ def register_core_tools(server, get_client_manager):
                                 return json.dumps(parsed_result)  # Return with added warnings
                     except json.JSONDecodeError:
                         # If result is not valid JSON but still a string, return legacy format
-                        logger.warn(f"Search result is not valid JSON, returning as legacy format")
+                        logger.warning(f"Search result is not valid JSON, returning as legacy format")
                         return result
                 else:
                     parsed_result = result

@@ -10,14 +10,27 @@ project_root = Path(__file__).resolve().parent.parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
+# Configure pytest-asyncio
+pytest_plugins = ["pytest_asyncio"]
+
+# Configure asyncio settings
 def pytest_configure(config):
     """Configure pytest with custom markers."""
     config.addinivalue_line(
-        "markers", "integration: mark a test as an integration test that requires component mocks"
+        "markers", 
+        "integration: mark test as integration test"
     )
-    config.addinivalue_line(
-        "markers", "asyncio: mark a test as an async test that requires asyncio support"
-    )
+    
+    # Use the correct configuration for asyncio
+    config.option.asyncio_mode = "strict"
+    
+    # This is the recommended way to set the default fixture loop scope
+    if not hasattr(config.option, "asyncio_default_fixture_loop_scope"):
+        config.option.asyncio_default_fixture_loop_scope = "function"
+    
+    # Configure event loop policy if needed
+    if hasattr(config.option, "asyncio_default_test_loop_scope"):
+        config.option.asyncio_default_test_loop_scope = "function"
 
 from src.graph_memory.base_manager import BaseManager
 from src.graph_memory import GraphMemoryManager

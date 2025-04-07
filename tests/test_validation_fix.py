@@ -67,13 +67,15 @@ def test_relationship_type_with_destructive_word():
         query = builder.to_cypher_query()
         logger.info("SUCCESS: Query with 'CREATED' relationship type was validated correctly")
         logger.info(f"Generated Query: {query.query}")
-        return True
+        # Verify the query was created successfully and contains the CREATED relationship
+        assert query is not None
+        assert "CREATED" in query.query
     except ValueError as e:
         logger.error(f"FAILED: Query validation still rejects 'CREATED': {str(e)}")
-        return False
+        assert False, f"Query validation incorrectly rejected 'CREATED': {str(e)}"
     except Exception as e:
         logger.error(f"ERROR: Unexpected exception: {str(e)}")
-        return False
+        assert False, f"Unexpected exception: {str(e)}"
 
 def test_property_with_destructive_word(mock_logger):
     """Test that property names containing words like 'created_at' are now allowed."""
