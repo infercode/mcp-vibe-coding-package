@@ -58,14 +58,13 @@ class LessonRelation:
             
             # Check if container exists
             container_query = """
-            MATCH (c:LessonContainer {name: $name})
+            MATCH (c:LessonContainer {name: $container_name})
             RETURN c
             """
             
-            # Use safe_execute_read_query for validation (read-only operation)
             container_records = self.base_manager.safe_execute_read_query(
                 container_query,
-                {"name": container_name}
+                {"container_name": container_name}
             )
             
             if not container_records or len(container_records) == 0:
@@ -204,7 +203,7 @@ class LessonRelation:
                 RETURN e
                 """
                 
-                membership_records, _ = self.base_manager.safe_execute_query(
+                membership_records = self.base_manager.safe_execute_read_query(
                     membership_query,
                     {"container_name": container_name, "entity_name": entity_name}
                 )
@@ -265,7 +264,7 @@ class LessonRelation:
             query = "\n".join(query_parts)
             
             # Execute query
-            records, _ = self.base_manager.safe_execute_query(
+            records = self.base_manager.safe_execute_read_query(
                 query,
                 params
             )
@@ -274,14 +273,15 @@ class LessonRelation:
             relations = []
             if records:
                 for record in records:
+                    # Safely access record values using dict access pattern
                     relation = {
-                        "from": record.get("from"),
-                        "to": record.get("to"),
-                        "type": record.get("type")
+                        "from": record["from"] if "from" in record else None,
+                        "to": record["to"] if "to" in record else None,
+                        "type": record["type"] if "type" in record else None
                     }
                     
                     # Add properties
-                    properties = record.get("properties", {})
+                    properties = record["properties"] if "properties" in record else {}
                     if properties:
                         for key, value in properties.items():
                             relation[key] = value
@@ -509,13 +509,13 @@ class LessonRelation:
             
             # Check if container exists
             container_query = """
-            MATCH (c:LessonContainer {name: $name})
+            MATCH (c:LessonContainer {name: $container_name})
             RETURN c
             """
             
-            container_records, _ = self.base_manager.safe_execute_query(
+            container_records = self.base_manager.safe_execute_read_query(
                 container_query,
-                {"name": container_name}
+                {"container_name": container_name}
             )
             
             if not container_records or len(container_records) == 0:
@@ -538,12 +538,12 @@ class LessonRelation:
             """
             
             # Execute queries
-            nodes_records, _ = self.base_manager.safe_execute_query(
+            nodes_records = self.base_manager.safe_execute_read_query(
                 nodes_query,
                 {"container_name": container_name}
             )
             
-            relationships_records, _ = self.base_manager.safe_execute_query(
+            relationships_records = self.base_manager.safe_execute_read_query(
                 relationships_query,
                 {"container_name": container_name}
             )
@@ -641,7 +641,7 @@ class LessonRelation:
             RETURN l
             """
             
-            lesson_records, _ = self.base_manager.safe_execute_query(
+            lesson_records = self.base_manager.safe_execute_read_query(
                 lesson_query,
                 {"lesson_name": lesson_name}
             )
@@ -651,13 +651,13 @@ class LessonRelation:
             
             # Verify context entity exists
             context_query = """
-            MATCH (c:Entity {name: $context_name})
+            MATCH (c:Entity {name: $context_entity})
             RETURN c
             """
             
-            context_records, _ = self.base_manager.safe_execute_query(
+            context_records = self.base_manager.safe_execute_read_query(
                 context_query,
-                {"context_name": context_entity}
+                {"context_entity": context_entity}
             )
             
             if not context_records or len(context_records) == 0:
@@ -702,7 +702,7 @@ class LessonRelation:
             if success_score is not None:
                 base_score = 0.5 + (success_score * 0.5)  # Scale to 0.5-1.0 range
             
-            self.base_manager.safe_execute_query(
+            self.base_manager.safe_execute_write_query(
                 update_query,
                 {"lesson_name": lesson_name, "base_score": base_score}
             )
@@ -728,13 +728,13 @@ class LessonRelation:
         try:
             # Check if container exists
             container_query = """
-            MATCH (c:LessonContainer {name: $name})
+            MATCH (c:LessonContainer {name: $container_name})
             RETURN c
             """
             
-            container_records, _ = self.base_manager.safe_execute_query(
+            container_records = self.base_manager.safe_execute_read_query(
                 container_query,
-                {"name": container_name}
+                {"container_name": container_name}
             )
             
             if not container_records or len(container_records) == 0:
@@ -763,7 +763,7 @@ class LessonRelation:
             query = "\n".join(query_parts)
             
             # Execute query
-            records, _ = self.base_manager.safe_execute_query(
+            records = self.base_manager.safe_execute_read_query(
                 query,
                 params
             )
@@ -772,14 +772,15 @@ class LessonRelation:
             relations = []
             if records:
                 for record in records:
+                    # Safely access record values using dict access pattern
                     relation = {
-                        "from": record.get("from"),
-                        "to": record.get("to"),
-                        "type": record.get("type")
+                        "from": record["from"] if "from" in record else None,
+                        "to": record["to"] if "to" in record else None,
+                        "type": record["type"] if "type" in record else None
                     }
                     
                     # Add properties
-                    properties = record.get("properties", {})
+                    properties = record["properties"] if "properties" in record else {}
                     if properties:
                         for key, value in properties.items():
                             relation[key] = value

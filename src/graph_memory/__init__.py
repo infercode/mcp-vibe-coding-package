@@ -678,7 +678,7 @@ class GraphMemoryManager:
             ORDER BY e.name
             """
             
-            records, _ = self.base_manager.safe_execute_query(query)
+            records = self.base_manager.safe_execute_read_query(query)
             
             # Process results
             entities = []
@@ -718,7 +718,7 @@ class GraphMemoryManager:
             DETACH DELETE n
             """
             
-            self.base_manager.safe_execute_query(query)
+            self.base_manager.safe_execute_write_query(query)
             
             return dict_to_json({
                 "status": "success",
@@ -2252,83 +2252,58 @@ class GraphMemoryManager:
             self.set_project_name(project_name)
             
             project_memory = self.get_client_project_memory()
-            
             entities = []
             
-            # Get project container components - preferred method
+            # First try: Get entities using project_container.get_container_components
             if hasattr(project_memory, "project_container") and hasattr(project_memory.project_container, "get_container_components"):
                 try:
                     result_json = project_memory.project_container.get_container_components(project_name)
                     result = json.loads(result_json)
                     
-                    # Check if we got results
                     if "error" not in result and result.get("components", []):
                         # Transform to standard format with entities array
                         result["entities"] = result.pop("components", [])
-                        # Reset original project context
                         self.set_project_name(original_project)
                         return json.dumps(result)
-                except Exception as e:
-                    if self.logger:
-                        self.logger.debug(f"Error using get_container_components, trying fallback: {str(e)}")
+                except Exception:
+                    # Silently continue to fallback methods
+                    pass
             
-            # Try each method to find entities associated with this project
-            
-            # Method 1: Find entities with project property matching project name
+            # Fallback: Use a consolidated query with UNION to find entities by various association methods
             query = """
+            // Method 1: Find entities with project property matching project name
             MATCH (e:Entity)
             WHERE e.project = $project_name
-            RETURN e
+            
+            UNION
+            
+            // Method 2: Find entities with names starting with project name
+            MATCH (e:Entity)
+            WHERE e.name STARTS WITH $name_prefix
+            
+            UNION
+            
+            // Method 3: Find entities with container property matching project name
+            MATCH (e:Entity)
+            WHERE e.container = $project_name
+            
+            RETURN DISTINCT e
             ORDER BY e.name
             """
             
             records = self.base_manager.safe_execute_read_query(
                 query,
-                {"project_name": project_name}
+                {
+                    "project_name": project_name,
+                    "name_prefix": project_name + "_"
+                }
             )
             
+            # Process the results
             for record in records:
                 if 'e' in record:
                     entity = dict(record['e'].items())
                     entities.append(entity)
-            
-            # Method 2: Find entities with names starting with project name
-            if not entities:
-                query = """
-                MATCH (e:Entity)
-                WHERE e.name STARTS WITH $name_prefix
-                RETURN e
-                ORDER BY e.name
-                """
-                
-                records = self.base_manager.safe_execute_read_query(
-                    query,
-                    {"name_prefix": project_name + "_"}
-                )
-                
-                for record in records:
-                    if 'e' in record:
-                        entity = dict(record['e'].items())
-                        entities.append(entity)
-            
-            # Method 3: Find entities with container property matching project name
-            if not entities:
-                query = """
-                MATCH (e:Entity)
-                WHERE e.container = $project_name
-                RETURN e
-                ORDER BY e.name
-                """
-                
-                records = self.base_manager.safe_execute_read_query(
-                    query,
-                    {"project_name": project_name}
-                )
-                
-                for record in records:
-                    if 'e' in record:
-                        entity = dict(record['e'].items())
-                        entities.append(entity)
             
             # Reset original project context
             self.set_project_name(original_project)

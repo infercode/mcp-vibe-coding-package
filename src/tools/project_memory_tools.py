@@ -9,6 +9,7 @@ Pydantic models for validation and serialization.
 from typing import Dict, List, Any, Optional, Union, TypeVar, Type, cast
 from datetime import datetime
 import json
+import re
 
 from src.logger import get_logger
 from src.models.project_memory import (
@@ -149,6 +150,26 @@ def register_project_tools(server, get_client_manager):
             JSON response with project container data
         """
         try:
+            # Parameter validation
+            if not project_id:
+                error_response = create_error_response(
+                    message="Project ID is required",
+                    code="missing_parameter"
+                )
+                return model_to_json(error_response)
+                
+            # Sanitize input
+            project_id = str(project_id).strip()
+            
+            # Reject certain dangerous inputs
+            restricted_names = ["all", "*", "database", "system", "admin"]
+            if project_id.lower() in restricted_names:
+                error_response = create_error_response(
+                    message=f"Invalid project ID: {project_id}",
+                    code="invalid_parameter"
+                )
+                return model_to_json(error_response)
+                
             # Get the graph manager with the appropriate client context
             client_graph_manager = get_client_manager(client_id)
             
@@ -323,6 +344,26 @@ def register_project_tools(server, get_client_manager):
             JSON response with operation result
         """
         try:
+            # Parameter validation
+            if not project_id:
+                error_response = create_error_response(
+                    message="Project ID is required",
+                    code="missing_parameter"
+                )
+                return model_to_json(error_response)
+                
+            # Sanitize input
+            project_id = str(project_id).strip()
+            
+            # Reject certain dangerous inputs
+            restricted_names = ["all", "*", "database", "system", "admin"]
+            if project_id.lower() in restricted_names:
+                error_response = create_error_response(
+                    message=f"Invalid project ID: {project_id}. Cannot delete protected resources.",
+                    code="invalid_parameter"
+                )
+                return model_to_json(error_response)
+                
             # Get the graph manager with the appropriate client context
             client_graph_manager = get_client_manager(client_id)
             
@@ -446,6 +487,30 @@ def register_project_tools(server, get_client_manager):
             JSON response with component data
         """
         try:
+            # Parameter validation
+            if not component_id:
+                error_response = create_error_response(
+                    message="Component ID is required",
+                    code="missing_parameter"
+                )
+                return model_to_json(error_response)
+                
+            # Sanitize inputs
+            component_id = str(component_id).strip()
+            
+            # Sanitize project_id if provided
+            if project_id:
+                project_id = str(project_id).strip()
+                
+                # Reject certain dangerous inputs for project_id
+                restricted_names = ["all", "*", "database", "system", "admin"]
+                if project_id.lower() in restricted_names:
+                    error_response = create_error_response(
+                        message=f"Invalid project ID: {project_id}",
+                        code="invalid_parameter"
+                    )
+                    return model_to_json(error_response)
+            
             # Get the graph manager with the appropriate client context
             client_graph_manager = get_client_manager(client_id)
             
@@ -584,6 +649,30 @@ def register_project_tools(server, get_client_manager):
             JSON response with operation result
         """
         try:
+            # Parameter validation
+            if not component_id:
+                error_response = create_error_response(
+                    message="Component ID is required",
+                    code="missing_parameter"
+                )
+                return model_to_json(error_response)
+                
+            # Sanitize inputs
+            component_id = str(component_id).strip()
+            
+            # Sanitize project_id if provided
+            if project_id:
+                project_id = str(project_id).strip()
+                
+                # Reject certain dangerous inputs for project_id
+                restricted_names = ["all", "*", "database", "system", "admin"]
+                if project_id.lower() in restricted_names:
+                    error_response = create_error_response(
+                        message=f"Invalid project ID: {project_id}",
+                        code="invalid_parameter"
+                    )
+                    return model_to_json(error_response)
+            
             # Get the graph manager with the appropriate client context
             client_graph_manager = get_client_manager(client_id)
             
@@ -639,6 +728,43 @@ def register_project_tools(server, get_client_manager):
             JSON response with components matching the criteria
         """
         try:
+            # Parameter validation
+            if not project_id:
+                error_response = create_error_response(
+                    message="Project ID is required",
+                    code="missing_parameter"
+                )
+                return model_to_json(error_response)
+                
+            # Sanitize inputs
+            project_id = str(project_id).strip()
+            
+            # Reject certain dangerous inputs for project_id
+            restricted_names = ["all", "*", "database", "system", "admin"]
+            if project_id.lower() in restricted_names:
+                error_response = create_error_response(
+                    message=f"Invalid project ID: {project_id}",
+                    code="invalid_parameter"
+                )
+                return model_to_json(error_response)
+                
+            # Sanitize optional parameters
+            if component_type:
+                component_type = str(component_type).strip()
+                
+            if name_contains:
+                name_contains = str(name_contains).strip()
+                
+            if limit is not None:
+                try:
+                    limit = int(limit)
+                    if limit < 1:
+                        limit = 10  # Use default if negative
+                    elif limit > 1000:
+                        limit = 1000  # Cap to prevent performance issues
+                except (ValueError, TypeError):
+                    limit = 100  # Default if conversion fails
+            
             # Get the graph manager with the appropriate client context
             client_graph_manager = get_client_manager(client_id)
             
@@ -869,6 +995,36 @@ def register_project_tools(server, get_client_manager):
             JSON response with operation result
         """
         try:
+            # Validate required fields
+            if not relationship_data:
+                error_response = create_error_response(
+                    message="Relationship data is required",
+                    code="missing_data"
+                )
+                return model_to_json(error_response)
+                
+            # Check for required fields
+            for field in ["source_id", "target_id", "relationship_type"]:
+                if field not in relationship_data or not relationship_data[field]:
+                    error_response = create_error_response(
+                        message=f"Missing required field: {field}",
+                        code="missing_field"
+                    )
+                    return model_to_json(error_response)
+            
+            # Sanitize inputs
+            relationship_data["source_id"] = str(relationship_data["source_id"]).strip()
+            relationship_data["target_id"] = str(relationship_data["target_id"]).strip()
+            relationship_data["relationship_type"] = str(relationship_data["relationship_type"]).strip()
+            
+            # Validate relationship_type format
+            if not re.match(r'^[A-Za-z0-9_]+$', relationship_data["relationship_type"]):
+                error_response = create_error_response(
+                    message="Invalid relationship_type format. Use only alphanumeric characters and underscores.",
+                    code="invalid_format"
+                )
+                return model_to_json(error_response)
+                
             # Add client_id to metadata if provided
             if client_id:
                 if "metadata" not in relationship_data:
@@ -877,13 +1033,15 @@ def register_project_tools(server, get_client_manager):
             
             # Extract project_id for context setting
             project_id = relationship_data.get("project_id")
+            if project_id:
+                relationship_data["project_id"] = str(project_id).strip()
             
             # Get the graph manager with the appropriate client context
             client_graph_manager = get_client_manager(client_id)
             
             # Set the project context if project_id is provided
             if project_id:
-                client_graph_manager.set_project_name(project_id)
+                client_graph_manager.set_project_name(relationship_data["project_id"])
             
             # Call the create method
             result = client_graph_manager.project_memory.domain_manager.create_component_relationship(relationship_data)

@@ -11,6 +11,7 @@ import json
 import uuid
 import copy
 import datetime
+import re
 from typing import Dict, Any, Optional, List, Union
 
 from src.logger import get_logger
@@ -38,6 +39,15 @@ def register_config_tools(server, get_config_manager):
             JSON string with the memory system status
         """
         try:
+            # Sanitize client_id if provided
+            if client_id:
+                client_id = str(client_id).strip()
+                
+                # Check for valid format (if client_id has a specific expected format)
+                if len(client_id) > 100:  # Prevent excessively long IDs
+                    logger.warn(f"Client ID too long, truncating: {client_id[:20]}...")
+                    client_id = client_id[:100]
+            
             # Get the client-specific graph manager
             graph_manager = get_config_manager(client_id)
             
@@ -47,26 +57,36 @@ def register_config_tools(server, get_config_manager):
             # Get Neo4j connection info
             neo4j_connected = graph_manager.check_connection()
             
-            # Build status object
-            status = {
-                "neo4j": {
-                    "connected": neo4j_connected,
-                    "uri": graph_manager.neo4j_uri,
-                    "database": graph_manager.neo4j_database
-                },
-                "embeddings": {
-                    "enabled": graph_manager.embedding_enabled,
-                    "provider": graph_manager.embedder_provider,
-                    "model": graph_manager.embedding_model
-                },
-                "project": graph_manager.default_project_name,
-                "timestamp": datetime.datetime.now().isoformat()
-            }
+            # Build status object based on the models
+            neo4j_status = Neo4jStatus(
+                connected=neo4j_connected,
+                address=graph_manager.neo4j_uri,
+                version=graph_manager.neo4j_version if hasattr(graph_manager, 'neo4j_version') else None,
+                message="Connected to Neo4j" if neo4j_connected else "Not connected to Neo4j",
+                timestamp=datetime.datetime.now().isoformat()
+            )
+            
+            embedding_status = EmbeddingStatus(
+                available=graph_manager.embedding_enabled,
+                provider=graph_manager.embedder_provider,
+                model=graph_manager.embedding_model,
+                dimensions=getattr(graph_manager, 'embedding_dimensions', 1536),
+                message="Embeddings enabled" if graph_manager.embedding_enabled else "Embeddings disabled",
+                timestamp=datetime.datetime.now().isoformat()
+            )
+            
+            memory_status = MemoryStatus(
+                operational=neo4j_connected,
+                neo4j=neo4j_status,
+                embedding=embedding_status,
+                message="Memory system operational" if neo4j_connected else "Memory system not fully operational",
+                timestamp=datetime.datetime.now().isoformat()
+            )
             
             # Create a success response
             success_response = create_success_response(
                 message="Successfully retrieved memory status",
-                data=status
+                data=model_to_dict(memory_status)
             )
             return model_to_json(success_response)
             
@@ -104,31 +124,123 @@ def register_config_tools(server, get_config_manager):
             JSON string with the configuration file content or instructions to create one
         """
         try:
+            # Sanitize project_name
+            if project_name:
+                project_name = str(project_name).strip()
+                
+                # Validate project name format (alphanumeric and underscores only)
+                if not re.match(r'^[a-zA-Z0-9_-]+$', project_name):
+                    error_response = create_error_response(
+                        message="Invalid project name format. Use only letters, numbers, underscores, and hyphens.",
+                        code="invalid_project_name"
+                    )
+                    return model_to_json(error_response)
+                
+                # Limit length
+                if len(project_name) > 50:
+                    project_name = project_name[:50]
+                    logger.warn(f"Project name too long, truncating to: {project_name}")
+            
             # Define the default config file name
             file_name = "mcp_unified_config.json"
-            if project_name and project_name.strip():
+            if project_name:
                 file_name = f"mcp_unified_config_{project_name}.json"
             
             # Check if config content was provided
-            if config_content and config_content.strip():
+            if config_content:
+                # Sanitize config_content
+                config_content = str(config_content).strip()
+                
+                # Check content size to prevent excessive processing
+                if len(config_content) > 1000000:  # 1MB limit
+                    error_response = create_error_response(
+                        message="Configuration content exceeds maximum size limit (1MB)",
+                        code="config_size_exceeded"
+                    )
+                    return model_to_json(error_response)
+                
                 # Parse the config content
                 try:
+                    # Validate JSON before passing to json.loads
+                    if not (config_content.startswith('{') and config_content.endswith('}')):
+                        error_response = create_error_response(
+                            message="Invalid JSON format: must be a JSON object",
+                            code="invalid_json_format"
+                        )
+                        return model_to_json(error_response)
+                        
                     config = json.loads(config_content)
+                    
+                    # Validate required fields
+                    if not isinstance(config, dict):
+                        error_response = create_error_response(
+                            message="Configuration must be a JSON object",
+                            code="invalid_config_format"
+                        )
+                        return model_to_json(error_response)
+                    
+                    # Check for required fields
+                    if "project_name" not in config:
+                        error_response = create_error_response(
+                            message="Missing required field 'project_name' in configuration",
+                            code="missing_field"
+                        )
+                        return model_to_json(error_response)
                     
                     # Extract client_id from config if present
                     client_id = config.get("client_id", None)
+                    if client_id:
+                        client_id = str(client_id).strip()
+                        if len(client_id) > 100:  # Prevent excessively long IDs
+                            logger.warn(f"Client ID too long, truncating: {client_id[:20]}...")
+                            client_id = client_id[:100]
                     
                     # Get the client-specific graph manager
                     graph_manager = get_config_manager(client_id)
+                    
+                    # Validate Neo4j config if present
+                    if "neo4j" in config:
+                        neo4j_config = config["neo4j"]
+                        if not isinstance(neo4j_config, dict):
+                            error_response = create_error_response(
+                                message="Neo4j configuration must be an object",
+                                code="invalid_neo4j_config"
+                            )
+                            return model_to_json(error_response)
+                            
+                        # Check for sensitive fields and log warning if missing
+                        for field in ["uri", "username", "password"]:
+                            if field not in neo4j_config:
+                                logger.warn(f"Neo4j configuration missing '{field}' field")
+                    
+                    # Validate embedding config if present
+                    if "embeddings" in config:
+                        embedding_config = config["embeddings"]
+                        if not isinstance(embedding_config, dict):
+                            error_response = create_error_response(
+                                message="Embedding configuration must be an object",
+                                code="invalid_embedding_config"
+                            )
+                            return model_to_json(error_response)
                     
                     # Apply the configuration
                     result = graph_manager.apply_client_config(config)
                     
                     # Return success or error message
                     if result["status"] == "success":
+                        # Get the current configuration for confirmation
+                        current_config = graph_manager.get_current_config()
+                        
+                        # Mask sensitive information before returning
+                        if "neo4j" in current_config and "password" in current_config["neo4j"]:
+                            current_config["neo4j"]["password"] = "********"
+                            
+                        if "embeddings" in current_config and "api_key" in current_config["embeddings"]:
+                            current_config["embeddings"]["api_key"] = "********"
+                            
                         success_response = create_success_response(
                             message="Configuration applied successfully",
-                            data=graph_manager.get_current_config()
+                            data=current_config
                         )
                         return model_to_json(success_response)
                     else:
@@ -138,10 +250,11 @@ def register_config_tools(server, get_config_manager):
                         )
                         return model_to_json(error_response)
                         
-                except json.JSONDecodeError:
+                except json.JSONDecodeError as json_error:
                     error_response = create_error_response(
-                        message="Invalid JSON configuration provided",
-                        code="invalid_json_error"
+                        message=f"Invalid JSON configuration provided: {str(json_error)}",
+                        code="invalid_json_error",
+                        details={"error_position": json_error.pos, "error_line": json_error.lineno}
                     )
                     return model_to_json(error_response)
             
@@ -337,29 +450,53 @@ def register_config_tools(server, get_config_manager):
             return model_to_json(error_response)
 
     @server.tool()
-    async def update_unified_config(project_name: str, updates: Dict[str, Any], config_content: str = "") -> str:
+    async def update_unified_config(project_name: str, updates: Dict[str, Any], config_content: str = "", 
+                                  client_id: Optional[str] = None) -> str:
         """
-        Update specific parts of the unified configuration.
-        
-        This tool allows you to update specific parts of the configuration without
-        recreating the entire file. The updates will be applied to both the configuration
-        file and the active memory system for the current session.
-        
-        NOTE: After updating, the changes will persist for all subsequent tool calls in the
-        same session without needing to call get_unified_config again.
+        Update the unified configuration.
         
         Args:
-            project_name: The project name to determine the config file name
-            updates: Dictionary with updates to apply to the configuration
-            config_content: Optional JSON string with the current configuration content from the client (for SSE mode).
-                When provided, applies updates to this configuration; when not provided, reads from server (STDIO mode).
-        
+            project_name: Project name to update
+            updates: Configuration updates to apply
+            config_content: Optional configuration content to replace
+            client_id: Optional client ID for identifying the connection
+            
         Returns:
-            JSON string with the updated configuration or instructions to update it
+            JSON string with the updated configuration
         """
         try:
             # Get the client-specific graph manager
-            graph_manager = get_config_manager(None)  # We'll extract client_id from config
+            graph_manager = get_config_manager(client_id)
+            
+            # Sanitize inputs
+            project_name = str(project_name).strip()
+            if not project_name:
+                error_response = create_error_response(
+                    message="Project name is required",
+                    code="invalid_input"
+                )
+                return model_to_json(error_response)
+                
+            # Sanitize updates dictionary
+            if not isinstance(updates, dict):
+                error_response = create_error_response(
+                    message="Updates must be a dictionary",
+                    code="invalid_input"
+                )
+                return model_to_json(error_response)
+                
+            # Validate update structure with Pydantic
+            try:
+                # Only include if the ConfigUpdate model is available
+                if 'ConfigUpdate' in globals():
+                    updates_model = ConfigUpdate(**updates)
+                    updates = model_to_dict(updates_model)
+            except Exception as e:
+                error_response = create_error_response(
+                    message=f"Invalid update format: {str(e)}",
+                    code="validation_error"
+                )
+                return model_to_json(error_response)
             
             # Detect mode and get current config
             is_sse_mode = getattr(graph_manager, "_is_sse_mode", True)  # Default to SSE mode if attribute not found
@@ -556,11 +693,125 @@ def register_config_tools(server, get_config_manager):
                 "message": f"Failed to process configuration update: {str(e)}"
             }
 
+    @server.tool()
+    async def check_memory_system(include_stats: bool = False, client_id: Optional[str] = None) -> str:
+        """
+        Check the memory system health and status.
+        
+        Args:
+            include_stats: Include statistics about the memory system
+            client_id: Optional client ID for identifying the connection
+            
+        Returns:
+            JSON string with the memory system check results
+        """
+        try:
+            # Sanitize client_id if provided
+            if client_id:
+                client_id = str(client_id).strip()
+                
+                # Check for valid format (if client_id has a specific expected format)
+                if len(client_id) > 100:  # Prevent excessively long IDs
+                    logger.warn(f"Client ID too long, truncating: {client_id[:20]}...")
+                    client_id = client_id[:100]
+            
+            # Get the client-specific graph manager
+            graph_manager = get_config_manager(client_id)
+            
+            # Sanitize boolean input
+            try:
+                include_stats = bool(include_stats)
+            except (ValueError, TypeError):
+                include_stats = False
+                logger.warn(f"Invalid include_stats value, defaulting to False")
+            
+            # Check if system is initialized properly
+            if not graph_manager:
+                error_response = create_error_response(
+                    message="Memory system not initialized",
+                    code="not_initialized"
+                )
+                return model_to_json(error_response)
+            
+            # Get memory system status
+            status = graph_manager.get_memory_system_status()
+            
+            # Include statistics if requested
+            if include_stats:
+                try:
+                    statistics = graph_manager.get_memory_system_statistics()
+                    status["statistics"] = statistics
+                except Exception as stats_error:
+                    logger.warn(f"Error retrieving memory statistics: {str(stats_error)}")
+                    status["statistics"] = {"error": str(stats_error)}
+            
+            # Add timestamp for consistency
+            status["timestamp"] = datetime.datetime.now().isoformat()
+            
+            # Check if we need to map to Pydantic model
+            if "neo4j" in status and "embedding" in status:
+                try:
+                    # Extract Neo4j status
+                    neo4j_data = status.get("neo4j", {})
+                    neo4j_status = Neo4jStatus(
+                        connected=neo4j_data.get("connected", False),
+                        address=neo4j_data.get("address", ""),
+                        version=neo4j_data.get("version", None),
+                        message=neo4j_data.get("message", "Neo4j status check completed"),
+                        timestamp=status.get("timestamp", datetime.datetime.now().isoformat())
+                    )
+                    
+                    # Extract embedding status
+                    emb_data = status.get("embedding", {})
+                    embedding_status = EmbeddingStatus(
+                        available=emb_data.get("available", False),
+                        provider=emb_data.get("provider", ""),
+                        model=emb_data.get("model", ""),
+                        dimensions=emb_data.get("dimensions", 0),
+                        message=emb_data.get("message", "Embedding status check completed"),
+                        timestamp=status.get("timestamp", datetime.datetime.now().isoformat())
+                    )
+                    
+                    # Create memory status
+                    memory_status = MemoryStatus(
+                        operational=neo4j_status.connected,
+                        neo4j=neo4j_status,
+                        embedding=embedding_status,
+                        message=status.get("message", "Memory system check completed"),
+                        timestamp=status.get("timestamp", datetime.datetime.now().isoformat())
+                    )
+                    
+                    # Add statistics if included
+                    validated_status = model_to_dict(memory_status)
+                    if include_stats and "statistics" in status:
+                        validated_status["statistics"] = status["statistics"]
+                        
+                    status = validated_status
+                except Exception as validation_error:
+                    # If validation fails, continue with original status
+                    logger.warn(f"Status validation error: {str(validation_error)}")
+            
+            # Create a success response
+            success_response = create_success_response(
+                message="Successfully retrieved memory system status",
+                data=status
+            )
+            return model_to_json(success_response)
+            
+        except Exception as e:
+            logger.error(f"Error checking memory system: {str(e)}", exc_info=True)
+            error_response = create_error_response(
+                message=f"Error checking memory system: {str(e)}",
+                code="system_check_error"
+            )
+            return model_to_json(error_response)
+
     # Return the registered tools
     return {
         "get_memory_status": get_memory_status,
         "get_unified_config": get_unified_config,
         "create_unified_config": create_unified_config,
         "update_unified_config": update_unified_config,
-        "process_config_update": process_config_update
+        "process_config_update": process_config_update,
+        "check_memory_system": check_memory_system
     }

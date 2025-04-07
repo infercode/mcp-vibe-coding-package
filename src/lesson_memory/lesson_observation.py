@@ -418,7 +418,7 @@ class LessonObservation:
                 RETURN e
                 """
                 
-                container_records, _ = self.base_manager.safe_execute_query(
+                container_records = self.base_manager.safe_execute_read_query(
                     container_query,
                     {"container_name": container_name, "entity_name": entity_name}
                 )
@@ -498,7 +498,7 @@ class LessonObservation:
             RETURN DISTINCT o.type as type
             """
             
-            records, _ = self.base_manager.safe_execute_query(
+            records = self.base_manager.safe_execute_read_query(
                 query,
                 {"entity_name": entity_name}
             )

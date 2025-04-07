@@ -307,28 +307,54 @@ def register_lesson_tools(server, get_client_manager):
     @server.tool()
     async def create_lesson_entity(entity_data: Dict[str, Any], client_id: Optional[str] = None) -> str:
         """
-        Create a new lesson entity and add it to a container.
+        Create a lesson entity.
         
         Args:
-            entity_data: Dictionary containing entity information
-                - container_name: Required. Name of the container to add the entity to
-                - entity_name: Required. Name of the entity
-                - entity_type: Required. Type of the entity
-                - observations: Optional. List of observations
-                - metadata: Optional. Additional metadata
+            entity_data: Entity data including name, type, and container
             client_id: Optional client ID for identifying the connection
-                
+            
         Returns:
-            JSON response with operation result
+            JSON string with the created entity
         """
         try:
+            # Sanitize and validate input
+            if not isinstance(entity_data, dict):
+                error_response = create_lesson_error_response(
+                    message="Entity data must be a dictionary",
+                    code="invalid_input"
+                )
+                return model_to_json(error_response)
+                
+            # Ensure required fields are present
+            required_fields = ["name", "container"]
+            for field in required_fields:
+                if field not in entity_data or not entity_data[field]:
+                    error_response = create_lesson_error_response(
+                        message=f"Missing required field: {field}",
+                        code="missing_field"
+                    )
+                    return model_to_json(error_response)
+                    
+            # Sanitize string fields
+            for field in ["name", "container", "type", "description"]:
+                if field in entity_data and entity_data[field] is not None:
+                    entity_data[field] = str(entity_data[field]).strip()
+            
             # Validate input using Pydantic model
             try:
-                # Add client_id to metadata if provided
-                if client_id:
+                # Extract client_id from metadata if present and not provided directly
+                metadata_client_id = None
+                if "metadata" in entity_data and isinstance(entity_data["metadata"], dict):
+                    metadata_client_id = entity_data["metadata"].get("client_id")
+                
+                # Use the explicitly provided client_id, or the one from metadata
+                effective_client_id = client_id or metadata_client_id
+                
+                # Add client_id to metadata if it doesn't exist but was provided
+                if effective_client_id:
                     if "metadata" not in entity_data:
                         entity_data["metadata"] = {}
-                    entity_data["metadata"]["client_id"] = client_id
+                    entity_data["metadata"]["client_id"] = effective_client_id
                 
                 # Create Pydantic model for validation
                 entity_model = LessonEntityCreate(**entity_data)
@@ -341,7 +367,7 @@ def register_lesson_tools(server, get_client_manager):
                 return model_to_json(error_response)
             
             # Get the graph manager
-            client_graph_manager = get_client_manager(client_id)
+            client_graph_manager = get_client_manager(effective_client_id)
             
             # Call the create method
             result = client_graph_manager.lesson_memory.create_lesson_entity(

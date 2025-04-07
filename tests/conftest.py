@@ -1,11 +1,22 @@
 import pytest
 from unittest.mock import MagicMock, patch
 import json
+import os
+import sys
+from pathlib import Path
+
+# Add the project root to the Python path
+project_root = Path(__file__).resolve().parent.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
 
 def pytest_configure(config):
     """Configure pytest with custom markers."""
     config.addinivalue_line(
         "markers", "integration: mark a test as an integration test that requires component mocks"
+    )
+    config.addinivalue_line(
+        "markers", "asyncio: mark a test as an async test that requires asyncio support"
     )
 
 from src.graph_memory.base_manager import BaseManager
