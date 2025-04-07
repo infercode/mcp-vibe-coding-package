@@ -124,76 +124,184 @@ def register_config_tools(server, get_config_manager):
             JSON string with the configuration file content or instructions to create one
         """
         try:
-            # Sanitize project_name
-            if project_name:
+            # Initialize warning tracking
+            config_warnings = []
+            
+            # Validate and sanitize project_name
+            if project_name is not None:
+                original_project_name = project_name
                 project_name = str(project_name).strip()
                 
-                # Validate project name format (alphanumeric and underscores only)
-                if not re.match(r'^[a-zA-Z0-9_-]+$', project_name):
+                # Check if sanitization changed the project name
+                if project_name != original_project_name:
+                    config_warnings.append({
+                        "warning": "project_name_sanitized",
+                        "message": "Project name was sanitized by removing whitespace"
+                    })
+                
+                # Validate project name format (alphanumeric characters, underscores, and hyphens only)
+                if project_name and not re.match(r'^[a-zA-Z0-9_-]+$', project_name):
                     error_response = create_error_response(
                         message="Invalid project name format. Use only letters, numbers, underscores, and hyphens.",
-                        code="invalid_project_name"
+                        code="invalid_project_name",
+                        details={"project_name": project_name}
                     )
                     return model_to_json(error_response)
                 
-                # Limit length
+                # Limit project name length to prevent abuse
                 if len(project_name) > 50:
+                    original_length = len(project_name)
                     project_name = project_name[:50]
-                    logger.warn(f"Project name too long, truncating to: {project_name}")
+                    logger.warn(f"Project name too long ({original_length} chars), truncating to: {project_name}")
+                    config_warnings.append({
+                        "warning": "project_name_truncated",
+                        "message": f"Project name truncated from {original_length} to 50 characters"
+                    })
             
-            # Define the default config file name
+            # Define the default config file name based on project name
             file_name = "mcp_unified_config.json"
             if project_name:
                 file_name = f"mcp_unified_config_{project_name}.json"
             
             # Check if config content was provided
             if config_content:
-                # Sanitize config_content
-                config_content = str(config_content).strip()
+                # Basic sanitization
+                if not isinstance(config_content, str):
+                    try:
+                        config_content = str(config_content)
+                        config_warnings.append({
+                            "warning": "config_content_converted",
+                            "message": "Config content was not a string and was converted to string format"
+                        })
+                    except Exception as conversion_error:
+                        error_response = create_error_response(
+                            message=f"Failed to convert config_content to string: {str(conversion_error)}",
+                            code="invalid_config_type",
+                            details={"type": type(config_content).__name__}
+                        )
+                        return model_to_json(error_response)
                 
-                # Check content size to prevent excessive processing
-                if len(config_content) > 1000000:  # 1MB limit
+                # Sanitize config_content - trim whitespace only from start/end
+                original_content_length = len(config_content)
+                config_content = config_content.strip()
+                
+                # Check if sanitization changed the content
+                if len(config_content) != original_content_length:
+                    config_warnings.append({
+                        "warning": "config_content_trimmed",
+                        "message": "Config content was trimmed to remove leading/trailing whitespace"
+                    })
+                
+                # Check content size to prevent excessive processing and potential DoS
+                if len(config_content) > 1048576:  # 1MB limit (1024*1024)
                     error_response = create_error_response(
-                        message="Configuration content exceeds maximum size limit (1MB)",
-                        code="config_size_exceeded"
+                        message=f"Configuration content exceeds maximum size limit of 1MB (received {len(config_content)/1024:.1f}KB)",
+                        code="config_size_exceeded",
+                        details={"max_size_kb": 1024, "received_size_kb": len(config_content)/1024}
+                    )
+                    return model_to_json(error_response)
+                
+                # Pre-check JSON format before attempting to parse
+                # This provides better error messages than json.loads exceptions
+                if not (config_content.startswith('{') and config_content.endswith('}')):
+                    error_response = create_error_response(
+                        message="Invalid JSON format: configuration must be a JSON object starting with '{' and ending with '}'",
+                        code="invalid_json_format",
+                        details={"expected_format": "JSON object"}
+                    )
+                    return model_to_json(error_response)
+                
+                # Check for common JSON syntax issues
+                bracket_count = 0
+                for char in config_content:
+                    if char == '{':
+                        bracket_count += 1
+                    elif char == '}':
+                        bracket_count -= 1
+                        if bracket_count < 0:
+                            error_response = create_error_response(
+                                message="Invalid JSON format: unbalanced braces (too many closing braces)",
+                                code="invalid_json_syntax",
+                                details={"issue": "unbalanced_braces"}
+                            )
+                            return model_to_json(error_response)
+                
+                if bracket_count != 0:
+                    error_response = create_error_response(
+                        message="Invalid JSON format: unbalanced braces (missing closing braces)",
+                        code="invalid_json_syntax",
+                        details={"issue": "unbalanced_braces"}
                     )
                     return model_to_json(error_response)
                 
                 # Parse the config content
                 try:
-                    # Validate JSON before passing to json.loads
-                    if not (config_content.startswith('{') and config_content.endswith('}')):
-                        error_response = create_error_response(
-                            message="Invalid JSON format: must be a JSON object",
-                            code="invalid_json_format"
-                        )
-                        return model_to_json(error_response)
-                        
                     config = json.loads(config_content)
                     
-                    # Validate required fields
+                    # Validate basic structure
                     if not isinstance(config, dict):
                         error_response = create_error_response(
-                            message="Configuration must be a JSON object",
-                            code="invalid_config_format"
+                            message="Configuration must be a JSON object (dictionary), not a list or primitive value",
+                            code="invalid_config_format",
+                            details={"received_type": type(config).__name__}
                         )
                         return model_to_json(error_response)
                     
                     # Check for required fields
-                    if "project_name" not in config:
+                    required_fields = ["project_name"]
+                    missing_fields = [field for field in required_fields if field not in config]
+                    
+                    if missing_fields:
                         error_response = create_error_response(
-                            message="Missing required field 'project_name' in configuration",
-                            code="missing_field"
+                            message=f"Missing required field(s) in configuration: {', '.join(missing_fields)}",
+                            code="missing_required_fields",
+                            details={"missing_fields": missing_fields}
                         )
                         return model_to_json(error_response)
                     
-                    # Extract client_id from config if present
+                    # Validate project_name in config
+                    config_project_name = str(config["project_name"]).strip()
+                    if not config_project_name:
+                        error_response = create_error_response(
+                            message="Project name in configuration cannot be empty",
+                            code="invalid_project_name"
+                        )
+                        return model_to_json(error_response)
+                    
+                    # If project_name was provided in both args and config, ensure they match
+                    if project_name and config_project_name != project_name:
+                        config_warnings.append({
+                            "warning": "project_name_mismatch",
+                            "message": f"Project name in arguments ({project_name}) doesn't match config ({config_project_name})",
+                            "using": config_project_name
+                        })
+                    
+                    # Extract and validate client_id if present
                     client_id = config.get("client_id", None)
                     if client_id:
-                        client_id = str(client_id).strip()
+                        if not isinstance(client_id, str):
+                            try:
+                                client_id = str(client_id)
+                                config_warnings.append({
+                                    "warning": "client_id_converted",
+                                    "message": "Client ID was not a string and was converted"
+                                })
+                            except Exception:
+                                error_response = create_error_response(
+                                    message="Client ID must be a string or convertible to string",
+                                    code="invalid_client_id"
+                                )
+                                return model_to_json(error_response)
+                                
+                        client_id = client_id.strip()
                         if len(client_id) > 100:  # Prevent excessively long IDs
-                            logger.warn(f"Client ID too long, truncating: {client_id[:20]}...")
+                            original_length = len(client_id)
+                            logger.warn(f"Client ID too long ({original_length} chars), truncating")
                             client_id = client_id[:100]
+                            config_warnings.append({
+                                "warning": "client_id_truncated",
+                                "message": f"Client ID truncated from {original_length} to 100 characters"
+                            })
                     
                     # Get the client-specific graph manager
                     graph_manager = get_config_manager(client_id)
@@ -204,14 +312,31 @@ def register_config_tools(server, get_config_manager):
                         if not isinstance(neo4j_config, dict):
                             error_response = create_error_response(
                                 message="Neo4j configuration must be an object",
-                                code="invalid_neo4j_config"
+                                code="invalid_neo4j_config",
+                                details={"received_type": type(neo4j_config).__name__}
                             )
                             return model_to_json(error_response)
                             
-                        # Check for sensitive fields and log warning if missing
-                        for field in ["uri", "username", "password"]:
-                            if field not in neo4j_config:
-                                logger.warn(f"Neo4j configuration missing '{field}' field")
+                        # Check for required Neo4j fields
+                        required_neo4j_fields = ["uri", "username", "password"]
+                        missing_neo4j_fields = [field for field in required_neo4j_fields if field not in neo4j_config]
+                        
+                        if missing_neo4j_fields:
+                            config_warnings.append({
+                                "warning": "missing_neo4j_fields",
+                                "message": f"Neo4j configuration missing recommended field(s): {', '.join(missing_neo4j_fields)}",
+                                "missing_fields": missing_neo4j_fields
+                            })
+                            logger.warn(f"Neo4j configuration missing field(s): {', '.join(missing_neo4j_fields)}")
+                        
+                        # Validate URI format if provided
+                        if "uri" in neo4j_config:
+                            uri = str(neo4j_config["uri"])
+                            if not (uri.startswith("bolt://") or uri.startswith("neo4j://") or uri.startswith("neo4j+s://")):
+                                config_warnings.append({
+                                    "warning": "invalid_neo4j_uri_format",
+                                    "message": "Neo4j URI should start with 'bolt://', 'neo4j://' or 'neo4j+s://'"
+                                })
                     
                     # Validate embedding config if present
                     if "embeddings" in config:
@@ -219,9 +344,22 @@ def register_config_tools(server, get_config_manager):
                         if not isinstance(embedding_config, dict):
                             error_response = create_error_response(
                                 message="Embedding configuration must be an object",
-                                code="invalid_embedding_config"
+                                code="invalid_embedding_config",
+                                details={"received_type": type(embedding_config).__name__}
                             )
                             return model_to_json(error_response)
+                        
+                        # Check for required embedding fields
+                        if "provider" in embedding_config:
+                            provider = embedding_config["provider"]
+                            
+                            # Validate API key presence for providers that require it
+                            api_key_providers = ["openai", "azure", "cohere", "anthropic"]
+                            if provider.lower() in api_key_providers and "api_key" not in embedding_config:
+                                config_warnings.append({
+                                    "warning": "missing_api_key",
+                                    "message": f"Provider '{provider}' typically requires an API key, but none was provided"
+                                })
                     
                     # Apply the configuration
                     result = graph_manager.apply_client_config(config)
@@ -232,29 +370,66 @@ def register_config_tools(server, get_config_manager):
                         current_config = graph_manager.get_current_config()
                         
                         # Mask sensitive information before returning
-                        if "neo4j" in current_config and "password" in current_config["neo4j"]:
-                            current_config["neo4j"]["password"] = "********"
+                        if "neo4j" in current_config:
+                            if "password" in current_config["neo4j"]:
+                                current_config["neo4j"]["password"] = "********"
+                            if "username" in current_config["neo4j"]:
+                                # Don't completely mask username, show first character
+                                username = current_config["neo4j"]["username"]
+                                if username and len(username) > 1:
+                                    masked_username = username[0] + "*" * (len(username) - 1)
+                                    current_config["neo4j"]["username"] = masked_username
                             
-                        if "embeddings" in current_config and "api_key" in current_config["embeddings"]:
-                            current_config["embeddings"]["api_key"] = "********"
+                        if "embeddings" in current_config:
+                            if "api_key" in current_config["embeddings"]:
+                                current_config["embeddings"]["api_key"] = "********"
+                            # Redact any private embedding settings
+                            for key in list(current_config["embeddings"].keys()):
+                                if "secret" in key.lower() or "private" in key.lower() or "token" in key.lower():
+                                    current_config["embeddings"][key] = "********"
                             
                         success_response = create_success_response(
                             message="Configuration applied successfully",
-                            data=current_config
+                            data={
+                                "config": current_config,
+                                "file_name": file_name,
+                                "timestamp": datetime.datetime.now().isoformat()
+                            }
                         )
+                        
+                        # Add any warnings collected during processing
+                        if config_warnings:
+                            success_response.data["warnings"] = config_warnings
+                            
                         return model_to_json(success_response)
                     else:
                         error_response = create_error_response(
-                            message=result["message"],
-                            code="config_application_error"
+                            message=result.get("message", "Unknown error applying configuration"),
+                            code="config_application_error",
+                            details=result.get("details", {})
                         )
                         return model_to_json(error_response)
                         
                 except json.JSONDecodeError as json_error:
+                    # Provide detailed error information for JSON parsing issues
+                    # Calculate excerpt around the error location
+                    start_pos = max(0, json_error.pos - 20)
+                    end_pos = min(len(config_content), json_error.pos + 20)
+                    excerpt = config_content[start_pos:end_pos]
+                    
+                    # Add a marker to show the error position
+                    position_in_excerpt = json_error.pos - start_pos
+                    marked_excerpt = excerpt[:position_in_excerpt] + ">>>" + excerpt[position_in_excerpt:] 
+                    
                     error_response = create_error_response(
-                        message=f"Invalid JSON configuration provided: {str(json_error)}",
+                        message=f"Invalid JSON configuration: {str(json_error)}",
                         code="invalid_json_error",
-                        details={"error_position": json_error.pos, "error_line": json_error.lineno}
+                        details={
+                            "error_position": json_error.pos,
+                            "error_line": json_error.lineno,
+                            "error_column": json_error.colno,
+                            "excerpt": marked_excerpt
+                        }
                     )
                     return model_to_json(error_response)
             
@@ -289,7 +464,11 @@ def register_config_tools(server, get_config_manager):
             logger.error(f"Error processing configuration request: {str(e)}", exc_info=True)
             error_response = create_error_response(
                 message=f"Error processing configuration request: {str(e)}",
-                code="config_request_error"
+                code="config_request_error",
+                details={
+                    "project_name": project_name if 'project_name' in locals() else None,
+                    "config_content_length": len(config_content) if 'config_content' in locals() and config_content else 0
+                }
             )
             return model_to_json(error_response)
             

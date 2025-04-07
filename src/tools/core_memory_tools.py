@@ -8,6 +8,8 @@ Pydantic models for validation and serialization.
 
 import json
 import datetime
+import os
+import copy
 from typing import Dict, List, Any, Optional, Union, cast
 
 from src.logger import get_logger
@@ -726,7 +728,7 @@ def register_core_tools(server, get_client_manager):
             return model_to_json(error_response)
 
     @server.tool()
-    async def search_nodes(query: str, limit: int = 10, project_name: str = "", client_id: Optional[str] = None) -> str:
+    async def search_nodes(query: str, limit: int = 10, project_name: str = "", client_id: Optional[str] = None, fuzzy_match: bool = False) -> str:
         """
         Search for nodes in the knowledge graph.
         
@@ -735,6 +737,7 @@ def register_core_tools(server, get_client_manager):
             limit: Maximum number of results to return
             project_name: Optional project name to scope the search
             client_id: Optional client ID for identifying the connection
+            fuzzy_match: Whether to use fuzzy matching for the search
         
         Returns:
             JSON string with search results
@@ -743,8 +746,7 @@ def register_core_tools(server, get_client_manager):
             # Initialize error tracking
             search_warnings = []
             
-            # Sanitize and validate inputs
-            # Sanitize search query - trim whitespace and ensure it's a string
+            # Validate the query parameter
             if query is None:
                 error_response = create_error_response(
                     message="Search query cannot be None",
@@ -753,29 +755,64 @@ def register_core_tools(server, get_client_manager):
                 return model_to_json(error_response)
                 
             # Convert to string and sanitize
+            original_query = query
             query = str(query).strip()
             
-            # Check for empty query
+            # Check if sanitization changed the query
+            if query != original_query:
+                search_warnings.append({
+                    "warning": "query_sanitized",
+                    "message": "Query was sanitized by removing leading/trailing whitespace"
+                })
+            
+            # Check for empty query after sanitization
             if not query:
                 error_response = create_error_response(
                     message="Search query cannot be empty",
                     code="invalid_input"
                 )
                 return model_to_json(error_response)
-                
-            # Security check: Reject potentially dangerous patterns in the query
-            # This is a basic check; more advanced protection is in the SearchQuery model
-            dangerous_patterns = ["--", ";", "DROP", "DELETE", "MERGE", "CREATE", "REMOVE", "SET"]
-            for pattern in dangerous_patterns:
-                if pattern in query.upper():
+            
+            # Security check: Detect potentially dangerous patterns in the query
+            # This helps protect against injection attempts
+            dangerous_patterns = ["--", ";", "DROP", "DELETE", "MERGE", "CREATE", "REMOVE", "SET", "exec(", "eval("]
+            high_risk_patterns = ["--", ";", "DROP", "DELETE"]
+            medium_risk_patterns = ["MERGE", "CREATE", "REMOVE", "SET"]
+            
+            # Check for high risk patterns (immediately reject)
+            for pattern in high_risk_patterns:
+                if pattern.upper() in query.upper():
                     error_response = create_error_response(
-                        message=f"Search query contains potentially dangerous pattern: {pattern}",
+                        message=f"Search query contains high-risk pattern: {pattern}",
                         code="security_violation",
-                        details={"query": query, "pattern": pattern}
+                        details={"query": query, "pattern": pattern, "risk_level": "high"}
                     )
+                    # Log security violations for monitoring
+                    logger.warn(f"Security violation in search query: {pattern}", context={
+                        "query": query,
+                        "client_id": client_id or "default",
+                        "pattern": pattern
+                    })
                     return model_to_json(error_response)
+            
+            # Check for medium risk patterns (warn but allow with modification)
+            for pattern in medium_risk_patterns:
+                if pattern.upper() in query.upper():
+                    # Replace potentially harmful patterns
+                    original_query = query
+                    query = query.upper().replace(pattern.upper(), f" {pattern} ")
+                    search_warnings.append({
+                        "warning": "query_modified",
+                        "message": f"Query contains potentially risky pattern '{pattern}' and was modified",
+                        "original": original_query,
+                        "modified": query
+                    })
+                    logger.warn(f"Potentially risky pattern in search query: {pattern}", context={
+                        "original_query": original_query,
+                        "modified_query": query
+                    })
                     
-            # Limit query length to prevent abuse
+            # Limit query length to prevent abuse and excessive processing
             max_query_length = 500
             if len(query) > max_query_length:
                 # Truncate long queries and warn
@@ -787,14 +824,24 @@ def register_core_tools(server, get_client_manager):
                 })
                 logger.warn(f"Search query truncated from {original_length} to {max_query_length} characters")
                 
-            # Sanitize limit - ensure it's a positive integer within reasonable bounds
+            # Validate and sanitize limit parameter
             try:
-                limit = int(limit)
+                # Convert to integer if it's not already
+                if not isinstance(limit, int):
+                    original_limit = limit
+                    limit = int(limit)
+                    search_warnings.append({
+                        "warning": "limit_converted", 
+                        "message": f"Limit was converted from {original_limit} to integer {limit}"
+                    })
+                
+                # Enforce reasonable bounds
                 if limit < 1:
+                    original_limit = limit
                     limit = 1
                     search_warnings.append({
                         "warning": "limit_adjusted",
-                        "message": "Limit was less than 1, adjusted to minimum value of 1"
+                        "message": f"Limit was adjusted from {original_limit} to minimum value of 1"
                     })
                 elif limit > 100:
                     original_limit = limit
@@ -811,34 +858,67 @@ def register_core_tools(server, get_client_manager):
                     "message": "Invalid limit value, using default of 10"
                 })
                 
-            # Sanitize project name - ensure it's a string and doesn't contain dangerous patterns
+            # Validate and sanitize project_name parameter
             if project_name is not None:
+                original_project_name = project_name
                 project_name = str(project_name).strip()
+                
+                # Check if sanitization changed the project name
+                if project_name != original_project_name:
+                    search_warnings.append({
+                        "warning": "project_name_sanitized",
+                        "message": "Project name was sanitized by removing whitespace"
+                    })
                 
                 # Check for invalid characters in project name
                 if project_name:
-                    invalid_chars = [';', '--', '/*', '*/', '@@', '@', '=']
+                    invalid_chars = [';', '--', '/*', '*/', '@@', '@', '=', 'exec(', 'eval(']
                     for char in invalid_chars:
                         if char in project_name:
                             error_response = create_error_response(
                                 message=f"Project name contains invalid character: {char}",
                                 code="invalid_project_name",
-                                details={"project_name": project_name}
+                                details={"project_name": project_name, "invalid_character": char}
                             )
                             return model_to_json(error_response)
                     
                     # Limit project name length
                     max_project_length = 100
                     if len(project_name) > max_project_length:
+                        original_length = len(project_name)
                         project_name = project_name[:max_project_length]
                         search_warnings.append({
                             "warning": "project_name_truncated",
-                            "message": f"Project name truncated to {max_project_length} characters"
+                            "message": f"Project name truncated from {original_length} to {max_project_length} characters"
                         })
+            
+            # Validate and sanitize fuzzy_match parameter
+            if not isinstance(fuzzy_match, bool):
+                original_fuzzy_match = fuzzy_match
+                # Convert to boolean if it's not already
+                if isinstance(fuzzy_match, str):
+                    fuzzy_match = fuzzy_match.lower() in ["true", "1", "yes", "y", "t"]
+                else:
+                    fuzzy_match = bool(fuzzy_match)
+                    
+                search_warnings.append({
+                    "warning": "fuzzy_match_converted",
+                    "message": f"Fuzzy match was converted from {original_fuzzy_match} to boolean {fuzzy_match}"
+                })
             
             # Sanitize client_id if provided
             if client_id:
+                original_client_id = client_id
                 client_id = str(client_id).strip()
+                
+                # Check if sanitization changed the client ID
+                if client_id != original_client_id:
+                    search_warnings.append({
+                        "warning": "client_id_sanitized",
+                        "message": "Client ID was sanitized by removing whitespace"
+                    })
+                
+                # Check client ID length
                 if len(client_id) > 100:  # Prevent excessively long IDs
                     logger.warn(f"Client ID too long, truncating: {client_id[:20]}...")
                     client_id = client_id[:100]
@@ -846,6 +926,16 @@ def register_core_tools(server, get_client_manager):
                         "warning": "client_id_truncated",
                         "message": "Client ID was too long and has been truncated"
                     })
+                
+                # Check for dangerous patterns in client ID
+                for pattern in dangerous_patterns:
+                    if pattern.upper() in client_id.upper():
+                        error_response = create_error_response(
+                            message=f"Client ID contains potentially dangerous pattern: {pattern}",
+                            code="security_violation",
+                            details={"pattern": pattern}
+                        )
+                        return model_to_json(error_response)
             
             # Validate input using Pydantic model
             try:
@@ -871,17 +961,44 @@ def register_core_tools(server, get_client_manager):
                 client_graph_manager.set_project_name(search_model.project_name)
             
             # Log search parameters
-            logger.debug(f"Searching nodes with query: '{search_model.query}'", context={
+            logger.info(f"Searching nodes with query: '{search_model.query}'", context={
                 "limit": search_model.limit,
                 "project_name": search_model.project_name or client_graph_manager.default_project_name,
-                "client_id": client_id or "default"
+                "client_id": client_id or "default",
+                "fuzzy_match": fuzzy_match
             })
             
             # Perform the search
-            result = client_graph_manager.search_nodes(
-                search_model.query,
-                search_model.limit
-            )
+            # Add fuzzy_match parameter if the API supports it
+            try:
+                if hasattr(client_graph_manager, "search_nodes_fuzzy") and fuzzy_match:
+                    result = client_graph_manager.search_nodes_fuzzy(
+                        search_model.query,
+                        search_model.limit
+                    )
+                    search_warnings.append({
+                        "warning": "fuzzy_search_used",
+                        "message": "Fuzzy matching search algorithm was used"
+                    })
+                else:
+                    # If fuzzy search was requested but not available, add a warning
+                    if fuzzy_match:
+                        search_warnings.append({
+                            "warning": "fuzzy_search_unavailable",
+                            "message": "Fuzzy matching was requested but is not available, using exact search instead"
+                        })
+                    result = client_graph_manager.search_nodes(
+                        search_model.query,
+                        search_model.limit
+                    )
+            except Exception as search_error:
+                logger.error(f"Error executing search: {str(search_error)}", exc_info=True)
+                error_response = create_error_response(
+                    message=f"Error executing search: {str(search_error)}",
+                    code="search_execution_error",
+                    details={"query": search_model.query}
+                )
+                return model_to_json(error_response)
             
             # Parse the result
             try:
@@ -907,13 +1024,22 @@ def register_core_tools(server, get_client_manager):
                 if isinstance(parsed_result, dict):
                     nodes = []
                     
-                    # Support multiple response formats
+                    # Support multiple response formats for better compatibility
                     if "nodes" in parsed_result:
                         nodes = parsed_result["nodes"]
                     elif "results" in parsed_result:
                         nodes = parsed_result["results"]
                     elif "entities" in parsed_result:
                         nodes = parsed_result["entities"]
+                    elif "matches" in parsed_result:
+                        nodes = parsed_result["matches"]
+                    
+                    # Sanitize sensitive information in the response
+                    for node in nodes:
+                        if isinstance(node, dict) and "properties" in node:
+                            for key in list(node["properties"].keys()):
+                                if any(sensitive in key.lower() for sensitive in ["password", "secret", "token", "key", "auth"]):
+                                    node["properties"][key] = "[REDACTED]"
                     
                     # Add diagnostic information if no results found
                     if not nodes:
@@ -921,7 +1047,8 @@ def register_core_tools(server, get_client_manager):
                         diagnostic_info = {
                             "timestamp": datetime.datetime.now().isoformat(),
                             "query": search_model.query,
-                            "project": search_model.project_name or client_graph_manager.default_project_name
+                            "project": search_model.project_name or client_graph_manager.default_project_name,
+                            "fuzzy_match": fuzzy_match
                         }
                         
                         # Return the success response with empty results and diagnostic info
@@ -942,7 +1069,12 @@ def register_core_tools(server, get_client_manager):
                     # Return the success response with results
                     success_response = create_success_response(
                         message=f"Found {len(nodes)} results for query '{search_model.query}'",
-                        data={"nodes": nodes}
+                        data={
+                            "nodes": nodes,
+                            "query": search_model.query,
+                            "limit": search_model.limit,
+                            "fuzzy_match": fuzzy_match
+                        }
                     )
                     
                     # Add any warnings collected during processing
@@ -969,7 +1101,10 @@ def register_core_tools(server, get_client_manager):
             error_response = create_error_response(
                 message=f"Error searching nodes: {str(e)}",
                 code="search_error",
-                details={"query": query if 'query' in locals() else None}
+                details={
+                    "query": query if 'query' in locals() else None,
+                    "project_name": project_name if 'project_name' in locals() else None
+                }
             )
             return model_to_json(error_response)
 
@@ -1442,8 +1577,25 @@ def register_core_tools(server, get_client_manager):
             JSON response with operation result
         """
         try:
-            # Sanitize and validate inputs
-            # Check for missing required fields
+            # Initialize warning tracking
+            deletion_warnings = []
+            
+            # Basic input validation
+            if entity is None or content is None:
+                missing_fields = []
+                if entity is None:
+                    missing_fields.append("entity")
+                if content is None:
+                    missing_fields.append("content")
+                    
+                error_response = create_error_response(
+                    message=f"Required fields cannot be None: {', '.join(missing_fields)}",
+                    code="invalid_input",
+                    details={"missing_fields": missing_fields}
+                )
+                return model_to_json(error_response)
+            
+            # Check for empty required fields
             if not entity or not content:
                 missing_fields = []
                 if not entity:
@@ -1453,29 +1605,115 @@ def register_core_tools(server, get_client_manager):
                     
                 error_response = create_error_response(
                     message=f"Missing required fields: {', '.join(missing_fields)}",
-                    code="missing_required_fields"
+                    code="missing_required_fields",
+                    details={"missing_fields": missing_fields}
                 )
                 return model_to_json(error_response)
                 
-            # Sanitize inputs - trim whitespace
+            # Sanitize entity name - trim whitespace
+            original_entity = entity
             entity = str(entity).strip()
             
-            # Content might contain meaningful whitespace, only trim if requested
-            # If content is very long, consider truncating for logging
+            # Check if sanitization changed the entity name
+            if entity != original_entity:
+                deletion_warnings.append({
+                    "warning": "entity_name_sanitized",
+                    "message": "Entity name was sanitized by removing whitespace"
+                })
+            
+            # Check entity name length
+            max_entity_length = 500
+            if len(entity) > max_entity_length:
+                entity = entity[:max_entity_length]
+                logger.warn(f"Entity name too long, truncating: {entity[:20]}...")
+                deletion_warnings.append({
+                    "warning": "entity_name_truncated",
+                    "message": f"Entity name truncated to {max_entity_length} characters"
+                })
+                
+            # Check for empty entity after sanitization
+            if not entity:
+                error_response = create_error_response(
+                    message="Entity name/ID is empty after sanitization",
+                    code="invalid_input"
+                )
+                return model_to_json(error_response)
+            
+            # Check for restricted entity names
+            restricted_names = ["all", "*", "database", "system", "admin", "neo4j", "apoc"]
+            if entity.lower() in restricted_names:
+                error_response = create_error_response(
+                    message=f"Cannot delete observations for restricted entity: {entity}",
+                    code="restricted_entity",
+                    details={"entity": entity}
+                )
+                return model_to_json(error_response)
+            
+            # Check for dangerous patterns in entity name
+            dangerous_patterns = [';', '--', '/*', '*/', '@@', 'exec(', 'eval(', 'MATCH', 'CREATE', 'DELETE', 'REMOVE']
+            for pattern in dangerous_patterns:
+                if pattern.upper() in entity.upper():
+                    error_response = create_error_response(
+                        message=f"Entity name contains potentially dangerous pattern: {pattern}",
+                        code="security_violation",
+                        details={"entity": entity, "pattern": pattern}
+                    )
+                    return model_to_json(error_response)
+            
+            # Special handling for content - preserve whitespace but validate
+            # We don't want to modify content unnecessarily as it might need exact matching
+            
+            # But we need to check if it's excessive in length for security
+            max_content_length = 50000  # 50KB should be plenty for legitimate observations
+            if len(content) > max_content_length:
+                logger.warn(f"Observation content too long ({len(content)} chars), truncating")
+                content = content[:max_content_length]
+                deletion_warnings.append({
+                    "warning": "content_truncated",
+                    "message": f"Observation content truncated to {max_content_length} characters"
+                })
+                
+            # Check content for dangerous patterns
+            # Generally less strict with content patterns since this is part of data, not a query
+            high_risk_patterns = ['--', ';--', '/*', '*/']
+            for pattern in high_risk_patterns:
+                if pattern in content:
+                    deletion_warnings.append({
+                        "warning": "content_suspicious_pattern",
+                        "message": f"Content contains potentially suspicious pattern: {pattern}"
+                    })
+                    logger.warn(f"Potentially suspicious pattern in observation content: {pattern}")
+            
+            # For logging, truncate the content if it's very long
             content_for_log = content
             if len(content) > 50:
                 content_for_log = content[:47] + "..."
                 
-            logger.debug(f"Deleting observation for entity '{entity}': {content_for_log}")
-            
-            # Check for restricted entity names
-            restricted_names = ["all", "*", "database", "system", "admin"]
-            if entity.lower() in restricted_names:
-                error_response = create_error_response(
-                    message=f"Cannot delete observations for restricted entity: {entity}",
-                    code="restricted_entity"
-                )
-                return model_to_json(error_response)
+            # Sanitize client_id if provided
+            if client_id:
+                client_id = str(client_id).strip()
+                if len(client_id) > 100:  # Prevent excessively long IDs
+                    logger.warn(f"Client ID too long, truncating: {client_id[:20]}...")
+                    client_id = client_id[:100]
+                    deletion_warnings.append({
+                        "warning": "client_id_truncated",
+                        "message": "Client ID was too long and has been truncated"
+                    })
+                    
+                # Check client_id for dangerous patterns
+                for pattern in dangerous_patterns:
+                    if pattern.upper() in client_id.upper():
+                        error_response = create_error_response(
+                            message=f"Client ID contains potentially dangerous pattern: {pattern}",
+                            code="security_violation",
+                            details={"pattern": pattern}
+                        )
+                        return model_to_json(error_response)
+                
+            logger.info(f"Deleting observation for entity '{entity}': {content_for_log}", context={
+                "client_id": client_id or "default",
+                "content_length": len(content)
+            })
             
             # Validate input using Pydantic model
             try:
@@ -1487,12 +1725,34 @@ def register_core_tools(server, get_client_manager):
                 logger.error(f"Validation error for observation deletion: {str(e)}")
                 error_response = create_error_response(
                     message=f"Invalid observation data: {str(e)}",
-                    code="validation_error"
+                    code="validation_error",
+                    details={"entity": entity}
                 )
                 return model_to_json(error_response)
             
             # Get the client-specific graph manager
             client_graph_manager = get_client_manager(client_id)
+            
+            # Check if entity exists before trying to delete the observation
+            try:
+                # This check is optional but provides better error messages
+                exists_result = client_graph_manager.get_entity(observation_model.entity_name)
+                try:
+                    exists_parsed = json.loads(exists_result) if isinstance(exists_result, str) else exists_result
+                    if isinstance(exists_parsed, dict) and exists_parsed.get("status") == "error":
+                        # Entity doesn't exist, return a more specific error
+                        error_response = create_error_response(
+                            message=f"Entity '{observation_model.entity_name}' not found",
+                            code="entity_not_found",
+                            details={"entity": observation_model.entity_name}
+                        )
+                        return model_to_json(error_response)
+                except (json.JSONDecodeError, AttributeError):
+                    # Continue with deletion even if we can't parse the exists result
+                    pass
+            except Exception:
+                # Continue with deletion even if the exists check fails
+                pass
             
             # Delete the observation
             result = client_graph_manager.delete_observation(
@@ -1510,7 +1770,8 @@ def register_core_tools(server, get_client_manager):
                 if isinstance(parsed_result, dict) and parsed_result.get("status") == "error":
                     error_response = create_error_response(
                         message=parsed_result.get("message", "Unknown error"),
-                        code="observation_deletion_error"
+                        code="observation_deletion_error",
+                        details={"entity": observation_model.entity_name}
                     )
                     return model_to_json(error_response)
                 
@@ -1519,6 +1780,11 @@ def register_core_tools(server, get_client_manager):
                     message=f"Successfully deleted observation from entity '{observation_model.entity_name}'",
                     data=parsed_result
                 )
+                
+                # Add any warnings collected during processing
+                if deletion_warnings:
+                    success_response.data["warnings"] = deletion_warnings
+                    
                 return model_to_json(success_response)
                 
             except json.JSONDecodeError:
@@ -1529,7 +1795,10 @@ def register_core_tools(server, get_client_manager):
             logger.error(f"Error deleting observation: {str(e)}", exc_info=True)
             error_response = create_error_response(
                 message=f"Error deleting observation: {str(e)}",
-                code="observation_deletion_error"
+                code="observation_deletion_error",
+                details={
+                    "entity": entity if 'entity' in locals() else None
+                }
             )
             return model_to_json(error_response)
 
@@ -1987,7 +2256,8 @@ def register_core_tools(server, get_client_manager):
             return model_to_json(error_response)
 
     @server.tool()
-    async def debug_dump_neo4j(limit: int = 100, confirm: bool = False, query: str = "", client_id: Optional[str] = None) -> str:
+    async def debug_dump_neo4j(limit: int = 100, confirm: bool = False, query: str = "", client_id: Optional[str] = None, 
+                             include_relationships: bool = True, include_statistics: bool = True) -> str:
         """
         Dump Neo4j database contents for debugging purposes.
         
@@ -1998,6 +2268,8 @@ def register_core_tools(server, get_client_manager):
             confirm: Set to True to confirm you want to run this potentially expensive operation
             query: Optional Cypher query to restrict what is returned (advanced users only)
             client_id: Optional client ID for identifying the connection
+            include_relationships: Whether to include relationships in the results (default: True)
+            include_statistics: Whether to include database statistics in the results (default: True)
         
         Returns:
             JSON response with Neo4j database contents
@@ -2035,7 +2307,7 @@ def register_core_tools(server, get_client_manager):
                 elif limit > 1000:
                     original_limit = limit
                     # Cap to prevent excessive load
-                    limit = min(limit, 1000)
+                    limit = 1000
                     dump_warnings.append({
                         "warning": "limit_capped",
                         "message": f"Limit was too large, capped from {original_limit} to {limit}"
@@ -2060,16 +2332,17 @@ def register_core_tools(server, get_client_manager):
             
             # Validate and sanitize the confirm parameter
             if not isinstance(confirm, bool):
+                original_confirm = confirm
                 try:
                     # Convert to boolean if possible
                     if isinstance(confirm, str):
-                        confirm = confirm.lower() in ["true", "1", "yes", "y"]
+                        confirm = confirm.lower() in ["true", "1", "yes", "y", "t"]
                     else:
                         confirm = bool(confirm)
                     
                     dump_warnings.append({
                         "warning": "confirm_converted",
-                        "message": f"Confirm parameter was converted to boolean {confirm}"
+                        "message": f"Confirm parameter was converted from {original_confirm} to boolean {confirm}"
                     })
                 except (ValueError, TypeError):
                     confirm = False
@@ -2077,6 +2350,35 @@ def register_core_tools(server, get_client_manager):
                         "warning": "confirm_invalid",
                         "message": "Invalid confirm value, defaulting to False"
                     })
+            
+            # Validate and sanitize boolean parameters
+            for param_name, param_value in [
+                ("include_relationships", include_relationships),
+                ("include_statistics", include_statistics)
+            ]:
+                if not isinstance(param_value, bool):
+                    original_value = param_value
+                    try:
+                        # Convert to boolean if possible
+                        if isinstance(param_value, str):
+                            new_value = param_value.lower() in ["true", "1", "yes", "y", "t"]
+                        else:
+                            new_value = bool(param_value)
+                        
+                        # Update the actual variable using locals()
+                        locals()[param_name] = new_value
+                        
+                        dump_warnings.append({
+                            "warning": f"{param_name}_converted",
+                            "message": f"{param_name.replace('_', ' ').capitalize()} parameter was converted from {original_value} to boolean {new_value}"
+                        })
+                    except (ValueError, TypeError):
+                        # Use the original default (True)
+                        locals()[param_name] = True
+                        dump_warnings.append({
+                            "warning": f"{param_name}_invalid",
+                            "message": f"Invalid {param_name.replace('_', ' ')} value, defaulting to True"
+                        })
             
             # Validate and sanitize the query parameter
             if query:
@@ -2090,55 +2392,93 @@ def register_core_tools(server, get_client_manager):
                         "message": "Query was sanitized by removing whitespace"
                     })
                 
-                # Check query length
-                max_query_length = 500
-                if len(query) > max_query_length:
-                    query = query[:max_query_length]
+                # Check for empty query after sanitization
+                if not query:
                     dump_warnings.append({
-                        "warning": "query_truncated",
-                        "message": f"Query was truncated to {max_query_length} characters"
+                        "warning": "query_empty",
+                        "message": "Empty query provided, ignoring"
                     })
-                
-                # Check for dangerous patterns in query
-                dangerous_patterns = [';', '--', '/*', '*/', 'DROP', 'DELETE', 'CREATE', 'MERGE', 'REMOVE', 'SET', 'exec(', 'eval(']
-                for pattern in dangerous_patterns:
-                    if pattern.upper() in query.upper():
-                        # For queries, we want to be more cautious about what we allow
-                        disallowed_operations = ['DROP', 'DELETE', 'CREATE', 'MERGE', 'REMOVE', 'SET']
-                        if any(op.upper() in query.upper() for op in disallowed_operations):
+                else:
+                    # Check query length
+                    max_query_length = 1000  # Allow longer queries for debugging
+                    if len(query) > max_query_length:
+                        original_length = len(query)
+                        query = query[:max_query_length]
+                        dump_warnings.append({
+                            "warning": "query_truncated",
+                            "message": f"Query was truncated from {original_length} to {max_query_length} characters"
+                        })
+                    
+                    # Check if query starts with MATCH clause (common requirement for valid Cypher)
+                    if not query.upper().strip().startswith("MATCH") and not query.upper().strip().startswith("CALL"):
+                        dump_warnings.append({
+                            "warning": "query_syntax",
+                            "message": "Query might not be valid Cypher - consider starting with MATCH or CALL"
+                        })
+                    
+                    # Check for dangerous patterns in query with categorized risk levels
+                    high_risk_patterns = ['DROP', 'DELETE', 'CREATE', 'MERGE', 'REMOVE', 'SET', 'exec(', 'eval(', 'DETACH']
+                    medium_risk_patterns = [';', '--', '/*', '*/', 'UNION', 'FOREACH']
+                    
+                    # Check for high risk patterns (block these operations)
+                    for pattern in high_risk_patterns:
+                        if pattern.upper() in query.upper():
                             error_response = create_error_response(
-                                message=f"Query contains disallowed mutating operation: {pattern}",
+                                message=f"Query contains prohibited operation: {pattern}",
                                 code="security_violation",
-                                details={"pattern": pattern, "query": query}
+                                details={
+                                    "pattern": pattern, 
+                                    "query": query,
+                                    "risk_level": "high",
+                                    "allowed_operations": "READ-ONLY queries (MATCH, RETURN, WITH, etc.)"
+                                }
                             )
-                            return model_to_json(error_response)
-                        else:
-                            # For other patterns, just warn
-                            dump_warnings.append({
-                                "warning": "query_suspicious_pattern",
-                                "message": f"Query contains potentially suspicious pattern: {pattern}"
+                            # Log security violations for monitoring
+                            logger.warn(f"Security violation in debug dump query: {pattern}", context={
+                                "query": query,
+                                "client_id": client_id or "default",
+                                "pattern": pattern
                             })
-                
-                # Require explicit confirmation for custom queries
-                if not confirm:
-                    error_response = create_error_response(
-                        message="Custom queries require explicit confirmation. Set confirm=True to proceed.",
-                        code="confirmation_required",
-                        details={"query": query, "confirmation_required": True}
-                    )
-                    return model_to_json(error_response)
+                            return model_to_json(error_response)
+                    
+                    # Check for medium risk patterns (warn only)
+                    for pattern in medium_risk_patterns:
+                        if pattern.upper() in query.upper():
+                            dump_warnings.append({
+                                "warning": "query_medium_risk_pattern",
+                                "message": f"Query contains pattern with medium security risk: {pattern}",
+                                "risk_level": "medium"
+                            })
+                    
+                    # Require explicit confirmation for custom queries
+                    if not confirm:
+                        error_response = create_error_response(
+                            message="Custom queries require explicit confirmation. Set confirm=True to proceed.",
+                            code="confirmation_required",
+                            details={"query": query, "confirmation_required": True}
+                        )
+                        return model_to_json(error_response)
             
             # Sanitize client_id if provided
             if client_id is not None:
+                original_client_id = client_id
                 client_id = str(client_id).strip()
+                
+                # Check if sanitization changed the client ID
+                if client_id != original_client_id:
+                    dump_warnings.append({
+                        "warning": "client_id_sanitized",
+                        "message": "Client ID was sanitized by removing whitespace"
+                    })
                 
                 # Check client_id length
                 if len(client_id) > 100:  # Prevent excessively long IDs
+                    original_length = len(client_id)
                     logger.warn(f"Client ID too long, truncating: {client_id[:20]}...")
                     client_id = client_id[:100]
                     dump_warnings.append({
                         "warning": "client_id_truncated",
-                        "message": "Client ID was too long and has been truncated"
+                        "message": f"Client ID was too long, truncated from {original_length} to 100 characters"
                     })
                 
                 # Check for dangerous patterns in client_id
@@ -2148,18 +2488,23 @@ def register_core_tools(server, get_client_manager):
                         error_response = create_error_response(
                             message=f"Client ID contains potentially dangerous pattern: {pattern}",
                             code="security_violation",
-                            details={"pattern": pattern}
+                            details={"pattern": pattern, "client_id": client_id}
                         )
                         return model_to_json(error_response)
             
             # Check if this is a debug environment - we might want to limit this functionality in production
-            # This could be expanded based on environment variables or configuration
-            is_debug_allowed = True  # For now, we'll assume it's allowed
+            is_debug_allowed = True  # Default to allowed
             
+            # Check for environment-specific restrictions (could be expanded)
+            env = os.getenv("MCP_ENVIRONMENT", "development").lower()
+            if env == "production" and not os.getenv("MCP_ALLOW_DEBUG_DUMP", "").lower() in ["true", "1", "yes"]:
+                is_debug_allowed = False
+                
             if not is_debug_allowed:
                 error_response = create_error_response(
                     message="Debug dump operations are disabled in this environment",
-                    code="operation_disabled"
+                    code="operation_disabled",
+                    details={"environment": env}
                 )
                 return model_to_json(error_response)
             
@@ -2167,63 +2512,131 @@ def register_core_tools(server, get_client_manager):
             logger.info(f"Executing Neo4j debug dump with limit={limit}", context={
                 "client_id": client_id or "default",
                 "custom_query": bool(query),
-                "dump_limit": limit
+                "dump_limit": limit,
+                "include_relationships": include_relationships,
+                "include_statistics": include_statistics
             })
                 
             # Get the client-specific graph manager
             client_graph_manager = get_client_manager(client_id)
             
-            # Dump Neo4j database contents
+            # Prepare parameters for debug dump
+            dump_params = {
+                "limit": limit,
+                "include_relationships": include_relationships,
+                "include_statistics": include_statistics
+            }
+            
+            # Add query if provided
             if query:
-                result = client_graph_manager.debug_dump_neo4j(limit=limit, query=query)
-            else:
+                dump_params["query"] = query
+            
+            # Dump Neo4j database contents (support both parameter styles)
+            try:
+                # Call the function directly with individual parameters
+                if query:
+                    result = client_graph_manager.debug_dump_neo4j(limit=limit, query=query)
+                else:
+                    result = client_graph_manager.debug_dump_neo4j(limit=limit)
+            except Exception as call_error:
+                logger.warn(f"Error calling debug_dump_neo4j: {str(call_error)}")
+                # Attempt with minimal parameters
                 result = client_graph_manager.debug_dump_neo4j(limit=limit)
+                dump_warnings.append({
+                    "warning": "call_error",
+                    "message": f"Error calling debug_dump_neo4j: {str(call_error)}, using minimal parameters"
+                })
             
             # Process the result for consistency
             try:
+                # Convert string result to parsed object if needed
                 if isinstance(result, str):
-                    parsed_result = json.loads(result)
-                    
-                    # Return success response in standard format
-                    if "error" not in parsed_result:
-                        # Sanitize sensitive information in the response, if any
-                        if isinstance(parsed_result, dict) and "data" in parsed_result:
-                            nodes = parsed_result.get("data", {}).get("nodes", [])
-                            for node in nodes:
-                                # Sanitize any properties that might contain sensitive data
-                                for key in node.get("properties", {}):
-                                    if any(sensitive in key.lower() for sensitive in ["password", "secret", "token", "key", "auth"]):
-                                        node["properties"][key] = "[REDACTED]"
-                        
-                        query_info = f" with custom query" if query else ""
-                        success_response = create_success_response(
-                            message=f"Successfully dumped Neo4j database (limit: {limit}{query_info})",
-                            data=parsed_result
-                        )
-                        
-                        # Add any warnings collected during processing
-                        if dump_warnings:
-                            success_response.data["warnings"] = dump_warnings
-                            
-                        return model_to_json(success_response)
-                    else:
-                        # Return error in standard format
+                    try:
+                        parsed_result = json.loads(result)
+                    except json.JSONDecodeError as json_error:
+                        logger.error(f"Error parsing dump response: {str(json_error)}")
                         error_response = create_error_response(
-                            message=parsed_result.get("error", "Unknown error during Neo4j dump"),
-                            code="dump_error",
-                            details={"limit": limit, "query": query if query else None}
+                            message=f"Error parsing Neo4j dump result: {str(json_error)}",
+                            code="response_parsing_error",
+                            details={
+                                "error_position": getattr(json_error, "pos", None),
+                                "error_line": getattr(json_error, "lineno", None),
+                                "error_column": getattr(json_error, "colno", None)
+                            }
                         )
                         return model_to_json(error_response)
+                else:
+                    parsed_result = result
                 
-                # Return the result as-is if parsing fails
-                return result
+                # Check if it's an error response
+                if isinstance(parsed_result, dict) and parsed_result.get("status") == "error":
+                    error_response = create_error_response(
+                        message=parsed_result.get("error", "Unknown error during Neo4j dump"),
+                        code="dump_error",
+                        details={
+                            "limit": limit, 
+                            "query": query if query else None,
+                            "include_relationships": include_relationships,
+                            "include_statistics": include_statistics
+                        }
+                    )
+                    return model_to_json(error_response)
                 
-            except json.JSONDecodeError as json_error:
-                logger.error(f"Error parsing dump response: {str(json_error)}")
-                # If result is not valid JSON, standardize the error
+                # Process successful result
+                # Make a copy of the result data to avoid modifying the original
+                sanitized_result = copy.deepcopy(parsed_result)
+                
+                # Sanitize sensitive information in the response
+                if isinstance(sanitized_result, dict):
+                    # Sanitize nodes
+                    if "data" in sanitized_result and "nodes" in sanitized_result["data"]:
+                        for node in sanitized_result["data"]["nodes"]:
+                            if "properties" in node:
+                                for key in list(node["properties"].keys()):
+                                    if any(sensitive in key.lower() for sensitive in ["password", "secret", "token", "key", "auth", "credential"]):
+                                        node["properties"][key] = "[REDACTED]"
+                    
+                    # Sanitize relationships if they contain properties
+                    if "data" in sanitized_result and "relationships" in sanitized_result["data"]:
+                        for rel in sanitized_result["data"]["relationships"]:
+                            if "properties" in rel:
+                                for key in list(rel["properties"].keys()):
+                                    if any(sensitive in key.lower() for sensitive in ["password", "secret", "token", "key", "auth", "credential"]):
+                                        rel["properties"][key] = "[REDACTED]"
+                
+                # Format success message with appropriate details
+                query_info = f" with custom query" if query else ""
+                relationship_info = "" if include_relationships else " (relationships excluded)"
+                stats_info = "" if include_statistics else " (statistics excluded)"
+                
+                success_response = create_success_response(
+                    message=f"Successfully dumped Neo4j database (limit: {limit}{query_info}{relationship_info}{stats_info})",
+                    data=sanitized_result
+                )
+                
+                # Add execution context information
+                success_response.data["execution_context"] = {
+                    "timestamp": datetime.datetime.now().isoformat(),
+                    "parameters": {
+                        "limit": limit,
+                        "custom_query": bool(query),
+                        "include_relationships": include_relationships,
+                        "include_statistics": include_statistics
+                    }
+                }
+                
+                # Add any warnings collected during processing
+                if dump_warnings:
+                    success_response.data["warnings"] = dump_warnings
+                    
+                return model_to_json(success_response)
+                
+            except Exception as parse_error:
+                logger.error(f"Error processing dump result: {str(parse_error)}", exc_info=True)
                 error_response = create_error_response(
-                    message=f"Error parsing Neo4j dump result: {str(json_error)}",
-                    code="response_parsing_error"
+                    message=f"Error processing dump result: {str(parse_error)}",
+                    code="result_processing_error",
+                    details={"error": str(parse_error)}
                 )
                 return model_to_json(error_response)
             
@@ -2234,7 +2647,9 @@ def register_core_tools(server, get_client_manager):
                 code="dump_error",
                 details={
                     "limit": limit if 'limit' in locals() else None, 
-                    "query": query if 'query' in locals() and query else None
+                    "query": query if 'query' in locals() and query else None,
+                    "include_relationships": include_relationships if 'include_relationships' in locals() else None,
+                    "include_statistics": include_statistics if 'include_statistics' in locals() else None
                 }
             )
             return model_to_json(error_response)
