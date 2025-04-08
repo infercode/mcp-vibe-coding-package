@@ -1,0 +1,11 @@
+{
+  "feedback_id": "fb-usage_problem-2",
+  "type": "usage_problem",
+  "content": "Parameter name is confusing",
+  "function_name": "memory.get_entity",
+  "severity": "medium",
+  "context": {},
+  "agent_id": null,
+  "status": "new",
+  "timestamp": "2025-04-07T17:50:48.870464"
+}

@@ -1,0 +1,11 @@
+{
+  "feedback_id": "fb-feature_request-3",
+  "type": "feature_request",
+  "content": "Add pagination support to search results",
+  "function_name": "search.find_documents",
+  "severity": "medium",
+  "context": {},
+  "agent_id": null,
+  "status": "new",
+  "timestamp": "2025-04-07T17:50:48.870464"
+}

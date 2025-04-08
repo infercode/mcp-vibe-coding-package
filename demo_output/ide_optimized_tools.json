@@ -1,0 +1,21 @@
+{
+  "category_tools": {
+    "memory_tool": {
+      "name": "memory_tool",
+      "description": "Execute memory functions",
+      "function_count": 5
+    }
+  },
+  "documentation": {
+    "total_functions": 42,
+    "total_namespaces": 7
+  },
+  "hints": {
+    "memory.get_entity": {
+      "summary": "Retrieve an entity from memory by ID",
+      "required_parameters": [
+        "entity_id"
+      ]
+    }
+  }
+}

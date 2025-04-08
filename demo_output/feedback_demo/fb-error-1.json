@@ -1,0 +1,14 @@
+{
+  "feedback_id": "fb-error-1",
+  "type": "error",
+  "content": "Function throws an error when parameter is null",
+  "function_name": "registry.execute_function",
+  "severity": "high",
+  "context": {
+    "parameter": "query",
+    "error_type": "NullReferenceException"
+  },
+  "agent_id": null,
+  "status": "new",
+  "timestamp": "2025-04-07T17:50:48.870464"
+}

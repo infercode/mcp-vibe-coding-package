@@ -1,0 +1,71 @@
+[
+  {
+    "feedback_id": "fb-error-1",
+    "type": "error",
+    "content": "Function throws an error when parameter is null",
+    "function_name": "registry.execute_function",
+    "severity": "high",
+    "context": {
+      "parameter": "query",
+      "error_type": "NullReferenceException"
+    },
+    "agent_id": null,
+    "status": "new",
+    "timestamp": "2025-04-07T17:50:48.870464"
+  },
+  {
+    "feedback_id": "fb-usage_problem-2",
+    "type": "usage_problem",
+    "content": "Parameter name is confusing",
+    "function_name": "memory.get_entity",
+    "severity": "medium",
+    "context": {},
+    "agent_id": null,
+    "status": "new",
+    "timestamp": "2025-04-07T17:50:48.870464"
+  },
+  {
+    "feedback_id": "fb-feature_request-3",
+    "type": "feature_request",
+    "content": "Add pagination support to search results",
+    "function_name": "search.find_documents",
+    "severity": "medium",
+    "context": {},
+    "agent_id": null,
+    "status": "new",
+    "timestamp": "2025-04-07T17:50:48.870464"
+  },
+  {
+    "feedback_id": "fb-error-4",
+    "type": "error",
+    "content": "Error scenario 1",
+    "function_name": "registry.execute_function",
+    "severity": "medium",
+    "context": {},
+    "agent_id": null,
+    "status": "new",
+    "timestamp": "2025-04-07T17:50:48.870464"
+  },
+  {
+    "feedback_id": "fb-error-5",
+    "type": "error",
+    "content": "Error scenario 2",
+    "function_name": "registry.execute_function",
+    "severity": "medium",
+    "context": {},
+    "agent_id": null,
+    "status": "new",
+    "timestamp": "2025-04-07T17:50:48.878137"
+  },
+  {
+    "feedback_id": "fb-error-6",
+    "type": "error",
+    "content": "Error scenario 3",
+    "function_name": "registry.execute_function",
+    "severity": "medium",
+    "context": {},
+    "agent_id": null,
+    "status": "new",
+    "timestamp": "2025-04-07T17:50:48.878137"
+  }
+]

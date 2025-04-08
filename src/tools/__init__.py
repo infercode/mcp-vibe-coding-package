@@ -11,11 +11,15 @@ from src.tools.lesson_memory_tools import register_lesson_tools
 from src.tools.project_memory_tools import register_project_tools
 from src.tools.config_tools import register_config_tools
 
+# Import registry tools
+from src.registry.registry_tools import register_registry_tools
+
 __all__ = [
     "register_core_tools",
     "register_lesson_tools", 
     "register_project_tools",
     "register_config_tools",
+    "register_registry_tools",
     "register_all_tools"
 ]
 
@@ -38,6 +42,7 @@ def register_all_tools(server, manager_or_getter):
         register_lesson_tools(server, manager_or_getter)
         register_project_tools(server, manager_or_getter)
         register_config_tools(server, manager_or_getter)
+        register_registry_tools(server, manager_or_getter)
     else:
         # manager_or_getter is a direct GraphMemoryManager instance
         # Create a simple getter function that always returns this manager
@@ -47,4 +52,5 @@ def register_all_tools(server, manager_or_getter):
         register_core_tools(server, get_fixed_manager)
         register_lesson_tools(server, get_fixed_manager)
         register_project_tools(server, get_fixed_manager)
-        register_config_tools(server, get_fixed_manager) 
+        register_config_tools(server, get_fixed_manager)
+        register_registry_tools(server, get_fixed_manager) 

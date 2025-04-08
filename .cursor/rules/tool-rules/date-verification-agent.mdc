@@ -1,0 +1,49 @@
+---
+description: Use when working with dates in documents to ensure correct dates are used
+globs: 
+alwaysApply: false
+---
+
+# Date Verification Rule
+
+## Context
+
+- When adding timestamps or dates to any document
+- When updating document creation or modification dates
+- When working with date-related information in documentation
+- When timelines, schedules, or datelines appear in content
+
+## Critical Rules
+
+- Always verify the current date using the `date` bash command before adding dates to documents
+- Never assume the current year, month, or day without verification
+- Use the format YYYY-MM-DD for all dates in documentation
+- For examples that show future dates, clearly indicate they are examples
+- When updating document creation dates, always use the actual current date
+- If timezone information is important, include it explicitly
+- Run `date` command before each session where dates will be added
+
+## Examples
+
+<example>
+// Before adding a date to a document, verify the current date
+run_terminal_cmd(command="date", is_background=false)
+// Output shows: Mon, Apr 7, 2025 3:35:55 PM
+
+// Then use the correct date in the document
+edit_file(target_file="docs/project_plan.md", 
+  instructions="Add creation date",
+  code_edit="Created: 2025-04-07")
+</example>
+
+<example type="invalid">
+// Adding a date without verification
+edit_file(target_file="docs/project_plan.md", 
+  instructions="Add creation date",
+  code_edit="Created: 2024-04-07")
+
+// Using an incorrect format
+edit_file(target_file="docs/project_plan.md", 
+  instructions="Add creation date",
+  code_edit="Created: 07/04/25")
+</example> 

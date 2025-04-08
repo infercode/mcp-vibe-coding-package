@@ -1,0 +1,11 @@
+{
+  "feedback_id": "fb-error-4",
+  "type": "error",
+  "content": "Error scenario 1",
+  "function_name": "registry.execute_function",
+  "severity": "medium",
+  "context": {},
+  "agent_id": null,
+  "status": "new",
+  "timestamp": "2025-04-07T17:50:48.870464"
+}
