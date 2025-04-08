@@ -9,290 +9,293 @@ registered with the registry with complete metadata.
 
 import inspect
 import logging
-from typing import Any, Dict, Optional, Callable, List, Type, Union, get_type_hints
+from typing import Any, Dict, Optional, Callable, List, Type, Union, get_type_hints, Set, Tuple, cast, TypeVar
 import importlib
 import importlib.util
 import sys
 import os
 from types import ModuleType
+import glob
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.lowlevel import Server
 
-from src.registry.registry_manager import get_registry, register_function
+from src.registry.registry_manager import get_registry, register_function, FunctionRegistry
 from src.registry.function_models import FunctionMetadata, FunctionParameters
+from src.registry.docstring_parser import DocstringParser, parse_docstring
 from src.logger import get_logger
 
 logger = get_logger()
 
-def enhance_server(server: FastMCP) -> FastMCP:
+# Get the global registry instance
+registry = get_registry()
+
+# Type definitions to help linter
+T = TypeVar('T', bound=Callable)
+
+class EnhancedServer(Server):
+    """Type hint for the Server with known tool attribute."""
+    tool: Callable
+
+def extract_function_metadata(func: Callable) -> Dict[str, Any]:
     """
-    Enhance an MCP server with automatic registry integration.
+    Extract rich metadata from a function, including docstring, parameters, and return type.
     
-    This function replaces the server's tool decorator with an enhanced version
-    that automatically registers all tools with the Function Registry Pattern.
+    Uses the DocstringParser to extract detailed parameter information, including nested
+    dictionary structures, descriptions, and validation rules.
     
     Args:
-        server: The MCP server instance to enhance
+        func: The function to extract metadata from
         
     Returns:
-        The enhanced server instance
+        A dictionary containing complete function metadata
     """
-    logger.info("Enhancing MCP server with registry bridge")
+    # Get function module and name
+    module_name = func.__module__
+    namespace = module_name.split('.')[-1]
+    func_name = func.__name__
     
-    # Store a reference to the original tool decorator
-    original_tool_decorator = server.tool
+    # Get function signature
+    sig = inspect.signature(func)
     
-    # Track all registered tools for debugging
-    registered_tools = []
+    # Get docstring and parse it using the DocstringParser
+    docstring = inspect.getdoc(func) or ""
+    parsed_docstring = DocstringParser.parse_docstring(docstring)
     
-    # Register any existing tools that are already in the server's tool collection
-    registry = get_registry()
-    existing_tools_registered = 0
-    
-    # Try different attributes where MCP might store tools
-    tool_attrs = ["_tools", "tools", "_tool_manager", "_tool_registry"]
-    server_tools = None
-    
-    for attr in tool_attrs:
-        if hasattr(server, attr):
-            server_tools = getattr(server, attr)
-            # If it's a manager or registry object, try to get its tools attribute
-            if hasattr(server_tools, "tools"):
-                server_tools = server_tools.tools
-            break
-    
-    if server_tools and isinstance(server_tools, dict):
-        logger.info(f"Found {len(server_tools)} existing tools in server")
+    # Extract parameter info with rich docstring data
+    params = {}
+    for name, param in sig.parameters.items():
+        # Basic parameter info from signature
+        param_info = {
+            'name': name,
+            'required': param.default is inspect.Parameter.empty,
+            'type': str(param.annotation) if param.annotation is not inspect.Parameter.empty else 'Any',
+        }
         
-        for tool_name, tool_func in server_tools.items():
-            try:
-                # Extract function info
-                module_name = tool_func.__module__ if hasattr(tool_func, "__module__") else "__main__"
-                func_name = tool_func.__name__ if hasattr(tool_func, "__name__") else tool_name
+        # Enhance with docstring information if available
+        if parsed_docstring.get('parameters') and name in parsed_docstring['parameters']:
+            docstring_param = parsed_docstring['parameters'][name]
+            param_info['description'] = docstring_param.get('description', '')
+            
+            # If parameter is a Dict type with nested fields, include those
+            if 'fields' in docstring_param:
+                param_info['fields'] = docstring_param['fields']
                 
-                # Determine namespace from module
-                namespace_parts = module_name.split('.')
-                if len(namespace_parts) > 0:
-                    namespace = namespace_parts[-1]
-                else:
-                    namespace = "__main__"
-                
-                # Register with registry
-                full_name = f"{namespace}.{func_name}"
-                
-                # Check if already registered
-                if registry.get_function_metadata(full_name) is None:
-                    register_function(namespace, func_name)(tool_func)
-                    existing_tools_registered += 1
-                    logger.info(f"Registered existing server tool: {full_name}")
-                    
-                    # Track for debugging
-                    registered_tools.append({
-                        "name": full_name,
-                        "original_module": module_name
-                    })
-            except Exception as e:
-                logger.error(f"Error registering existing server tool {tool_name}: {str(e)}")
+            # Add any validation info from docstring
+            for validation_key in ['enum', 'default', 'min_value', 'max_value', 
+                                  'min_length', 'max_length', 'pattern', 'format']:
+                if validation_key in docstring_param:
+                    param_info[validation_key] = docstring_param[validation_key]
+        
+        params[name] = param_info
     
-    if existing_tools_registered > 0:
-        logger.info(f"Registered {existing_tools_registered} existing tools from server")
+    # Create metadata
+    metadata = {
+        'namespace': namespace,
+        'name': func_name,
+        'qualified_name': f"{namespace}.{func_name}",
+        'description': parsed_docstring.get('description', docstring),
+        'parameters': params,
+        'return_type': str(sig.return_annotation) if sig.return_annotation is not inspect.Parameter.empty else 'Any',
+        'source_file': inspect.getfile(func),
+    }
+    
+    # Add examples if available
+    if 'examples' in parsed_docstring and parsed_docstring['examples']:
+        metadata['examples'] = parsed_docstring['examples']
+        
+    # Add return information if available
+    if 'returns' in parsed_docstring and parsed_docstring['returns']:
+        metadata['return_description'] = parsed_docstring['returns'].get('description', '')
+    
+    logger.debug(f"Extracted metadata for {namespace}.{func_name}: {len(params)} parameters")
+    return metadata
 
-    # Define the enhanced decorator
-    def enhanced_tool_decorator(*args, **kwargs):
-        """
-        Enhanced version of server.tool() that also registers with the registry.
+def register_tool_with_registry(func: Callable, metadata: Dict[str, Any]) -> None:
+    """Register a function with the Function Registry Pattern."""
+    qualified_name = metadata['qualified_name']
+    namespace = metadata['namespace']
+    func_name = metadata['name']
+    
+    # Check if the function is already registered
+    if not registry.get_function_metadata(qualified_name):
+        # Register the function with the registry
+        register_function(namespace, func_name)(func)
+        logger.debug(f"Registered function {qualified_name} with the registry")
+    else:
+        logger.debug(f"Function {qualified_name} already registered with the registry")
+
+def enhance_server(server: Union[Server, FastMCP], registry: Optional[FunctionRegistry] = None) -> Tuple[Union[Server, FastMCP], FunctionRegistry]:
+    """Enhance an MCP server with the Function Registry Pattern.
+    
+    This replaces the server's tool decorator with an enhanced version that registers
+    all tools with the Function Registry Pattern.
+    
+    Args:
+        server: The MCP server to enhance
+        registry: Optional existing registry to use. If None, a new registry is created.
         
-        All arguments are passed through to the original decorator.
-        """
+    Returns:
+        Tuple of (enhanced server, registry)
+    """
+    if registry is None:
+        registry = FunctionRegistry()
+    
+    # Cast server to enhanced type for type checking
+    enhanced_server = cast(EnhancedServer, server)
+    
+    # Store original decorator
+    original_tool_decorator = enhanced_server.tool
+    
+    # Create enhanced decorator
+    def enhanced_tool_decorator(*args, **kwargs):
         # Get the original decorator
         original_decorator = original_tool_decorator(*args, **kwargs)
         
-        # Define the wrapper function
+        # Return a wrapper that registers the function with the registry
         def wrapper(func):
-            # First, let MCP do its normal decoration
-            decorated_func = original_decorator(func)
+            # Register with registry before decorating with original decorator
+            metadata = extract_function_metadata(func)
+            register_function(metadata['namespace'], metadata['name'])(func)
             
-            # Now register with the registry
-            try:
-                # Extract namespace from module path
-                module_name = func.__module__
-                namespace_parts = module_name.split('.')
-                
-                # Try to determine appropriate namespace
-                if len(namespace_parts) >= 2 and namespace_parts[-2] == "registry":
-                    # If in registry.X module, use X as namespace
-                    namespace = namespace_parts[-1]
-                elif len(namespace_parts) >= 2 and namespace_parts[-2] == "tools":
-                    # If in tools.X module, use X as namespace
-                    namespace = namespace_parts[-1]
-                    # Strip _tools suffix if present
-                    if namespace.endswith("_tools"):
-                        namespace = namespace[:-6]
-                    # Convert common prefixes
-                    if namespace.startswith("core_"):
-                        namespace = "memory"
-                else:
-                    # Default to the last part of the module path
-                    namespace = namespace_parts[-1]
-                
-                # Extract function name
-                func_name = func.__name__
-                
-                # Log the registration
-                logger.info(f"Auto-registering tool {func_name} with namespace {namespace}")
-                
-                # Get or create registry
-                registry = get_registry()
-                
-                # Apply the register_function decorator
-                register_function(namespace, func_name)(func)
-                
-                # Track for debugging
-                registered_tools.append({
-                    "name": f"{namespace}.{func_name}",
-                    "original_module": func.__module__
-                })
-                
-                logger.debug(f"Successfully registered {func_name} with registry")
-            except Exception as e:
-                logger.error(f"Error registering {func.__name__} with registry: {str(e)}")
-            
-            # Return the decorated function (from MCP)
-            return decorated_func
+            # Apply original decorator
+            return original_decorator(func)
         
         return wrapper
     
-    # Replace the server's tool decorator with our enhanced version
-    server.tool = enhanced_tool_decorator
+    # Replace server.tool with enhanced decorator
+    enhanced_server.tool = enhanced_tool_decorator
     
-    # Store the registered tools on the server for debugging
-    setattr(server, "_registry_bridge_tools", registered_tools)
+    # Scan for and register existing tools
+    num_existing = scan_and_register_existing_tools(enhanced_server, registry)
+    logger.info(f"Registered {num_existing} existing tools with registry")
     
-    logger.info("MCP server enhanced with registry bridge")
-    return server
+    # Register tools from modules
+    num_imported = register_tools_from_modules(registry)
+    if num_imported > 0:
+        logger.info(f"Registered {num_imported} tools from modules")
+    
+    return server, registry
 
-def scan_and_register_existing_tools(module_paths=None):
+def scan_and_register_existing_tools(server: Union[Server, FastMCP], registry: FunctionRegistry, 
+                                     module_paths: Optional[List[str]] = None) -> int:
     """
-    Scan for and register existing tools that were already decorated with @server.tool().
-    
-    This function is used to find tools in modules that were decorated before
-    the registry bridge was applied. It imports the modules and manually registers
-    any functions that appear to be MCP tools.
+    Scan for and register existing tools that were already decorated with @server.tool()
+    before the bridge was applied.
     
     Args:
-        module_paths: Optional list of module paths to scan. If None, uses default paths.
+        server: The MCP server containing the tools
+        registry: The function registry to register tools with
+        module_paths: Optional module paths to scan. If None, all modules are scanned.
         
     Returns:
-        Dict with registration statistics
+        The number of tools registered
     """
     if module_paths is None:
-        # Default module paths to scan for tools
-        module_paths = [
-            'src.tools.core_memory_tools',
-            'src.tools.project_memory_tools', 
-            'src.tools.lesson_memory_tools',
-            'src.tools.config_tools',
-            'src.registry.registry_tools',
-            'src.registry.core_registry_tools',
-            'src.registry.consolidated_tools'
-        ]
-        
+        module_paths = list(sys.modules.keys())
+    
     logger.info(f"Scanning for existing tools in {len(module_paths)} modules")
     
-    registry = get_registry()
-    stats = {
-        "modules_scanned": 0,
-        "tools_found": 0,
-        "tools_registered": 0,
-        "errors": 0
-    }
+    tools_registered = 0
     
-    for module_path in module_paths:
+    for module_name in module_paths:
         try:
-            # Import the module
-            module = importlib.import_module(module_path)
-            stats["modules_scanned"] += 1
-            
-            # Determine namespace from module path
-            namespace_parts = module_path.split('.')
-            
-            # Try to determine appropriate namespace
-            if len(namespace_parts) >= 2 and namespace_parts[-2] == "registry":
-                # If in registry.X module, use X as namespace
-                namespace = namespace_parts[-1]
-            elif len(namespace_parts) >= 2 and namespace_parts[-2] == "tools":
-                # If in tools.X module, use X as namespace
-                namespace = namespace_parts[-1]
-                # Strip _tools suffix if present
-                if namespace.endswith("_tools"):
-                    namespace = namespace[:-6]
-                # Convert common prefixes
-                if namespace.startswith("core_"):
-                    namespace = "memory"
-            else:
-                # Default to the last part of the module path
-                namespace = namespace_parts[-1]
+            module = sys.modules.get(module_name)
+            if module is None:
+                continue
                 
-            logger.info(f"Scanning module {module_path} (namespace: {namespace})")
-            
-            # Find all module members that appear to be decorated tools
-            for name, obj in inspect.getmembers(module):
-                # Look for functions that might be tools
-                if callable(obj) and hasattr(obj, "__module__") and obj.__module__ == module.__name__:
-                    # Several ways to detect if it's likely a tool:
-                    is_tool = False
-                    
-                    # 1. Check if it's a coroutine function (most tools are async)
-                    if inspect.iscoroutinefunction(obj):
-                        is_tool = True
-                    
-                    # 2. Check for common MCP tool attributes
-                    if hasattr(obj, "_mcp_tool") or hasattr(obj, "_is_tool") or hasattr(obj, "tool_metadata"):
-                        is_tool = True
+            # Check if module has defined tools
+            for name in dir(module):
+                obj = getattr(module, name)
+                
+                # Check if this is a function decorated with @server.tool()
+                if inspect.isfunction(obj) and hasattr(obj, "_is_tool"):
+                    # Check if this function uses our server (via checking _server attribute)
+                    if hasattr(obj, "_server") and getattr(obj, "_server") is server:
+                        # Extract metadata and register
+                        metadata = extract_function_metadata(obj)
+                        namespace = metadata['namespace']
+                        func_name = metadata['name']
                         
-                    # 3. Check name patterns typical for tools
-                    if name.endswith("_tool") or name.startswith("tool_"):
-                        is_tool = True
-                    
-                    # Check the function's signature for parameters
-                    try:
-                        sig = inspect.signature(obj)
-                        # Most tools have parameters
-                        if len(sig.parameters) > 0:
-                            is_tool = True
-                    except (ValueError, TypeError):
-                        # If we can't get the signature, skip this check
-                        pass
-                        
-                    if is_tool:
-                        stats["tools_found"] += 1
-                        
-                        try:
-                            # Check if this function is already registered
-                            full_name = f"{namespace}.{name}"
-                            existing = registry.get_function_metadata(full_name)
-                            
-                            if existing is None:
-                                # Register the function with our registry
-                                register_function(namespace, name)(obj)
-                                logger.info(f"Registered existing tool: {namespace}.{name}")
-                                stats["tools_registered"] += 1
-                            else:
-                                logger.debug(f"Tool already registered: {namespace}.{name}")
-                        except Exception as e:
-                            logger.error(f"Error registering existing tool {namespace}.{name}: {str(e)}")
-                            stats["errors"] += 1
-                        
-        except ImportError as e:
-            logger.error(f"Could not import module {module_path}: {e}")
-            stats["errors"] += 1
+                        # Check if already registered
+                        if not registry.get_function_metadata(f"{namespace}.{func_name}"):
+                            register_function(namespace, func_name)(obj)
+                            tools_registered += 1
+                            logger.info(f"Registered existing tool: {obj.__module__}.{obj.__name__}")
         except Exception as e:
-            logger.error(f"Error scanning module {module_path}: {e}")
-            stats["errors"] += 1
+            logger.error(f"Error scanning module {module_name}: {str(e)}")
     
-    logger.info(f"Completed tool scanning: {stats['tools_registered']} tools registered from {stats['modules_scanned']} modules")
-    return stats
+    return tools_registered
+
+def module_exists(module_name: str) -> bool:
+    """Check if a module exists without importing it"""
+    try:
+        importlib.util.find_spec(module_name)
+        return True
+    except ImportError:
+        return False
+
+def find_submodules(package_path: str) -> List[str]:
+    """Find all submodules in a package."""
+    try:
+        # Convert package path to directory path
+        package_spec = importlib.util.find_spec(package_path)
+        if not package_spec or not package_spec.submodule_search_locations:
+            logger.error(f"Cannot find package path for {package_path}")
+            return []
+            
+        package_dir = package_spec.submodule_search_locations[0]
+        
+        # Find all Python files in the directory
+        submodules = []
+        for file_path in glob.glob(os.path.join(package_dir, "*.py")):
+            file_name = os.path.basename(file_path)
+            if file_name == "__init__.py":
+                continue
+            module_name = file_name[:-3]  # Remove .py extension
+            submodules.append(module_name)
+        
+        return submodules
+    except Exception as e:
+        logger.error(f"Error finding submodules for {package_path}: {str(e)}")
+        return []
+
+def register_tools_from_modules(registry: FunctionRegistry, package_paths: Optional[List[str]] = None) -> int:
+    """Import and register all tool modules from the specified packages.
+    
+    Args:
+        registry: The function registry to register tools with
+        package_paths: List of package paths to import from. If None, defaults to common tool paths.
+        
+    Returns:
+        The number of tools registered
+    """
+    if package_paths is None:
+        package_paths = [
+            "src.tools",
+            "src.registry.tools"
+        ]
+    
+    total_registered = 0
+    for package_path in package_paths:
+        try:
+            logger.info(f"Importing tools from {package_path}")
+            
+            # Find all submodules in this package
+            submodules = find_submodules(package_path)
+            
+            # Import each submodule
+            for submodule in submodules:
+                full_module_name = f"{package_path}.{submodule}"
+                try:
+                    logger.info(f"Importing module {full_module_name}")
+                    importlib.import_module(full_module_name)
+                except Exception as e:
+                    logger.error(f"Error importing module {full_module_name}: {str(e)}")
+        except Exception as e:
+            logger.error(f"Error processing package {package_path}: {str(e)}")
+    
+    return total_registered
 
 def list_registered_tools(server: FastMCP) -> List[Dict[str, str]]:
     """

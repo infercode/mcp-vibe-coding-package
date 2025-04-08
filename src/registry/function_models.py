@@ -44,7 +44,9 @@ class FunctionResult(BaseModel):
         return cls(
             status="success",
             message=message,
-            data=data or {}
+            data=data or {},
+            error_code=None,
+            error_details=None
         )
     
     @classmethod
@@ -55,7 +57,8 @@ class FunctionResult(BaseModel):
             status="error",
             message=message,
             error_code=error_code,
-            error_details=error_details or {}
+            error_details=error_details or {},
+            data=None
         )
     
     def to_json(self) -> str:
@@ -112,11 +115,28 @@ class FunctionMetadata(BaseModel):
         Returns:
             FunctionMetadata object
         """
+        try:
+            # Import our enhanced docstring parser
+            from src.registry.docstring_parser import parse_docstring
+            enhanced_docstring_parser_available = True
+        except ImportError:
+            enhanced_docstring_parser_available = False
+        
         # Get function signature
         sig = inspect.signature(func)
         
         # Get docstring
         doc = inspect.getdoc(func) or "No documentation available"
+        
+        # Parse docstring with enhanced parser if available
+        docstring_data = {}
+        if enhanced_docstring_parser_available:
+            try:
+                from src.registry.docstring_parser import parse_docstring as parse_ds
+                docstring_data = parse_ds(doc)
+            except Exception as e:
+                # Fall back to basic parsing if enhanced parser fails
+                docstring_data = {}
         
         # Extract parameters
         parameters = {}
@@ -134,12 +154,37 @@ class FunctionMetadata(BaseModel):
             has_default = param.default != inspect.Parameter.empty
             default_value = None if not has_default else param.default
             
+            # Create basic parameter info
             parameters[param_name] = {
                 'type': param_type,
                 'description': f"Parameter {param_name}",
                 'required': not has_default,
                 'default': default_value
             }
+            
+            # Enhance with docstring data if available
+            if enhanced_docstring_parser_available and 'parameters' in docstring_data and param_name in docstring_data['parameters']:
+                param_data = docstring_data['parameters'][param_name]
+                
+                # Use description from docstring
+                if param_data.get('description'):
+                    parameters[param_name]['description'] = param_data['description']
+                
+                # Add nested field information for Dict parameters
+                if param_type in ('Dict', 'dict', 'Dictionary', 'dictionary') and param_data.get('nested_fields'):
+                    parameters[param_name]['nested_fields'] = param_data['nested_fields']
+                    
+                    # Create a more descriptive parameter description that includes field information
+                    if param_data['nested_fields']:
+                        field_descriptions = []
+                        for field_name, field_info in param_data['nested_fields'].items():
+                            required_text = "Required" if field_info.get('required', False) else "Optional"
+                            field_descriptions.append(f"- {field_name}: {required_text}. {field_info['description']}")
+                            
+                        if field_descriptions:
+                            full_description = parameters[param_name]['description']
+                            full_description += "\nFields:\n" + "\n".join(field_descriptions)
+                            parameters[param_name]['description'] = full_description
         
         # Get return type
         return_type = 'any'
@@ -158,15 +203,26 @@ class FunctionMetadata(BaseModel):
         except:
             source_file = None
             
+        # Extract examples from docstring
+        examples = []
+        if enhanced_docstring_parser_available and 'examples' in docstring_data:
+            examples = docstring_data['examples']
+            
+        # Use the first paragraph of docstring as description, or the docstring_data description if available
+        description = doc.split("\n\n")[0] if doc else "No description"
+        if enhanced_docstring_parser_available and 'description' in docstring_data and docstring_data['description']:
+            description = docstring_data['description']
+            
         # Create metadata
         return cls(
             name=f"{namespace}.{name}",
             short_name=name,
             namespace=namespace,
-            description=doc.split("\n\n")[0] if doc else "No description",
+            description=description,
             parameters=parameters,
             return_type=return_type,
             is_async=is_async,
+            examples=examples,
             source_file=source_file
         )
 

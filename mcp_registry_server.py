@@ -111,12 +111,14 @@ try:
     async def server_lifespan(server: Server) -> AsyncIterator[dict]:
         """Manage Neo4j connection lifecycle and session cleanup."""
         # Start the session cleanup task
-        logger.info("Starting lifespan")
+        logger.info("Initializing client manager store")
+        await session_manager.start_cleanup_task()
         
         try:
-            yield {"client_managers": client_managers}
+            yield {"client_managers": client_managers, "session_manager": session_manager}
         finally:
-            logger.info("Shutting down - lifespan ending")
+            # Stop the cleanup task
+            await session_manager.stop_cleanup_task()
             
             # Clean up at shutdown - close all client Neo4j connections
             logger.info("Shutting down all client Neo4j connections")
@@ -126,7 +128,45 @@ try:
                 # Remove from the dictionary after closing
                 client_managers.pop(client_id, None)
 
-    # Create our mock server for tool registration - tools will be registered
+    # Function to get or create a client-specific manager
+    # This is the REAL implementation from main.py, not a mock
+    def get_client_manager(client_id=None):
+        """
+        Get the GraphMemoryManager for the current client or create one if it doesn't exist.
+        
+        Args:
+            client_id: Optional client ID to use. If not provided, a default client ID is used.
+                     In a real implementation, this would be derived from the SSE connection.
+        
+        Returns:
+            GraphMemoryManager instance for the client
+        """
+        try:
+            # Use provided client ID or default
+            effective_client_id = client_id or "default-client"
+            
+            logger.debug(f"Getting manager for client ID: {effective_client_id}")
+            
+            # Update the last activity time for this client
+            session_manager.update_activity(effective_client_id)
+            
+            # Create a new manager if this client doesn't have one yet
+            if effective_client_id not in client_managers:
+                logger.info(f"Creating new GraphMemoryManager for client {effective_client_id}")
+                manager = GraphMemoryManager(logger)
+                manager.initialize()
+                client_managers[effective_client_id] = manager
+                
+                # Register the client with the session manager
+                session_manager.register_client(effective_client_id, manager)
+                
+            return client_managers[effective_client_id]
+        except Exception as e:
+            logger.error(f"Error getting client manager: {str(e)}")
+            # Fall back to a temporary manager if something goes wrong
+            return GraphMemoryManager(logger)
+
+    # Tool-only server for registration - tools will be registered
     # with the registry but NOT with the real server exposed to clients
     class MockServer:
         def __init__(self):
@@ -162,7 +202,7 @@ try:
                     namespace = namespace_parts[-1]
                 
                 # Register with the registry, NOT with the real server
-                from src.registry import register_function
+                from src.registry.registry_manager import register_function
                 try:
                     register_function(namespace, name)(func)
                     logger.info(f"Registered tool {namespace}.{name} with registry only")
@@ -180,50 +220,22 @@ try:
                 # Called as @server.tool()
                 return decorator
 
-    # Create a mock client manager getter
-    def get_mock_client_manager(client_id=None):
-        """Mock implementation of get_client_manager"""
-        # This would normally return a GraphMemoryManager for the client
-        # but we'll just return a mock object with the methods we need
-        class MockClientManager:
-            def __init__(self):
-                self.client_id = client_id or "default-client"
-                
-            def get_client_project_memory(self):
-                return self
-                
-            def get_client_lesson_memory(self):
-                return self
-                
-            def create_project_container(self, *args, **kwargs):
-                return {"status": "success", "message": "Mock project container created"}
-                
-            def get_project_container(self, *args, **kwargs):
-                return {"status": "success", "message": "Mock project container retrieved"}
-                
-            def create_lesson_container(self, *args, **kwargs):
-                return {"status": "success", "message": "Mock lesson container created"}
-                
-            def get_lesson_container(self, *args, **kwargs):
-                return {"status": "success", "message": "Mock lesson container retrieved"}
-        
-        return MockClientManager()
-
     # Initialize the registry first
     logger.info("Initializing Function Registry...")
     initialize_registry()
 
-    # Register tool modules by calling their registration functions
+    # Register all tools with our registry using real implementations
     logger.info("Registering tool modules...")
     
     # Import the registration functions
     from src.tools import register_all_tools
     
-    # Call register_all_tools with our MOCK server
+    # Create a server just for tool registration
     mock_server = MockServer()
     
-    # Register all tools with the mock server (they'll be registered with the registry only)
-    register_all_tools(mock_server, get_mock_client_manager)
+    # Register all tools with the mock server but real client manager
+    # This ensures tools are registered with the registry but not exposed to clients
+    register_all_tools(mock_server, get_client_manager)
     tools_registered = len(mock_server.registered_tools)
     logger.info(f"Registration complete: {tools_registered} tools registered with registry")
 
@@ -240,11 +252,12 @@ try:
     logger.info("MCP Server created with only essential tools exposed")
 
     # Enhance the server with our registry bridge for future tool registrations
-    server = enhance_server(server)
+    registry = get_registry()
+    server, registry = enhance_server(server, registry)
 
     # Define the 3 essential tools
     # Tool 1: execute_function
-    @server.tool()
+    @server.tool()  # type: ignore
     async def execute_function(function_name: str, parameters: Optional[str] = None) -> str:
         """
         Execute any registered function by name with provided parameters.
@@ -359,7 +372,7 @@ try:
             return error_result.to_json()
 
     # Tool 2: list_available_functions
-    @server.tool()
+    @server.tool()  # type: ignore
     async def list_available_functions(category = None) -> str:
         """
         List all available functions, optionally filtered by category.
@@ -397,7 +410,7 @@ try:
             return json.dumps(error_result)
 
     # Tool 3: list_function_categories
-    @server.tool()
+    @server.tool()  # type: ignore
     async def list_function_categories() -> str:
         """
         List all available function categories/namespaces.
@@ -431,41 +444,34 @@ try:
             }
             return json.dumps(error_result)
 
-    # Get client-specific manager
-    async def get_client_manager(client_id: str) -> GraphMemoryManager:
-        """
-        Get or create a client-specific GraphMemoryManager.
-        
-        Args:
-            client_id: The client identifier
-            
-        Returns:
-            GraphMemoryManager instance for the client
-        """
-        # Update session activity timestamp
-        if hasattr(session_manager, "update_activity"):
-            session_manager.update_activity(client_id)
-        
-        # Get or create client manager
-        if client_id not in client_managers:
-            logger.info(f"Creating new GraphMemoryManager for client {client_id}")
-            client_managers[client_id] = GraphMemoryManager(logger)
-            
-        return client_managers[client_id]
-
     # Define middleware for tracking client activity
     async def client_tracking_middleware(request, call_next):
-        """Track client activity for session management."""
-        # Extract client ID from headers or query params
+        """Middleware to track client sessions and mark disconnections."""
+        # Extract session ID from request
         session_id = request.query_params.get("session_id", None)
         
-        # If client ID found, update activity
-        if session_id and hasattr(session_manager, "update_activity"):
+        # Mark client activity
+        if session_id:
             logger.debug(f"Client activity: {session_id}")
             session_manager.update_activity(session_id)
         
-        # Continue with the request
+        # Process the request
         response = await call_next(request)
+        
+        # Handle disconnection event for SSE requests
+        if session_id and request.url.path == "/sse":
+            # In SSE, we need to set up background cleanup for when the connection ends
+            async def on_disconnect():
+                try:
+                    # Small delay to ensure cleanup happens after the connection is fully closed
+                    await asyncio.sleep(1)
+                    logger.info(f"Client disconnected: {session_id}")
+                    session_manager.mark_client_inactive(session_id)
+                except Exception as e:
+                    logger.error(f"Error during disconnect handling for {session_id}: {str(e)}")
+            
+            response.background = on_disconnect()
+        
         return response
 
     # Helper for main server run
@@ -488,17 +494,24 @@ try:
                 logger.info(f"MCP Registry Server running with SSE on http://0.0.0.0:{port}")
                 
                 # Get the standard SSE app
-                app = server.sse_app()
+                app = server.sse_app()  # type: ignore
                 
                 # Add our middleware for client tracking
-                from starlette.middleware.base import BaseHTTPMiddleware
-                from starlette.applications import Starlette
-                
-                # Create a new Starlette app with middleware
-                app_with_middleware = Starlette(routes=app.routes)
-                app_with_middleware.add_middleware(BaseHTTPMiddleware, dispatch=client_tracking_middleware)
-                
-                return app_with_middleware
+                # Import necessary Starlette components
+                try:
+                    from starlette.middleware.base import BaseHTTPMiddleware
+                    from starlette.applications import Starlette
+                    
+                    # Create a new Starlette app with middleware
+                    app_with_middleware = Starlette(routes=app.routes)
+                    app_with_middleware.add_middleware(BaseHTTPMiddleware, dispatch=client_tracking_middleware)
+                    
+                    return app_with_middleware
+                except ImportError as e:
+                    logger.error(f"Starlette import error: {e}. Make sure 'starlette' is installed.")
+                    # Fall back to standard app without middleware
+                    logger.error("Running without client tracking middleware")
+                    return app
             else:
                 # Using stdio transport
                 logger.info("MCP Registry Server running on stdio")
@@ -506,10 +519,10 @@ try:
                 # Check if run is a coroutine
                 if asyncio.iscoroutinefunction(server.run):
                     # If it's a coroutine function, await it
-                    await server.run()
+                    await server.run()  # type: ignore
                 else:
                     # If it's not a coroutine function, just call it
-                    server.run()
+                    server.run()  # type: ignore
                 return None
         except Exception as e:
             logger.error(f"Failed to start server: {str(e)}")
