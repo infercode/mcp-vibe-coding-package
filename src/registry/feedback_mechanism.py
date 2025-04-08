@@ -16,7 +16,7 @@ from datetime import datetime, timedelta
 from enum import Enum
 import os
 
-from src.registry.registry_manager import get_registry
+from src.registry.registry_manager import get_registry, register_function
 from src.registry.function_models import FunctionResult, FunctionMetadata
 from src.logger import get_logger
 
@@ -795,8 +795,9 @@ class FunctionImprover:
         }
 
 
-# Tool functions for feedback mechanism
+# Main feedback functions with direct registration decorators
 
+@register_function("feedback", "submit_feedback")
 async def submit_feedback(feedback_type: str,
                      content: str,
                      function_name: Optional[str] = None,
@@ -807,15 +808,15 @@ async def submit_feedback(feedback_type: str,
     Submit feedback about a function or the registry system.
     
     Args:
-        feedback_type: Type of feedback (error, suggestion, etc.)
-        content: Content of the feedback
-        function_name: Name of the function the feedback is about (optional)
-        severity: Severity of the feedback (low, medium, high, critical)
-        context: Additional context information (optional)
-        agent_id: ID of the agent submitting the feedback (optional)
+        feedback_type: Type of feedback (general, error, suggestion, rating, etc.)
+        content: Feedback content
+        function_name: Optional function name that the feedback is about
+        severity: Severity level (low, medium, high, critical)
+        context: Additional context information
+        agent_id: Identifier for the agent submitting feedback
         
     Returns:
-        FunctionResult with the feedback ID and status
+        Function result with feedback submission status
     """
     try:
         feedback_manager = FeedbackManager()
@@ -846,15 +847,16 @@ async def submit_feedback(feedback_type: str,
             error_details={"details": traceback.format_exc()}
         )
 
+@register_function("feedback", "get_function_suggestions")
 async def get_function_suggestions(function_name: str) -> FunctionResult:
     """
-    Get improvement suggestions for a specific function.
+    Get function improvement suggestions.
     
     Args:
         function_name: Name of the function to get suggestions for
         
     Returns:
-        FunctionResult with the suggestions
+        Function result with function suggestions
     """
     try:
         feedback_manager = FeedbackManager()
@@ -879,12 +881,13 @@ async def get_function_suggestions(function_name: str) -> FunctionResult:
             error_details={"details": traceback.format_exc()}
         )
 
+@register_function("feedback", "get_optimization_recommendations")
 async def get_optimization_recommendations() -> FunctionResult:
     """
-    Get system-wide optimization recommendations.
+    Get optimization recommendations for the Function Registry system.
     
     Returns:
-        FunctionResult with the recommendations
+        Function result with optimization recommendations
     """
     try:
         feedback_manager = FeedbackManager()
@@ -909,6 +912,7 @@ async def get_optimization_recommendations() -> FunctionResult:
             error_details={"details": traceback.format_exc()}
         )
 
+@register_function("feedback", "get_feedback_summary")
 async def get_feedback_summary() -> FunctionResult:
     """
     Get a summary of all feedback.
@@ -939,164 +943,10 @@ async def get_feedback_summary() -> FunctionResult:
 
 def register_feedback_mechanism_tools():
     """Register feedback mechanism tools with the function registry."""
-    try:
-        # Attempt to get registry
-        try:
-            from src.registry.registry_manager import get_registry
-            registry = get_registry()
-        except ImportError:
-            logger.error("Could not import registry_manager")
-            registry = None
-            
-        if not registry:
-            logger.info("Registry not available, feedback mechanism tools not registered")
-            return
-            
-        # Try different registration methods
-        registered = False
-        
-        # Method 1: Try registry_tools if available
-        try:
-            # Try to import registry_tools using importlib for safer import
-            import importlib
-            try:
-                registry_tools_module = importlib.import_module('src.registry.registry_tools')
-                # Check if it has register_function attribute
-                if hasattr(registry_tools_module, 'register_function'):
-                    register_fn = getattr(registry_tools_module, 'register_function')
-                    
-                    # Register submit_feedback
-                    register_fn(
-                        func=submit_feedback,
-                        name="submit_feedback",
-                        description="Submit feedback about a function or the registry system",
-                        parameters={
-                            "feedback_type": {"type": "str", "description": "Type of feedback", "required": True},
-                            "content": {"type": "str", "description": "Feedback content", "required": True},
-                            "function_name": {"type": "str", "description": "Function name", "required": False},
-                            "severity": {"type": "str", "description": "Severity level", "required": False},
-                            "context": {"type": "object", "description": "Additional context", "required": False},
-                            "agent_id": {"type": "str", "description": "Agent ID", "required": False}
-                        },
-                        namespace="feedback"
-                    )
-                    
-                    # Register other functions
-                    register_fn(
-                        func=get_function_suggestions,
-                        name="get_function_suggestions",
-                        description="Get function improvement suggestions",
-                        parameters={"function_name": {"type": "str", "description": "Function name", "required": True}},
-                        namespace="feedback"
-                    )
-                    
-                    register_fn(
-                        func=get_optimization_recommendations,
-                        name="get_optimization_recommendations",
-                        description="Get optimization recommendations",
-                        parameters={},
-                        namespace="feedback"
-                    )
-                    
-                    register_fn(
-                        func=get_feedback_summary,
-                        name="get_feedback_summary",
-                        description="Get feedback summary",
-                        parameters={},
-                        namespace="feedback"
-                    )
-                    
-                    registered = True
-                    logger.info("Feedback mechanism tools registered via registry_tools")
-            except (ImportError, AttributeError):
-                pass
-        except Exception as e:
-            logger.info(f"Could not register using registry_tools: {str(e)}")
-        
-        # Method 2: Try registry_manager if available
-        if not registered:
-            try:
-                # Import using importlib
-                import importlib
-                try:
-                    registry_manager_module = importlib.import_module('src.registry.registry_manager')
-                    
-                    # Check if register_function exists
-                    if hasattr(registry_manager_module, 'register_function'):
-                        reg_func = getattr(registry_manager_module, 'register_function')
-                        
-                        # Register all tools using full parameter lists to avoid namespace duplication
-                        reg_func(
-                            func=submit_feedback,
-                            name="submit_feedback",
-                            description="Submit feedback about a function or the registry system",
-                            parameters={
-                                "feedback_type": {"type": "str", "description": "Type of feedback", "required": True},
-                                "content": {"type": "str", "description": "Feedback content", "required": True},
-                                "function_name": {"type": "str", "description": "Function name", "required": False},
-                                "severity": {"type": "str", "description": "Severity level", "required": False},
-                                "context": {"type": "object", "description": "Additional context", "required": False},
-                                "agent_id": {"type": "str", "description": "Agent ID", "required": False}
-                            },
-                            namespace="feedback"
-                        )
-                        
-                        reg_func(
-                            func=get_function_suggestions,
-                            name="get_function_suggestions",
-                            description="Get function improvement suggestions",
-                            parameters={"function_name": {"type": "str", "description": "Function name", "required": True}},
-                            namespace="feedback"
-                        )
-                        
-                        reg_func(
-                            func=get_optimization_recommendations,
-                            name="get_optimization_recommendations",
-                            description="Get optimization recommendations",
-                            parameters={},
-                            namespace="feedback"
-                        )
-                        
-                        reg_func(
-                            func=get_feedback_summary,
-                            name="get_feedback_summary",
-                            description="Get feedback summary",
-                            parameters={},
-                            namespace="feedback"
-                        )
-                        
-                        registered = True
-                        logger.info("Feedback mechanism tools registered via registry_manager")
-                except (ImportError, AttributeError):
-                    pass
-            except Exception as e:
-                logger.info(f"Could not register using registry_manager: {str(e)}")
-        
-        # Method 3: Try basic registry methods as a last resort
-        if not registered:
-            # Just check if registry has any register method we can try
-            register_methods = [attr for attr in dir(registry) if "register" in attr.lower()]
-            
-            if register_methods:
-                try:
-                    # Choose the first available register method
-                    register_method = getattr(registry, register_methods[0])
-                    
-                    # Try with minimal arguments
-                    register_method(submit_feedback, "submit_feedback")
-                    register_method(get_function_suggestions, "get_function_suggestions")
-                    register_method(get_optimization_recommendations, "get_optimization_recommendations")
-                    register_method(get_feedback_summary, "get_feedback_summary")
-                    
-                    registered = True
-                    logger.info(f"Feedback mechanism tools registered via {register_methods[0]}")
-                except Exception as e:
-                    logger.error(f"Error registering with {register_methods[0]}: {str(e)}")
-        
-        if registered:
-            logger.info("Feedback mechanism tools registered successfully")
-        else:
-            logger.error("Failed to register feedback mechanism tools - no registration method available")
-            
-    except Exception as e:
-        logger.error(f"Error registering feedback mechanism tools: {str(e)}") 
+    # The functions are now directly registered via decorators
+    # This function is kept for backward compatibility
+    logger.info("Feedback mechanism tools already registered via decorators")
+    return
+
+# The rest of the old register_feedback_mechanism_tools function has been removed
+# as it's no longer needed due to direct registration with decorators 

@@ -1,1 +1,0 @@
-{  "project_name": "mcp-vibe",  "client_id": "default_user",  "timestamp": "2025-04-07T14:28:31.497790",  "neo4j": {    "uri": "bolt://localhost:7687",    "username": "neo4j",    "password": "P@ssW0rd2025!",    "database": "neo4j"  },  "embeddings": {    "provider": "none",    "model": null,    "enabled": false  }}

@@ -16,8 +16,9 @@ from pydantic import BaseModel, Field, ConfigDict
 from src.graph_memory import GraphMemoryManager
 from src.logger import LogLevel, get_logger
 from src.utils import dict_to_json, dump_neo4j_nodes
-from src.tools import register_all_tools
+from src.tools import register_all_tools, register_consolidated_tools, register_essential_tools
 from src.session_manager import SessionManager
+from src.registry import initialize_registry
 
 # Initialize logger
 logger = get_logger()
@@ -473,12 +474,6 @@ def get_client_manager(client_id=None):
         # Fall back to a temporary manager if something goes wrong
         return GraphMemoryManager(logger)
 
-# Register all memory tools with client-specific manager handling
-# from src.tools import register_core_tools
-# from src.tools import register_lesson_tools
-# from src.tools import register_project_tools
-# from src.tools import register_config_tools
-
 # Custom registration that uses client-specific managers
 def register_all_tools_with_isolation(server):
     """Register all tools with client isolation."""
@@ -489,8 +484,31 @@ def register_all_tools_with_isolation(server):
     # register_config_tools(server, get_client_manager)
     register_all_tools(server, get_client_manager)
 
-# Register tools with client isolation
-register_all_tools_with_isolation(server)
+# Custom registration that uses client-specific managers with consolidated tools
+def register_consolidated_tools_with_isolation(server):
+    """Register consolidated tools with client isolation."""
+    # This uses the category-based approach that significantly reduces the number of tools
+    register_consolidated_tools(server, get_client_manager)
+
+# Custom registration that uses client-specific managers with essential tools only
+def register_essential_tools_with_isolation(server):
+    """Register only essential registry tools with client isolation."""
+    # First, ensure all functions are registered with the registry
+    # but don't expose them as tools yet
+    initialize_registry()
+    
+    # Then, only expose the essential tools as the interface
+    register_essential_tools(server, get_client_manager)
+    
+    logger.info("Registered essential registry tools with function registry initialized")
+
+# Register tools with client isolation - uncomment the one you want to use
+# Using only essential registry tools (minimum possible tools)
+register_essential_tools_with_isolation(server)
+# Using consolidated tools to reduce the number of exposed tools (preferred for IDEs with moderate limits)
+# register_consolidated_tools_with_isolation(server)
+# Using all individual tools (results in many exposed tools)
+# register_all_tools_with_isolation(server)
 
 async def run_server():
     """Run the MCP server with the configured transport."""

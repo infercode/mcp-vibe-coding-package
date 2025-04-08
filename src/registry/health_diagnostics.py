@@ -17,7 +17,7 @@ from typing import Dict, List, Any, Optional, Union, Callable, Tuple
 from datetime import datetime, timedelta
 from enum import Enum
 
-from src.registry.registry_manager import get_registry
+from src.registry.registry_manager import get_registry, register_function
 from src.registry.function_models import FunctionResult
 from src.logger import get_logger
 
@@ -1005,6 +1005,7 @@ class SelfHealer:
 
 # Tool functions for health and diagnostics
 
+@register_function("health", "check_system_health")
 async def check_system_health(component: Optional[str] = None) -> FunctionResult:
     """
     Check the health of the Function Registry system.
@@ -1036,6 +1037,7 @@ async def check_system_health(component: Optional[str] = None) -> FunctionResult
             error_details={"details": traceback.format_exc()}
         )
 
+@register_function("health", "run_system_diagnostic")
 async def run_system_diagnostic(component: Optional[str] = None) -> FunctionResult:
     """
     Run in-depth diagnostic on the Function Registry system.
@@ -1067,6 +1069,7 @@ async def run_system_diagnostic(component: Optional[str] = None) -> FunctionResu
             error_details={"details": traceback.format_exc()}
         )
 
+@register_function("health", "heal_system")
 async def heal_system(component: Optional[str] = None) -> FunctionResult:
     """
     Attempt to heal the Function Registry system.
@@ -1100,168 +1103,10 @@ async def heal_system(component: Optional[str] = None) -> FunctionResult:
 
 def register_health_diagnostics_tools():
     """Register health and diagnostics tools with the function registry."""
-    try:
-        # Import registry manager
-        try:
-            from src.registry.registry_manager import get_registry
-            registry = get_registry()
-        except ImportError:
-            logger.info("Registry manager not available")
-            registry = None
-        
-        if not registry:
-            logger.info("Registry not available, health diagnostics tools not registered")
-            return
-            
-        # Flag to track registration success
-        registered = False
-        
-        # Try to import registry_tools but don't assume register_function exists
-        try:
-            import importlib
-            registry_tools = importlib.import_module('src.registry.registry_tools')
-            
-            # Check if register_function exists in registry_tools
-            if hasattr(registry_tools, 'register_function'):
-                # Register functions using registry_tools
-                registry_tools.register_function(
-                    func=check_system_health,
-                    name="check_system_health", 
-                    description="Check the health of the Function Registry system",
-                    parameters={
-                        "component": {
-                            "type": "str", 
-                            "description": "Optional component name to check specifically",
-                            "required": False
-                        }
-                    },
-                    namespace="health"
-                )
-                
-                registry_tools.register_function(
-                    func=run_system_diagnostic,
-                    name="run_system_diagnostic",
-                    description="Run in-depth diagnostic on the Function Registry system",
-                    parameters={
-                        "component": {
-                            "type": "str",
-                            "description": "Optional component name to diagnose specifically",
-                            "required": False
-                        }
-                    },
-                    namespace="health"
-                )
-                
-                registry_tools.register_function(
-                    func=heal_system,
-                    name="heal_system",
-                    description="Attempt to heal the Function Registry system",
-                    parameters={
-                        "component": {
-                            "type": "str",
-                            "description": "Optional component name to heal specifically",
-                            "required": False
-                        }
-                    },
-                    namespace="health"
-                )
-                
-                registered = True
-                logger.info("Health and diagnostics tools registered via registry_tools")
-            
-        except (ImportError, AttributeError, Exception) as e:
-            logger.info(f"Could not register using registry_tools: {str(e)}")
-            
-        # Try to register via registry_manager.register_function as a backup
-        if not registered:
-            try:
-                # Import directly to avoid potential naming conflicts
-                import importlib
-                registry_manager = importlib.import_module('src.registry.registry_manager')
-                
-                # Check if register_function exists in registry_manager
-                if hasattr(registry_manager, 'register_function'):
-                    # Register functions using registry_manager.register_function
-                    # Pass parameters correctly without duplicating namespace
-                    registry_manager.register_function(
-                        func=check_system_health,
-                        name="check_system_health",
-                        description="Check the health of the Function Registry system",
-                        parameters={
-                            "component": {
-                                "type": "str", 
-                                "description": "Optional component name to check specifically",
-                                "required": False
-                            }
-                        },
-                        namespace="health"
-                    )
-                    
-                    registry_manager.register_function(
-                        func=run_system_diagnostic,
-                        name="run_system_diagnostic",
-                        description="Run in-depth diagnostic on the Function Registry system",
-                        parameters={
-                            "component": {
-                                "type": "str",
-                                "description": "Optional component name to diagnose specifically",
-                                "required": False
-                            }
-                        },
-                        namespace="health"
-                    )
-                    
-                    registry_manager.register_function(
-                        func=heal_system,
-                        name="heal_system",
-                        description="Attempt to heal the Function Registry system",
-                        parameters={
-                            "component": {
-                                "type": "str",
-                                "description": "Optional component name to heal specifically",
-                                "required": False
-                            }
-                        },
-                        namespace="health"
-                    )
-                    
-                    registered = True
-                    logger.info("Health and diagnostics tools registered via registry_manager")
-            
-            except (ImportError, AttributeError, Exception) as e:
-                logger.info(f"Could not register using registry_manager: {str(e)}")
-        
-        # Last resort: try to find a register method on the registry object
-        if not registered and registry:
-            # Look for any register-like methods on registry
-            register_methods = []
-            for method_name in dir(registry):
-                if 'register' in method_name.lower() and callable(getattr(registry, method_name)):
-                    register_methods.append(method_name)
-            
-            if register_methods:
-                # Store method name at this level to ensure it's always defined
-                method_name = register_methods[0]
-                try:
-                    # Try the first register method
-                    register_method = getattr(registry, method_name)
-                    
-                    # Attempt with minimal arguments that most registry methods should accept
-                    register_method(check_system_health, "check_system_health")
-                    register_method(run_system_diagnostic, "run_system_diagnostic")
-                    register_method(heal_system, "heal_system")
-                    
-                    registered = True
-                    logger.info(f"Health and diagnostics tools registered via registry.{method_name}")
-                
-                except Exception as e:
-                    logger.info(f"Error using registry.{method_name}: {str(e)}")
-        
-        # Report registration status
-        if registered:
-            logger.info("Health and diagnostics tools registered successfully")
-        else:
-            logger.error("Failed to register health diagnostics tools - no registration method available")
-            
-    except Exception as e:
-        logger.error(f"Error registering health diagnostics tools: {str(e)}") 
+    # The functions are now directly registered via decorators
+    # This function is kept for backward compatibility
+    logger.info("Health diagnostics tools already registered via decorators")
+    return
+
+# The rest of the old register_health_diagnostics_tools function has been removed
+# as it's no longer needed due to direct registration with decorators 
