@@ -14,7 +14,7 @@ from typing import Dict, List, Any, Optional, Union, cast
 
 from src.registry.registry_manager import get_registry, FunctionRegistry
 from src.registry.function_models import FunctionResult, FunctionParameters, FunctionMetadata
-from src.registry.parameter_helper import ParameterHelper
+from src.registry.parameter_helper import ParameterHelper, ValidationError as ParameterValidationError
 from src.registry.migration_framework import migrate_all_tools, MigrationManager
 from src.registry.ide_integration import generate_ide_optimized_tools, export_ide_optimized_tools
 from src.registry.documentation_generator import generate_documentation, export_documentation_markdown, export_documentation_json
@@ -66,6 +66,45 @@ except ImportError:
 
 # Initialize logger
 logger = logging.getLogger(__name__)
+
+# Helper function for safe conversion of validation errors
+def _format_validation_error(error: Any) -> Dict[str, str]:
+    """Safely format a validation error object to a dictionary, regardless of its type."""
+    try:
+        # Handle parameter_helper.ValidationError
+        if isinstance(error, ParameterValidationError) and hasattr(error, "to_dict"):
+            return error.to_dict()
+        
+        # Create a basic error dict with safe attribute access
+        result = {}
+        
+        # Always include param_name
+        result["param_name"] = getattr(error, "param_name", "unknown")
+            
+        # Try to get error message
+        if hasattr(error, "error_message"):
+            result["message"] = str(getattr(error, "error_message"))
+        elif hasattr(error, "message"):  # type: ignore
+            result["message"] = str(getattr(error, "message"))  # type: ignore
+        else:
+            result["message"] = str(error)
+            
+        # Try to get error code/type
+        if hasattr(error, "error_code"):
+            result["code"] = str(getattr(error, "error_code"))
+        elif hasattr(error, "error_type"):  # type: ignore
+            result["code"] = str(getattr(error, "error_type"))  # type: ignore
+        else:
+            result["code"] = "validation_error"
+            
+        return result
+    except Exception:
+        # Last resort fallback
+        return {
+            "param_name": "unknown",
+            "message": str(error),
+            "code": "validation_error"
+        }
 
 def register_registry_tools(server, get_client_manager=None):
     """
@@ -127,15 +166,15 @@ def register_registry_tools(server, get_client_manager=None):
                     converted_params, validation_errors = validate_and_convert(metadata, params)
                     
                     if validation_errors:
-                        error_details = {
-                            "validation_errors": [error.to_dict() for error in validation_errors]
-                        }
+                        # Format errors safely
+                        formatted_errors = [_format_validation_error(err) for err in validation_errors]
+                        
                         error_result = FunctionResult(
                             status="error",
                             message=f"Parameter validation failed for function '{function_name}'",
                             data=None,
                             error_code="PARAMETER_VALIDATION_ERROR",
-                            error_details=error_details
+                            error_details={"validation_errors": formatted_errors}
                         )
                         return error_result.to_json()
                     
@@ -145,15 +184,15 @@ def register_registry_tools(server, get_client_manager=None):
                     # Fall back to basic parameter handling
                     validation_errors = ParameterHelper.validate_parameters(metadata, parameters)
                     if validation_errors:
-                        error_details = {
-                            "validation_errors": [error.to_dict() for error in validation_errors]
-                        }
+                        # Format errors safely
+                        formatted_errors = [_format_validation_error(err) for err in validation_errors]
+                        
                         error_result = FunctionResult(
                             status="error",
                             message=f"Parameter validation failed for function '{function_name}'",
                             data=None,
                             error_code="PARAMETER_VALIDATION_ERROR",
-                            error_details=error_details
+                            error_details={"validation_errors": formatted_errors}
                         )
                         return error_result.to_json()
                     
@@ -207,8 +246,9 @@ def register_registry_tools(server, get_client_manager=None):
                 
             # Convert to dictionary for better serialization
             result = {
-                "functions": [f.dict() for f in functions],
-                "count": len(functions)
+                "functions": [f.model_dump() for f in functions],
+                "count": len(functions),
+                "categories": list(registry.get_namespaces())
             }
             
             return json.dumps(result, indent=2)
@@ -239,7 +279,7 @@ def register_registry_tools(server, get_client_manager=None):
                     "function_name": function_name
                 })
                 
-            return json.dumps(metadata.dict(), indent=2)
+            return json.dumps(metadata.model_dump(), indent=2)
         except Exception as e:
             error_result = {
                 "error": str(e),

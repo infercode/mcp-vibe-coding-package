@@ -148,7 +148,7 @@ class CoreRegistryToolsManager:
                     
                 # Convert to dictionary for better serialization
                 result = {
-                    "functions": [f.dict() for f in functions],
+                    "functions": [f.model_dump() for f in functions],
                     "count": len(functions),
                     "categories": list(self.registry.get_namespaces())
                 }

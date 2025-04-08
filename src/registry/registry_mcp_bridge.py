@@ -194,11 +194,34 @@ def scan_and_register_existing_tools(server: Union[Server, FastMCP], registry: F
     if module_paths is None:
         module_paths = list(sys.modules.keys())
     
-    logger.info(f"Scanning for existing tools in {len(module_paths)} modules")
+    # Exclude problematic modules to avoid warnings and errors
+    excluded_module_prefixes = [
+        "openai._extras",        # Requires additional dependencies
+        "neo4j.graphql",         # Contains preview features
+        "neo4j.notifications",   # Contains preview features
+        "neo4j._graphql",        # Contains preview features (internal module)
+        "neo4j._async.graphql",  # Contains preview features (async version)
+        "neo4j.exceptions",      # May contain preview feature references
+    ]
+    
+    # Specific Neo4j preview features to skip
+    neo4j_preview_features = [
+        "GqlStatusObject",
+        "NotificationClassification",
+        "NotificationDisabledClassification"
+    ]
+    
+    # Filter out excluded modules
+    filtered_module_paths = []
+    for module_path in module_paths:
+        if not any(module_path.startswith(prefix) for prefix in excluded_module_prefixes):
+            filtered_module_paths.append(module_path)
+    
+    logger.info(f"Scanning for existing tools in {len(filtered_module_paths)} modules")
     
     tools_registered = 0
     
-    for module_name in module_paths:
+    for module_name in filtered_module_paths:
         try:
             module = sys.modules.get(module_name)
             if module is None:
@@ -206,22 +229,30 @@ def scan_and_register_existing_tools(server: Union[Server, FastMCP], registry: F
                 
             # Check if module has defined tools
             for name in dir(module):
-                obj = getattr(module, name)
-                
-                # Check if this is a function decorated with @server.tool()
-                if inspect.isfunction(obj) and hasattr(obj, "_is_tool"):
-                    # Check if this function uses our server (via checking _server attribute)
-                    if hasattr(obj, "_server") and getattr(obj, "_server") is server:
-                        # Extract metadata and register
-                        metadata = extract_function_metadata(obj)
-                        namespace = metadata['namespace']
-                        func_name = metadata['name']
-                        
-                        # Check if already registered
-                        if not registry.get_function_metadata(f"{namespace}.{func_name}"):
-                            register_function(namespace, func_name)(obj)
-                            tools_registered += 1
-                            logger.info(f"Registered existing tool: {obj.__module__}.{obj.__name__}")
+                # Skip Neo4j preview features
+                if name in neo4j_preview_features:
+                    continue
+                    
+                try:
+                    obj = getattr(module, name)
+                    
+                    # Check if this is a function decorated with @server.tool()
+                    if inspect.isfunction(obj) and hasattr(obj, "_is_tool"):
+                        # Check if this function uses our server (via checking _server attribute)
+                        if hasattr(obj, "_server") and getattr(obj, "_server") is server:
+                            # Extract metadata and register
+                            metadata = extract_function_metadata(obj)
+                            namespace = metadata['namespace']
+                            func_name = metadata['name']
+                            
+                            # Check if already registered
+                            if not registry.get_function_metadata(f"{namespace}.{func_name}"):
+                                register_function(namespace, func_name)(obj)
+                                tools_registered += 1
+                                logger.info(f"Registered existing tool: {obj.__module__}.{obj.__name__}")
+                except AttributeError:
+                    # Skip attributes that can't be accessed
+                    continue
         except Exception as e:
             logger.error(f"Error scanning module {module_name}: {str(e)}")
     
@@ -276,8 +307,20 @@ def register_tools_from_modules(registry: FunctionRegistry, package_paths: Optio
             "src.registry.tools"
         ]
     
+    # Modules to exclude from registration due to warnings or dependencies
+    excluded_module_prefixes = [
+        "openai._extras",  # Requires additional dependencies
+        "neo4j.graphql",   # Contains preview features
+        "neo4j.notifications",  # Contains preview features
+    ]
+    
     total_registered = 0
     for package_path in package_paths:
+        # Skip excluded packages
+        if any(package_path.startswith(prefix) for prefix in excluded_module_prefixes):
+            logger.info(f"Skipping excluded package: {package_path}")
+            continue
+            
         try:
             logger.info(f"Importing tools from {package_path}")
             
@@ -287,6 +330,12 @@ def register_tools_from_modules(registry: FunctionRegistry, package_paths: Optio
             # Import each submodule
             for submodule in submodules:
                 full_module_name = f"{package_path}.{submodule}"
+                
+                # Skip excluded modules
+                if any(full_module_name.startswith(prefix) for prefix in excluded_module_prefixes):
+                    logger.info(f"Skipping excluded module: {full_module_name}")
+                    continue
+                    
                 try:
                     logger.info(f"Importing module {full_module_name}")
                     importlib.import_module(full_module_name)
@@ -362,6 +411,13 @@ def scan_and_register_dir(directory_path, package_prefix="src", skip_init=True):
         "errors": 0
     }
     
+    # Modules to exclude from registration due to warnings or dependencies
+    excluded_module_prefixes = [
+        "openai._extras",  # Requires additional dependencies
+        "neo4j.graphql",   # Contains preview features
+        "neo4j.notifications",  # Contains preview features
+    ]
+    
     registry = get_registry()
     
     # Walk through the directory
@@ -387,6 +443,11 @@ def scan_and_register_dir(directory_path, package_prefix="src", skip_init=True):
                 rel_path = os.path.relpath(file_path, os.path.dirname(directory_path))
                 module_name = os.path.splitext(rel_path)[0].replace(os.sep, ".")
                 full_module_name = f"{package_prefix}.{module_name}"
+                
+                # Skip excluded modules
+                if any(full_module_name.startswith(prefix) for prefix in excluded_module_prefixes):
+                    logger.info(f"Skipping excluded module: {full_module_name}")
+                    continue
                 
                 # Try to import the module
                 spec = importlib.util.spec_from_file_location(full_module_name, file_path)

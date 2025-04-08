@@ -127,7 +127,10 @@ class FunctionRegistry:
             else:
                 # Convert to dict if possible
                 try:
-                    if hasattr(result, "dict") and callable(result.dict):
+                    if hasattr(result, "model_dump") and callable(result.model_dump):
+                        result_dict = result.model_dump()
+                    elif hasattr(result, "dict") and callable(result.dict):
+                        # Fallback for older Pydantic models
                         result_dict = result.dict()
                     elif hasattr(result, "__dict__"):
                         result_dict = result.__dict__
@@ -139,7 +142,7 @@ class FunctionRegistry:
                         data=result_dict
                     )
                 except Exception as e:
-                    logger.warning(f"Could not convert result to dict: {str(e)}")
+                    logger.error(f"Could not convert result to dict: {str(e)}")
                     return FunctionResult.success(
                         message=f"Successfully executed {full_name}",
                         data={"result": str(result)}

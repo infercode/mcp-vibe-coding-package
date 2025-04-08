@@ -62,8 +62,8 @@ class FunctionResult(BaseModel):
         )
     
     def to_json(self) -> str:
-        """Convert result to JSON string."""
-        return json.dumps(self.dict(), indent=2)
+        """Convert to JSON string."""
+        return json.dumps(self.model_dump(), indent=2)
 
 
 class FunctionMetadata(BaseModel):
