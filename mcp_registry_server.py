@@ -242,11 +242,11 @@ try:
     # Create the MCP server with only essential tools
     server = FastMCP(
         name="MCP Registry Server",
-        description="Registry-MCP bridge with automatic function registration",
+        description="Registry-MCP bridge with automatic tool registration",
         version="1.0.0",
         notification_options=NotificationOptions(),
         lifespan=server_lifespan,
-        instructions="Use execute_function, list_available_functions, and list_function_categories to access all functionality"
+        instructions="Use execute_tool, list_available_tools, and list_tool_categories to access all functionality"
     )
 
     logger.info("MCP Server created with only essential tools exposed")
@@ -256,21 +256,21 @@ try:
     server, registry = enhance_server(server, registry)
 
     # Define the 3 essential tools
-    # Tool 1: execute_function
+    # Tool 1: execute_tool
     @server.tool()  # type: ignore
-    async def execute_function(function_name: str, parameters = None) -> str:
+    async def execute_tool(function_name: str, parameters = None) -> str:
         """
-        Execute any registered function by name with provided parameters.
+        Execute any registered tool by name with provided parameters.
         
-        This tool provides a unified interface to all registered functions, allowing
+        This tool provides a unified interface to all registered tools, allowing
         access to the full range of functionality through a single entry point.
         
         Args:
-            function_name: Full name of function (e.g., 'memory.create_entity')
-            parameters: Parameters to pass to the function (can be JSON string, dict, or None)
+            function_name: Full name of tool (e.g., 'memory.create_entity')
+            parameters: Parameters to pass to the tool (can be JSON string, dict, or None)
             
         Returns:
-            JSON string with the function result
+            JSON string with the tool result
         """
         # Get the registry instance
         registry = get_registry()
@@ -342,7 +342,7 @@ try:
                     }
                     error_result = FunctionResult(
                         status="error",
-                        message=f"Parameter validation failed for function '{function_name}'",
+                        message=f"Parameter validation failed for tool '{function_name}'",
                         data=None,
                         error_code="PARAMETER_VALIDATION_ERROR",
                         error_details=error_details
@@ -362,10 +362,10 @@ try:
                 )
                 return error_result.to_json()
             
-            # Execute the function with the parsed parameters (not as 'parameters' kwarg)
+            # Execute the tool with the parsed parameters (not as 'parameters' kwarg)
             result = await registry.execute(function_name, **parsed_params)
             
-            # Instead of returning the wrapped result, return just the actual function output
+            # Instead of returning the wrapped result, return just the actual tool output
             if hasattr(result, 'data') and result.data is not None and 'result' in result.data:
                 # If there's a 'result' field in the data, return just that
                 return result.data['result']
@@ -376,29 +376,29 @@ try:
                 # Otherwise, return the full result as JSON
                 return result.to_json()
         except Exception as e:
-            logger.error(f"Error executing function: {str(e)}")
+            logger.error(f"Error executing tool: {str(e)}")
             error_result = FunctionResult(
                 status="error",
                 data=None,
-                message=f"Error executing function: {str(e)}",
-                error_code="FUNCTION_EXECUTION_ERROR",
+                message=f"Error executing tool: {str(e)}",
+                error_code="TOOL_EXECUTION_ERROR",
                 error_details={"exception": str(e)}
             )
             return error_result.to_json()
 
-    # Tool 2: list_available_functions
+    # Tool 2: list_available_tools
     @server.tool()  # type: ignore
-    async def list_available_functions(category = None) -> str:
+    async def list_available_tools(category = None) -> str:
         """
-        List all available functions, optionally filtered by category.
+        List all available tools, optionally filtered by category.
         
-        This tool allows discovery of all registered functions and their documentation.
+        This tool allows discovery of all registered tools and their documentation.
         
         Args:
             category: Optional category to filter by
             
         Returns:
-            JSON string with function metadata
+            JSON string with tool metadata
         """
         # Get the registry instance
         registry = get_registry()
@@ -424,11 +424,11 @@ try:
             }
             return json.dumps(error_result)
 
-    # Tool 3: list_function_categories
+    # Tool 3: list_tool_categories
     @server.tool()  # type: ignore
-    async def list_function_categories() -> str:
+    async def list_tool_categories() -> str:
         """
-        List all available function categories/namespaces.
+        List all available tool categories/namespaces.
         
         Returns:
             JSON string with category information
