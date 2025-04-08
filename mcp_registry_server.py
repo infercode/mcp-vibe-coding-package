@@ -258,7 +258,7 @@ try:
     # Define the 3 essential tools
     # Tool 1: execute_function
     @server.tool()  # type: ignore
-    async def execute_function(function_name: str, parameters: Optional[str] = None) -> str:
+    async def execute_function(function_name: str, parameters = None) -> str:
         """
         Execute any registered function by name with provided parameters.
         
@@ -267,7 +267,7 @@ try:
         
         Args:
             function_name: Full name of function (e.g., 'memory.create_entity')
-            parameters: JSON string with parameters to pass to the function
+            parameters: Parameters to pass to the function (can be JSON string, dict, or None)
             
         Returns:
             JSON string with the function result
@@ -302,28 +302,33 @@ try:
             
             # Parse parameters from JSON string if provided
             parsed_params = {}
-            if parameters:
+            if parameters is not None:
                 try:
+                    # If parameters is a string, try to parse it as JSON
                     if isinstance(parameters, str):
-                        parsed_params = json.loads(parameters)
+                        # Check if it's a JSON string
+                        try:
+                            parsed_params = json.loads(parameters)
+                            logger.debug(f"Parsed parameters from JSON string: {parsed_params}")
+                        except json.JSONDecodeError:
+                            # Not JSON, use as-is for simple string parameters
+                            logger.debug(f"Using parameters as plain string: {parameters}")
+                            parsed_params = {"value": parameters}
                     elif isinstance(parameters, dict):
+                        # Already a dict, use directly
                         parsed_params = parameters
+                        logger.debug(f"Using parameters as dict: {parsed_params}")
                     else:
-                        error_result = FunctionResult(
-                            status="error",
-                            data=None,
-                            message=f"Invalid parameters format: {type(parameters)}",
-                            error_code="INVALID_PARAMETERS",
-                            error_details={"expected": "JSON string or dictionary"}
-                        )
-                        return error_result.to_json()
-                except json.JSONDecodeError as e:
+                        # Other types (like None) - use empty dict
+                        logger.debug(f"Using empty params for parameters type: {type(parameters)}")
+                except Exception as e:
+                    logger.error(f"Error parsing parameters: {str(e)}")
                     error_result = FunctionResult(
                         status="error",
                         data=None,
-                        message=f"Invalid JSON in parameters: {str(e)}",
-                        error_code="INVALID_JSON",
-                        error_details={"json_error": str(e)}
+                        message=f"Error parsing parameters: {str(e)}",
+                        error_code="PARAMETER_PARSING_ERROR",
+                        error_details={"exception": str(e)}
                     )
                     return error_result.to_json()
             
