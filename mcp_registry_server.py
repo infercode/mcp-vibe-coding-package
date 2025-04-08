@@ -364,7 +364,17 @@ try:
             
             # Execute the function with the parsed parameters (not as 'parameters' kwarg)
             result = await registry.execute(function_name, **parsed_params)
-            return result.to_json()
+            
+            # Instead of returning the wrapped result, return just the actual function output
+            if hasattr(result, 'data') and result.data is not None and 'result' in result.data:
+                # If there's a 'result' field in the data, return just that
+                return result.data['result']
+            elif hasattr(result, 'data') and result.data is not None:
+                # If there's data but no 'result' field, return the data
+                return json.dumps(result.data)
+            else:
+                # Otherwise, return the full result as JSON
+                return result.to_json()
         except Exception as e:
             logger.error(f"Error executing function: {str(e)}")
             error_result = FunctionResult(
