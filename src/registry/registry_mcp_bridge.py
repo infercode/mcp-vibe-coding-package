@@ -3,7 +3,7 @@
 Registry MCP Bridge
 
 This module provides a bridge between the MCP server's tool registration
-and the Function Registry Pattern, ensuring all tools are automatically
+and the Tool Registry Pattern, ensuring all tools are automatically
 registered with the registry with complete metadata.
 """
 
@@ -20,8 +20,8 @@ import glob
 from mcp.server.fastmcp import FastMCP
 from mcp.server.lowlevel import Server
 
-from src.registry.registry_manager import get_registry, register_function, FunctionRegistry
-from src.registry.function_models import FunctionMetadata, FunctionParameters
+from src.registry.registry_manager import get_registry, register_tool, ToolRegistry
+from src.registry.function_models import ToolMetadata, ToolParameters
 from src.registry.docstring_parser import DocstringParser, parse_docstring
 from src.logger import get_logger
 
@@ -37,9 +37,9 @@ class EnhancedServer(Server):
     """Type hint for the Server with known tool attribute."""
     tool: Callable
 
-def extract_function_metadata(func: Callable) -> Dict[str, Any]:
+def extract_tool_metadata(func: Callable) -> Dict[str, Any]:
     """
-    Extract rich metadata from a function, including docstring, parameters, and return type.
+    Extract rich metadata from a tool, including docstring, parameters, and return type.
     
     Uses the DocstringParser to extract detailed parameter information, including nested
     dictionary structures, descriptions, and validation rules.
@@ -48,7 +48,7 @@ def extract_function_metadata(func: Callable) -> Dict[str, Any]:
         func: The function to extract metadata from
         
     Returns:
-        A dictionary containing complete function metadata
+        A dictionary containing complete tool metadata
     """
     # Get function module and name
     module_name = func.__module__
@@ -112,24 +112,24 @@ def extract_function_metadata(func: Callable) -> Dict[str, Any]:
     return metadata
 
 def register_tool_with_registry(func: Callable, metadata: Dict[str, Any]) -> None:
-    """Register a function with the Function Registry Pattern."""
+    """Register a tool with the Tool Registry Pattern."""
     qualified_name = metadata['qualified_name']
     namespace = metadata['namespace']
     func_name = metadata['name']
     
-    # Check if the function is already registered
-    if not registry.get_function_metadata(qualified_name):
-        # Register the function with the registry
-        register_function(namespace, func_name)(func)
-        logger.debug(f"Registered function {qualified_name} with the registry")
+    # Check if the tool is already registered
+    if not registry.get_tool_metadata(qualified_name):
+        # Register the tool with the registry
+        register_tool(namespace, func_name)(func)
+        logger.debug(f"Registered tool {qualified_name} with the registry")
     else:
-        logger.debug(f"Function {qualified_name} already registered with the registry")
+        logger.debug(f"Tool {qualified_name} already registered with the registry")
 
-def enhance_server(server: Union[Server, FastMCP], registry: Optional[FunctionRegistry] = None) -> Tuple[Union[Server, FastMCP], FunctionRegistry]:
-    """Enhance an MCP server with the Function Registry Pattern.
+def enhance_server(server: Union[Server, FastMCP], registry: Optional[ToolRegistry] = None) -> Tuple[Union[Server, FastMCP], ToolRegistry]:
+    """Enhance an MCP server with the Tool Registry Pattern.
     
     This replaces the server's tool decorator with an enhanced version that registers
-    all tools with the Function Registry Pattern.
+    all tools with the Tool Registry Pattern.
     
     Args:
         server: The MCP server to enhance
@@ -139,7 +139,7 @@ def enhance_server(server: Union[Server, FastMCP], registry: Optional[FunctionRe
         Tuple of (enhanced server, registry)
     """
     if registry is None:
-        registry = FunctionRegistry()
+        registry = ToolRegistry()
     
     # Cast server to enhanced type for type checking
     enhanced_server = cast(EnhancedServer, server)
@@ -152,11 +152,11 @@ def enhance_server(server: Union[Server, FastMCP], registry: Optional[FunctionRe
         # Get the original decorator
         original_decorator = original_tool_decorator(*args, **kwargs)
         
-        # Return a wrapper that registers the function with the registry
+        # Return a wrapper that registers the tool with the registry
         def wrapper(func):
             # Register with registry before decorating with original decorator
-            metadata = extract_function_metadata(func)
-            register_function(metadata['namespace'], metadata['name'])(func)
+            metadata = extract_tool_metadata(func)
+            register_tool(metadata['namespace'], metadata['name'])(func)
             
             # Apply original decorator
             return original_decorator(func)
@@ -177,7 +177,7 @@ def enhance_server(server: Union[Server, FastMCP], registry: Optional[FunctionRe
     
     return server, registry
 
-def scan_and_register_existing_tools(server: Union[Server, FastMCP], registry: FunctionRegistry, 
+def scan_and_register_existing_tools(server: Union[Server, FastMCP], registry: ToolRegistry, 
                                      module_paths: Optional[List[str]] = None) -> int:
     """
     Scan for and register existing tools that were already decorated with @server.tool()
@@ -185,7 +185,7 @@ def scan_and_register_existing_tools(server: Union[Server, FastMCP], registry: F
     
     Args:
         server: The MCP server containing the tools
-        registry: The function registry to register tools with
+        registry: The tool registry to register tools with
         module_paths: Optional module paths to scan. If None, all modules are scanned.
         
     Returns:
@@ -241,13 +241,13 @@ def scan_and_register_existing_tools(server: Union[Server, FastMCP], registry: F
                         # Check if this function uses our server (via checking _server attribute)
                         if hasattr(obj, "_server") and getattr(obj, "_server") is server:
                             # Extract metadata and register
-                            metadata = extract_function_metadata(obj)
+                            metadata = extract_tool_metadata(obj)
                             namespace = metadata['namespace']
                             func_name = metadata['name']
                             
                             # Check if already registered
-                            if not registry.get_function_metadata(f"{namespace}.{func_name}"):
-                                register_function(namespace, func_name)(obj)
+                            if not registry.get_tool_metadata(f"{namespace}.{func_name}"):
+                                register_tool(namespace, func_name)(obj)
                                 tools_registered += 1
                                 logger.info(f"Registered existing tool: {obj.__module__}.{obj.__name__}")
                 except AttributeError:
@@ -291,11 +291,11 @@ def find_submodules(package_path: str) -> List[str]:
         logger.error(f"Error finding submodules for {package_path}: {str(e)}")
         return []
 
-def register_tools_from_modules(registry: FunctionRegistry, package_paths: Optional[List[str]] = None) -> int:
+def register_tools_from_modules(registry: ToolRegistry, package_paths: Optional[List[str]] = None) -> int:
     """Import and register all tool modules from the specified packages.
     
     Args:
-        registry: The function registry to register tools with
+        registry: The tool registry to register tools with
         package_paths: List of package paths to import from. If None, defaults to common tool paths.
         
     Returns:
@@ -361,25 +361,23 @@ def list_registered_tools(server: FastMCP) -> List[Dict[str, str]]:
     return []
 
 def get_registry_stats() -> Dict[str, Any]:
-    """
-    Get statistics about the registry after bridge integration.
-    
-    Returns:
-        Dictionary with registry statistics
-    """
+    """Get statistics about the registry."""
     registry = get_registry()
-    functions = registry.get_all_functions()
-    namespaces = registry.get_namespaces()
     
-    # Count functions per namespace
+    # Count functions by namespace
     namespace_counts = {}
-    for ns in namespaces:
-        ns_functions = registry.get_functions_by_namespace(ns)
-        namespace_counts[ns] = len(ns_functions)
+    for namespace in registry.get_namespaces():
+        # Changed from get_functions_by_namespace to get_tools_by_namespace
+        tools = registry.get_tools_by_namespace(namespace)
+        namespace_counts[namespace] = len(tools)
+    
+    # Get all functions
+    # Changed from get_all_functions to get_all_tools
+    all_tools = registry.get_all_tools()
     
     return {
-        "total_functions": len(functions),
-        "namespaces": list(namespaces),
+        "total_functions": len(all_tools),
+        "namespaces": list(registry.get_namespaces()),
         "namespace_counts": namespace_counts
     }
 
@@ -497,9 +495,9 @@ def scan_and_register_dir(directory_path, package_prefix="src", skip_init=True):
                                 full_name = f"{namespace}.{name}"
                                 
                                 # Check if already registered
-                                if registry.get_function_metadata(full_name) is None:
+                                if registry.get_tool_metadata(full_name) is None:
                                     try:
-                                        register_function(namespace, name)(obj)
+                                        register_tool(namespace, name)(obj)
                                         logger.info(f"Registered tool from directory scan: {full_name}")
                                         stats["tools_registered"] += 1
                                     except Exception as e:
@@ -579,7 +577,7 @@ def register_tool_modules(server=None):
                     
                     # Register the function with our registry
                     try:
-                        register_function(namespace, name)(func)
+                        register_tool(namespace, name)(func)
                         stats["tools_registered"] += 1
                         logger.info(f"Registered tool {namespace}.{name} with registry")
                     except Exception as e:

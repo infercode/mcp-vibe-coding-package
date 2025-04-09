@@ -937,7 +937,7 @@ class SelfHealer:
             if registry:
                 return {
                     "registry_reinitialized": True,
-                    "functions_available": len(registry.get_all_functions())
+                    "tools_available": len(registry.get_all_tools())
                 }
             else:
                 return {
@@ -1008,7 +1008,7 @@ class SelfHealer:
 @register_function("health", "check_system_health")
 async def check_system_health(component: Optional[str] = None) -> FunctionResult:
     """
-    Check the health of the Function Registry system.
+    Check the health of the Tool Registry system.
     
     Args:
         component: Optional component name to check specifically
@@ -1040,7 +1040,7 @@ async def check_system_health(component: Optional[str] = None) -> FunctionResult
 @register_function("health", "run_system_diagnostic")
 async def run_system_diagnostic(component: Optional[str] = None) -> FunctionResult:
     """
-    Run in-depth diagnostic on the Function Registry system.
+    Run in-depth diagnostic on the Tool Registry system.
     
     Args:
         component: Optional component name to diagnose specifically
@@ -1072,13 +1072,13 @@ async def run_system_diagnostic(component: Optional[str] = None) -> FunctionResu
 @register_function("health", "heal_system")
 async def heal_system(component: Optional[str] = None) -> FunctionResult:
     """
-    Attempt to heal the Function Registry system.
+    Attempt to heal the Tool Registry system.
     
     Args:
         component: Optional component name to heal specifically
         
     Returns:
-        Function result with healing results
+        Tool result with healing results
     """
     try:
         self_healer = SelfHealer()
@@ -1102,7 +1102,7 @@ async def heal_system(component: Optional[str] = None) -> FunctionResult:
         )
 
 def register_health_diagnostics_tools():
-    """Register health and diagnostics tools with the function registry."""
+    """Register health and diagnostics tools with the tools registry."""
     # The functions are now directly registered via decorators
     # This function is kept for backward compatibility
     logger.info("Health diagnostics tools already registered via decorators")

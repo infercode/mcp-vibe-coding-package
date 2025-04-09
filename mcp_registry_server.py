@@ -2,10 +2,10 @@
 """
 MCP Registry Server
 
-This server implements the Function Registry Pattern with automatic tool registration:
+This server implements the Tool Registry Pattern with automatic tool registration:
 - All tools are automatically registered with the registry via the registry-MCP bridge
 - Only exposes three essential registry tools to clients
-- Registry functions provide full access to all functionality internally
+- Registry tools provide full access to all functionality internally
 """
 
 import os
@@ -202,9 +202,9 @@ try:
                     namespace = namespace_parts[-1]
                 
                 # Register with the registry, NOT with the real server
-                from src.registry.registry_manager import register_function
+                from src.registry.registry_manager import register_tool
                 try:
-                    register_function(namespace, name)(func)
+                    register_tool(namespace, name)(func)
                     logger.info(f"Registered tool {namespace}.{name} with registry only")
                 except Exception as e:
                     logger.error(f"Error registering {name} with registry: {str(e)}")
@@ -221,7 +221,7 @@ try:
                 return decorator
 
     # Initialize the registry first
-    logger.info("Initializing Function Registry...")
+    logger.info("Initializing Tool Registry...")
     initialize_registry()
 
     # Register all tools with our registry using real implementations
@@ -239,6 +239,252 @@ try:
     tools_registered = len(mock_server.registered_tools)
     logger.info(f"Registration complete: {tools_registered} tools registered with registry")
 
+    # The MCP instructions for AI agents
+    MCP_INSTRUCTIONS = """
+        # Enhanced MCP Instructions for Graph Memory System
+        
+        **Use execute_tool to use the tools provided by the list_available_tools tool response, use the list_available_tools tool to discover what tools are available for use, and use the list_tool_categories to list the categories of tools available for use to access all functionality**
+
+        ## Core Memory Systems Overview
+
+        The MCP server provides two sophisticated memory systems that mirror human cognitive patterns:
+
+        1. **Lesson Memory** - For experiential knowledge and insights gained from successes, mistakes, and observations
+        2. **Project Memory** - For structured, hierarchical project knowledge organization
+
+        ## Human-Like Memory Usage Patterns
+
+        ### ⚡ General Principles
+        - Prioritize high-confidence memories when making critical decisions
+        - Leverage related memories through association, not just direct lookup
+        - Build knowledge incrementally, connecting new observations to existing memories
+        - Revise and update memories when you encounter contradicting information
+        - Record not just what was learned, but why it matters and how to apply it
+
+        ### 🧠 Lesson Memory Usage
+        - Begin sessions by searching existing lessons related to the current task
+        - Record important insights during the session, even if they seem minor
+        - Use confidence scores to indicate certainty level (0.1-1.0)
+        - Create relationships between connected lessons to build knowledge networks
+        - Version lessons when you gain deeper understanding rather than creating duplicates
+        - Categorize lessons with meaningful tags for future discovery
+
+        ### 🏗️ Project Memory Usage
+        - Start by exploring or creating project structure before diving into details
+        - Organize knowledge hierarchically from project → component → domain entities
+        - Track dependencies between components to understand system architecture
+        - Record design decisions with rationales to preserve context
+        - Link project entities to relevant lessons to apply experiential knowledge
+
+        ## Key Relationship Types and Their Uses
+
+        ### Lesson Memory Relationships
+        - **BUILDS_ON**: Connect lessons that extend or enhance previous knowledge
+        - **SUPERSEDES**: Mark newer lessons that replace outdated information
+        - **CONTRADICTS**: Link lessons that provide opposing viewpoints or findings
+        - **ORIGINATED_FROM**: Track the source of a lesson (problem, experience, etc.)
+        - **SOLVED_WITH**: Connect lessons to the solutions they generated
+
+        ### Project Memory Relationships
+        - **CONTAINS**: Hierarchical structure relationships (Project contains Components)
+        - **IMPLEMENTS**: Feature implements a Requirement or Specification
+        - **DEPENDS_ON**: Mark dependencies between components or features
+        - **LEADS_TO**: Decision or action results in certain outcomes
+        - **ALTERNATIVE_TO**: Represent different options for the same purpose
+
+        ## Common Workflow Examples
+
+        ### Problem-Solving Workflow
+        1. When encountering a problem, search for similar issues: `search_nodes("error handling best practices")`
+        2. Retrieve and apply relevant lessons: `get_lesson_section("Effective Error Handling Patterns")`
+        3. Document new solutions: `create_lesson_section({"lesson_id": "...", "title": "Solution to X", ...})`
+        4. Connect to existing knowledge: `create_lesson_relationship({source_id: "New Solution", target_id: "Existing Pattern", ...})`
+
+        ### Project Documentation Workflow
+        1. Create project structure: `create_project_container({"name": "New Project"})`
+        2. Define components: `create_component({"project_id": "New Project", "name": "Authentication Service"})`
+        3. Document relationships: `create_component_relationship({source_id: "Frontend", target_id: "API Service", relationship_type: "DEPENDS_ON"})`
+        4. Record design decisions: `create_domain_entity({project_id: "New Project", type: "DECISION", name: "Use JWT for Auth", ...})`
+
+        ## Memory Maintenance
+
+        ### When to Prune and Consolidate
+        - Mark lessons as obsolete when technology or approaches change significantly
+        - Consolidate similar lessons that address the same topic with the SUPERSEDES relationship
+        - Archive project components that are no longer relevant while preserving key insights
+        - Periodically review low-confidence memories and either validate or revise them
+
+        ### Consolidation Process
+        1. Identify fragmented knowledge with `search_nodes("relevant topic")`
+        2. Create a consolidated lesson: `create_lesson_section({comprehensive information})`
+        3. Link old lessons to new one with SUPERSEDES relationship
+        4. Update confidence scores for the consolidated knowledge
+
+        ## Effective Search Strategies
+
+        ### Semantic Search Tips
+        - Use descriptive phrases rather than keywords: "handling async errors in React" vs "React errors"
+        - Include context in your queries: "database indexing for high-volume reads"
+        - Search for solutions and problems: "solutions for memory leaks in long-running processes"
+        - Use comparative queries: "differences between REST and GraphQL approaches"
+
+        ### Combining Search Results
+        - Look for common patterns across multiple search results
+        - Pay attention to confidence scores when evaluating contradictory information
+        - Follow relationship links to discover related knowledge not directly matched in search
+
+        ## Memory Reflection
+
+        ### Periodic Knowledge Review
+        - Schedule regular reviews of high-value memory containers
+        - Ask questions like "What patterns emerge from recent lessons?"
+        - Look for gaps in knowledge that should be filled
+        - Re-evaluate confidence levels based on new experiences
+        - Identify memories that should be linked but currently aren't connected
+
+        ## Advanced Human-Like Memory Techniques
+
+        ### Contextual Retrieval
+        - Before starting a task, retrieve memories based on context, not just keywords
+        - Consider the current project environment when searching for relevant knowledge
+        - Use environmental cues (codebase structure, problem domain) to guide memory search
+        - Proactively surface relevant memories even when not explicitly asked
+        - Example: `search_nodes("authentication patterns in ${current_language} ${current_framework}")`
+
+        ### Memory Prioritization
+        - Distinguish between critical architectural knowledge and routine implementation details
+        - Assign higher priority to foundational decisions that impact multiple components
+        - Tag memories with importance levels: "foundational", "architectural", "implementation-detail"
+        - When providing recommendations, lead with the most critical knowledge first
+        - Example: `create_domain_entity({project_id: "Project", type: "DECISION", importance: "architectural", ...})`
+
+        ### Memory Reinforcement
+        - Increase confidence scores when information is validated through successful application
+        - After applying knowledge successfully, update the confidence score:
+        ```
+        update_lesson_section({
+            "lesson_id": "Lesson Name",
+            "section_id": "Section ID",
+            "confidence": 0.95,  // Increased from previous value
+            "reinforcement_note": "Successfully applied in Project X"
+        })
+        ```
+        - Track which memories are repeatedly useful for solving problems
+        - Create explicit "validation" observations that document successful applications
+
+        ### Associative Memory
+        - Create connections between memories based on conceptual similarity, not just direct relationships
+        - Use relationship types like "RELATED_TO" when concepts share conceptual ground
+        - When retrieving one concept, also retrieve associated concepts that might be relevant
+        - Create cross-domain links between technical concepts and business processes
+        - Example: `create_lesson_relationship({source_id: "Caching Strategy", target_id: "Performance Optimization", relationship_type: "CONCEPTUALLY_RELATED"})`
+
+        ### Memory Integration
+        - Combine fragments from multiple memories to solve new problems
+        - Document how different lessons were combined to create a novel solution:
+        ```
+        create_lesson_section({
+            "lesson_id": "Integrated Solutions",
+            "title": "Combining Caching and Async Processing",
+            "content": "By integrating concepts from 'Redis Caching Patterns' and 'Async Queue Processing', we created...",
+            "source_lessons": ["Redis Caching Patterns", "Async Queue Processing"],
+            "confidence": 0.85
+        })
+        ```
+        - Create explicit integration relationships to show how knowledge was combined
+        - When facing novel problems, systematically explore how existing memories could be combined
+
+        ### Narrative Structure
+        - Record the "story" behind important decisions, not just the decisions themselves
+        - Include the problem context, alternatives considered, and reasoning behind choices
+        - Structure narratives with beginning (problem), middle (exploration), and end (solution)
+        - Use observations to build a timeline of how understanding evolved:
+        ```
+        create_component({
+            "project_id": "Project",
+            "name": "Authentication Service",
+            "narrative": {
+                "initial_problem": "Needed secure, scalable auth for microservices",
+                "alternatives_considered": ["Custom JWT", "Auth0", "Keycloak"],
+                "decision_factors": ["Cost", "Security", "Integration effort"],
+                "outcome": "Selected Keycloak for enterprise features and existing expertise"
+            }
+        })
+        ```
+        - Link narratives across different projects to show evolving understanding
+
+        ## Implementation Examples
+
+        ```
+        # Creating experiential knowledge
+        create_lesson_container({
+            "title": "Effective Error Handling Patterns",
+            "description": "Lessons learned about proper error handling across different programming languages",
+            "tags": ["error-handling", "best-practices", "programming"]
+        })
+
+        create_lesson_section({
+            "lesson_id": "Effective Error Handling Patterns",
+            "title": "Try-Except-Finally Pattern",
+            "content": "Always use specific exception types rather than catching all exceptions",
+            "confidence": 0.9
+        })
+
+        # Establishing knowledge relationships
+        create_lesson_relationship({
+            "source_id": "Effective Error Handling Patterns",
+            "target_id": "Python Best Practices",
+            "relationship_type": "BUILDS_ON"
+        })
+
+        # Organizing project knowledge
+        create_project_container({
+            "name": "API Gateway Refactoring",
+            "description": "Knowledge about the API gateway refactoring project",
+            "tags": ["api", "architecture", "refactoring"]
+        })
+
+        create_component({
+            "project_id": "API Gateway Refactoring",
+            "name": "Authentication Service",
+            "component_type": "microservice",
+            "description": "Handles user authentication and JWT token management"
+        })
+
+        create_component_relationship({
+            "source_id": "Authentication Service",
+            "target_id": "User Database",
+            "relationship_type": "DEPENDS_ON",
+            "properties": {
+                "criticality": "high",
+                "access_pattern": "read-write"
+            }
+        })
+
+        # Consolidating fragmented knowledge
+        create_lesson_section({
+            "lesson_id": "Comprehensive API Security",
+            "title": "Unified API Security Approaches",
+            "content": "This consolidates best practices from multiple lessons...",
+            "confidence": 0.95
+        })
+
+        create_lesson_relationship({
+            "source_id": "Comprehensive API Security",
+            "target_id": "JWT Authentication Basics",
+            "relationship_type": "SUPERSEDES"
+        })
+
+        # Searching and retrieving knowledge
+        search_nodes("error handling patterns in asynchronous code")
+
+        # Getting memory status
+        get_memory_status()
+        ```
+
+        Remember to always connect, contextualize, and consolidate memories as you work, just as a human would do with their growing knowledge base 🌱
+    """
+
     # Create the MCP server with only essential tools
     server = FastMCP(
         name="MCP Registry Server",
@@ -246,7 +492,7 @@ try:
         version="1.0.0",
         notification_options=NotificationOptions(),
         lifespan=server_lifespan,
-        instructions="Use execute_tool, list_available_tools, and list_tool_categories to access all functionality"
+        instructions=MCP_INSTRUCTIONS
     )
 
     logger.info("MCP Server created with only essential tools exposed")
@@ -258,7 +504,7 @@ try:
     # Define the 3 essential tools
     # Tool 1: execute_tool
     @server.tool()  # type: ignore
-    async def execute_tool(function_name: str, parameters = None) -> str:
+    async def execute_tool(tool_name: str, parameters = None) -> str:
         """
         Execute any registered tool by name with provided parameters.
         
@@ -266,7 +512,7 @@ try:
         access to the full range of functionality through a single entry point.
         
         Args:
-            function_name: Full name of tool (e.g., 'memory.create_entity')
+            tool_name: Full name of tool (e.g., 'memory.create_entity')
             parameters: Parameters to pass to the tool (can be JSON string, dict, or None)
             
         Returns:
@@ -275,25 +521,25 @@ try:
         # Get the registry instance
         registry = get_registry()
         
-        if not function_name:
+        if not tool_name:
             error_result = FunctionResult(
                 status="error",
                 data=None,
-                message="Missing required parameter 'function_name'",
+                message="Missing required parameter 'tool_name'",
                 error_code="MISSING_PARAMETER",
-                error_details={"message": "function_name parameter is required"}
+                error_details={"message": "tool_name parameter is required"}
             )
             return error_result.to_json()
         
         try:
-            # Get function metadata for validation and conversion
-            metadata = registry.get_function_metadata(function_name)
+            # Get tool metadata for validation and conversion
+            metadata = registry.get_tool_metadata(tool_name)
             if metadata is None:
                 error_result = FunctionResult(
                     status="error",
                     data=None,
-                    message=f"Function '{function_name}' not found",
-                    error_code="FUNCTION_NOT_FOUND",
+                    message=f"Tool '{tool_name}' not found",
+                    error_code="TOOL_NOT_FOUND",
                     error_details={
                         "available_namespaces": list(registry.get_namespaces())
                     }
@@ -342,7 +588,7 @@ try:
                     }
                     error_result = FunctionResult(
                         status="error",
-                        message=f"Parameter validation failed for tool '{function_name}'",
+                        message=f"Parameter validation failed for tool '{tool_name}'",
                         data=None,
                         error_code="PARAMETER_VALIDATION_ERROR",
                         error_details=error_details
@@ -363,7 +609,7 @@ try:
                 return error_result.to_json()
             
             # Execute the tool with the parsed parameters (not as 'parameters' kwarg)
-            result = await registry.execute(function_name, **parsed_params)
+            result = await registry.execute(tool_name, **parsed_params)
             
             # Instead of returning the wrapped result, return just the actual tool output
             if hasattr(result, 'data') and result.data is not None and 'result' in result.data:
@@ -405,14 +651,14 @@ try:
         
         try:
             if category:
-                functions = registry.get_functions_by_namespace(category)
+                tools = registry.get_tools_by_namespace(category)
             else:
-                functions = registry.get_all_functions()
+                tools = registry.get_all_tools()
                 
             # Convert to dictionary for better serialization
             result = {
-                "functions": [f.model_dump() for f in functions],
-                "count": len(functions),
+                "tools": [t.model_dump() for t in tools],
+                "count": len(tools),
                 "categories": list(registry.get_namespaces())
             }
             
@@ -420,7 +666,7 @@ try:
         except Exception as e:
             error_result = {
                 "error": str(e),
-                "functions": []
+                "tools": []
             }
             return json.dumps(error_result)
 
@@ -439,11 +685,11 @@ try:
         try:
             namespaces = registry.get_namespaces()
             
-            # Get function count per namespace
+            # Get tool count per namespace
             category_counts = {}
             for ns in namespaces:
-                functions = registry.get_functions_by_namespace(ns)
-                category_counts[ns] = len(functions)
+                tools = registry.get_tools_by_namespace(ns)
+                category_counts[ns] = len(tools)
             
             result = {
                 "categories": list(namespaces),
@@ -499,10 +745,10 @@ try:
 
             # Show registry statistics after all tools have been registered
             stats = get_registry_stats()
-            logger.info(f"Registry now contains {stats['total_functions']} functions in {len(stats['namespaces'])} namespaces")
+            logger.info(f"Registry now contains {stats['total_functions']} tools in {len(stats['namespaces'])} namespaces")
             logger.info(f"Registry breakdown:")
             for ns, count in stats['namespace_counts'].items():
-                logger.info(f"  - {ns}: {count} functions")
+                logger.info(f"  - {ns}: {count} tools")
 
             if use_sse:
                 # Using SSE transport

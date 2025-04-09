@@ -2,7 +2,7 @@
 """
 Registry Tools
 
-This module provides MCP tools for the Function Registry Pattern. These tools
+This module provides MCP tools for the Tool Registry Pattern. These tools
 expose the registry functionality to AI agents through a unified interface.
 """
 
@@ -11,15 +11,42 @@ import asyncio
 import logging
 import os
 from typing import Dict, List, Any, Optional, Union, cast
+import time
 
-from src.registry.registry_manager import get_registry, FunctionRegistry
-from src.registry.function_models import FunctionResult, FunctionParameters, FunctionMetadata
+from src.registry.registry_manager import get_registry, ToolRegistry
+from src.registry.function_models import FunctionResult, ToolParameters, ToolMetadata
 from src.registry.parameter_helper import ParameterHelper, ValidationError as ParameterValidationError
 from src.registry.migration_framework import migrate_all_tools, MigrationManager
-from src.registry.ide_integration import generate_ide_optimized_tools, export_ide_optimized_tools
 from src.registry.documentation_generator import generate_documentation, export_documentation_markdown, export_documentation_json
 from src.registry.advanced_parameter_handler import parse_parameters, validate_and_convert, register_context_provider
 from src.logger import get_logger
+
+# Define fallback classes if imports not available
+class FunctionRecommendationEngine:
+    """Simple recommendation engine for tracking tool usage."""
+    def track_tool_usage(self, tool_name, params, context, success=True):
+        pass
+    
+    def get_tool_chains(self, query, context=None):
+        return []
+
+class ResultCache:
+    """Simple result cache implementation."""
+    def get(self, tool_name, params):
+        return None
+    
+    def set(self, tool_name, params, result):
+        pass
+    
+    def invalidate(self, tool_name=None):
+        return 0
+        
+    def set_tool_cache_settings(self, tool_name, ttl, cacheable=True):
+        pass
+
+# Use the fallback implementations by default
+recommendation_engine = FunctionRecommendationEngine()
+result_cache = ResultCache()
 
 # Import IDE integration tools
 try:
@@ -51,18 +78,6 @@ except ImportError:
     get_recommendation_engine = None
     get_pattern_detector = None
     get_complex_helper = None
-
-# Import advanced parameter handling
-try:
-    from src.registry.advanced_parameter_handler import (
-        parse_parameters,
-        validate_and_convert,
-        register_context_provider
-    )
-except ImportError:
-    parse_parameters = None
-    validate_and_convert = None
-    register_context_provider = None
 
 # Initialize logger
 logger = logging.getLogger(__name__)
@@ -108,7 +123,7 @@ def _format_validation_error(error: Any) -> Dict[str, str]:
 
 def register_registry_tools(server, get_client_manager=None):
     """
-    Register function registry tools with the server.
+    Register tool registry tools with the server.
     
     Args:
         server: The MCP server instance
@@ -118,136 +133,135 @@ def register_registry_tools(server, get_client_manager=None):
     registry = get_registry()
     
     @server.tool()
-    async def execute_function(function_name: str, **parameters) -> str:
+    async def execute_tool(
+        tool_name: str,
+        params: Optional[Dict[str, Any]] = None,
+        context: Optional[Dict[str, Any]] = None,
+        skip_cache: bool = False
+    ) -> FunctionResult:
         """
-        Execute any registered function by name with provided parameters.
-        
-        This tool provides a unified interface to all registered functions, allowing
-        access to the full range of functionality through a single entry point.
+        Execute a registered tool with the given parameters.
         
         Args:
-            function_name: Full name of function (e.g., 'memory.create_entity')
-            **parameters: Parameters to pass to the function
+            tool_name: The name of the tool to execute
+            params: The parameters to pass to the tool
+            context: Additional context for tool execution
+            skip_cache: Flag to skip result caching for this call
             
         Returns:
-            JSON string with the function result
+            FunctionResult object containing the execution result
         """
-        registry = get_registry()
-        if registry is None:
-            error_result = FunctionResult(
-                status="error",
-                data=None,
-                message="Registry not available",
-                error_code="REGISTRY_UNAVAILABLE",
-                error_details={"reason": "Registry could not be initialized"}
-            )
-            return error_result.to_json()
+        params_dict = params or {}
+        context_dict = context or {}
         
+        registry = get_registry()
+        
+        # Get metadata for the requested tool
+        tool_metadata = registry.get_tool_metadata(tool_name)
+        if not tool_metadata:
+            return FunctionResult(
+                status="error",
+                message=f"Tool '{tool_name}' not found",
+                data=None,
+                error_code="TOOL_NOT_FOUND",
+                error_details={"tool_name": tool_name, "params": params_dict}
+            )
+        
+        # Check for required parameters
+        missing_params = []
+        for param_name, param_info in tool_metadata.parameters.items():
+            if param_info.get("required", False) and param_name not in params_dict:
+                missing_params.append(param_name)
+        
+        if missing_params:
+            return FunctionResult(
+                status="error",
+                message=f"Missing required parameters: {', '.join(missing_params)}",
+                data=None,
+                error_code="MISSING_PARAMETERS",
+                error_details={"tool_name": tool_name, "params": params_dict, "missing": missing_params}
+            )
+        
+        # Check cache for existing result
+        if not skip_cache:
+            cached_result = result_cache.get(tool_name, params_dict)
+            if cached_result:
+                # Track the execution if analytics is enabled
+                recommendation_engine.track_tool_usage(tool_name, params_dict, context_dict)
+                return cached_result
+        
+        # Execute the tool
+        start_time = time.time()
         try:
-            # Get function metadata for validation and conversion
-            metadata = registry.get_function_metadata(function_name)
-            if metadata is None:
-                error_result = FunctionResult(
-                    status="error",
-                    data=None,
-                    message=f"Function '{function_name}' not found",
-                    error_code="FUNCTION_NOT_FOUND",
-                    error_details={"available_functions": list(registry.get_all_functions())}
-                )
-                return error_result.to_json()
+            # Use the registry's execute method to run the tool
+            result_obj = await registry.execute(tool_name, **params_dict)
             
-            # Try advanced parameter handling if available
-            try:
-                if parse_parameters is not None and validate_and_convert is not None:
-                    # Parse parameters from various input formats
-                    params = parse_parameters(metadata, parameters)
-                    
-                    # Validate and convert parameters
-                    converted_params, validation_errors = validate_and_convert(metadata, params)
-                    
-                    if validation_errors:
-                        # Format errors safely
-                        formatted_errors = [_format_validation_error(err) for err in validation_errors]
-                        
-                        error_result = FunctionResult(
-                            status="error",
-                            message=f"Parameter validation failed for function '{function_name}'",
-                            data=None,
-                            error_code="PARAMETER_VALIDATION_ERROR",
-                            error_details={"validation_errors": formatted_errors}
-                        )
-                        return error_result.to_json()
-                    
-                    # Use the converted parameters
-                    parameters = converted_params
-                else:
-                    # Fall back to basic parameter handling
-                    validation_errors = ParameterHelper.validate_parameters(metadata, parameters)
-                    if validation_errors:
-                        # Format errors safely
-                        formatted_errors = [_format_validation_error(err) for err in validation_errors]
-                        
-                        error_result = FunctionResult(
-                            status="error",
-                            message=f"Parameter validation failed for function '{function_name}'",
-                            data=None,
-                            error_code="PARAMETER_VALIDATION_ERROR",
-                            error_details={"validation_errors": formatted_errors}
-                        )
-                        return error_result.to_json()
-                    
-                    # Convert parameters to the right types
-                    parameters = ParameterHelper.convert_parameters(metadata, parameters)
-            except Exception as e:
-                logger.error(f"Error processing parameters: {str(e)}")
-                error_result = FunctionResult(
-                    status="error",
-                    data=None,
-                    message=f"Error processing parameters: {str(e)}",
-                    error_code="PARAMETER_PROCESSING_ERROR",
-                    error_details={"exception": str(e)}
-                )
-                return error_result.to_json()
+            # If the result is already a FunctionResult, return it
+            if isinstance(result_obj, FunctionResult):
+                # Cache the result if caching is enabled
+                if not skip_cache:
+                    result_cache.set(tool_name, params_dict, result_obj)
+                
+                # Track the execution if analytics is enabled
+                recommendation_engine.track_tool_usage(tool_name, params_dict, context_dict)
+                
+                return result_obj
             
-            # Execute the function with processed parameters
-            result = await registry.execute(function_name, **parameters)
+            # Create a successful result object
+            func_result = FunctionResult(
+                status="success",
+                message=f"Tool '{tool_name}' executed successfully",
+                data=result_obj,
+                error_code=None,
+                error_details=None
+            )
             
-            # Return JSON result
-            return result.to_json()
+            # Cache the result if caching is enabled
+            if not skip_cache:
+                result_cache.set(tool_name, params_dict, func_result)
+            
+            # Track the execution if analytics is enabled
+            recommendation_engine.track_tool_usage(tool_name, params_dict, context_dict)
+            
+            return func_result
         except Exception as e:
-            logger.error(f"Error executing function: {str(e)}")
+            # Create an error result object
             error_result = FunctionResult(
                 status="error",
+                message=str(e),
                 data=None,
-                message=f"Error executing function: {str(e)}",
-                error_code="FUNCTION_EXECUTION_ERROR",
-                error_details={"exception": str(e)}
+                error_code="EXECUTION_ERROR",
+                error_details={"tool_name": tool_name, "params": params_dict}
             )
-            return error_result.to_json()
+            
+            # Track the failed execution if analytics is enabled
+            recommendation_engine.track_tool_usage(tool_name, params_dict, context_dict, success=False)
+            
+            return error_result
     
     @server.tool()
-    async def list_available_functions(category: Optional[str] = None) -> str:
+    async def list_available_tools(category: Optional[str] = None) -> str:
         """
-        List all available functions, optionally filtered by category.
+        List all available tools, optionally filtered by category.
         
-        This tool allows discovery of all registered functions and their documentation.
+        This tool allows discovery of all registered tools and their documentation.
         
         Args:
             category: Optional category to filter by
             
         Returns:
-            JSON string with function metadata
+            JSON string with tool metadata
         """
         try:
             if category:
-                functions = registry.get_functions_by_namespace(category)
+                tools = registry.get_tools_by_namespace(category)
             else:
-                functions = registry.get_all_functions()
+                tools = registry.get_all_tools()
                 
             # Convert to dictionary for better serialization
             result = {
-                "functions": [f.model_dump() for f in functions],
-                "count": len(functions),
+                "tools": [f.model_dump() for f in tools],
+                "count": len(tools),
                 "categories": list(registry.get_namespaces())
             }
             
@@ -255,42 +269,42 @@ def register_registry_tools(server, get_client_manager=None):
         except Exception as e:
             error_result = {
                 "error": str(e),
-                "functions": []
+                "tools": []
             }
             return json.dumps(error_result)
     
     @server.tool()
-    async def get_function_details(function_name: str) -> str:
+    async def get_tool_details(tool_name: str) -> str:
         """
-        Get detailed information about a specific function.
+        Get detailed information about a specific tool.
         
         Args:
-            function_name: Name of the function to get details for
+            tool_name: Name of the tool to get details for
             
         Returns:
-            JSON string with function details
+            JSON string with tool details
         """
         try:
-            metadata = registry.get_function_metadata(function_name)
+            metadata = registry.get_tool_metadata(tool_name)
             
             if not metadata:
                 return json.dumps({
-                    "error": f"Function '{function_name}' not found",
-                    "function_name": function_name
+                    "error": f"Tool '{tool_name}' not found",
+                    "tool_name": tool_name
                 })
                 
             return json.dumps(metadata.model_dump(), indent=2)
         except Exception as e:
             error_result = {
                 "error": str(e),
-                "function_name": function_name
+                "tool_name": tool_name
             }
             return json.dumps(error_result)
     
     @server.tool()
-    async def list_function_categories() -> str:
+    async def list_tool_categories() -> str:
         """
-        List all available function categories/namespaces.
+        List all available tool categories/namespaces.
         
         Returns:
             JSON string with category information
@@ -298,15 +312,15 @@ def register_registry_tools(server, get_client_manager=None):
         try:
             namespaces = registry.get_namespaces()
             
-            # Count functions in each namespace
+            # Count tools in each namespace
             namespace_counts = {}
             for ns in namespaces:
-                functions = registry.get_functions_by_namespace(ns)
-                namespace_counts[ns] = len(functions)
+                tools = registry.get_tools_by_namespace(ns)
+                namespace_counts[ns] = len(tools)
                 
             result = {
                 "categories": namespaces,
-                "function_counts": namespace_counts,
+                "tool_counts": namespace_counts,
                 "total_categories": len(namespaces)
             }
             
@@ -319,39 +333,39 @@ def register_registry_tools(server, get_client_manager=None):
             return json.dumps(error_result)
     
     @server.tool()
-    async def execute_function_bundle(bundle_name: str, context: Dict[str, Any]) -> str:
+    async def execute_tool_bundle(bundle_name: str, context: Dict[str, Any]) -> str:
         """
-        Execute a pre-defined sequence of functions with shared context.
+        Execute a pre-defined sequence of tools with shared context.
         
-        Bundles allow multiple related functions to be executed in sequence,
-        with results from earlier functions available to later ones.
+        Bundles allow multiple related tools to be executed in sequence,
+        with results from earlier tools available to later ones.
         
         Args:
-            bundle_name: Name of the function bundle to execute
+            bundle_name: Name of the tool bundle to execute
             context: Initial context for the bundle execution
             
         Returns:
-            JSON string with results from all functions in the bundle
+            JSON string with results from all tools in the bundle
         """
         # Define bundles - in a real implementation, these would be loaded from a config
         bundles = {
             "create_project": [
                 {
-                    "function": "project.create_container", 
+                    "tool": "project.create_container", 
                     "params_map": {"name": "project_name"}
                 },
                 {
-                    "function": "project.create_component", 
+                    "tool": "project.create_component", 
                     "params_map": {"project_id": "project_name", "name": "component_name"}
                 }
             ],
             "create_entity_with_observation": [
                 {
-                    "function": "memory.create_entity",
+                    "tool": "memory.create_entity",
                     "params_map": {"name": "entity_name", "entity_type": "entity_type"}
                 },
                 {
-                    "function": "memory.create_observation",
+                    "tool": "memory.create_observation",
                     "params_map": {
                         "entity_name": "entity_name",
                         "content": "observation_content"
@@ -373,7 +387,7 @@ def register_registry_tools(server, get_client_manager=None):
         bundle_context = context.copy()  # Make a copy to avoid modifying the original
         
         for step in bundles[bundle_name]:
-            function_name = step["function"]
+            tool_name = step["tool"]
             params_map = step.get("params_map", {})
             
             # Map parameters from context
@@ -382,9 +396,9 @@ def register_registry_tools(server, get_client_manager=None):
                 if context_key in bundle_context:
                     params[param_key] = bundle_context[context_key]
             
-            # Execute the function
-            result = await registry.execute(function_name, **params)
-            results[function_name] = json.loads(result.to_json())
+            # Execute the tool
+            result = await registry.execute(tool_name, **params)
+            results[tool_name] = json.loads(result.to_json())
             
             # Update context with results for subsequent steps
             if result.status == "success" and result.data:
@@ -403,26 +417,26 @@ def register_registry_tools(server, get_client_manager=None):
         return bundle_result.to_json()
     
     @server.tool()
-    async def get_parameter_suggestions(function_name: str) -> str:
+    async def get_parameter_suggestions(tool_name: str) -> str:
         """
-        Get parameter suggestions for a function.
+        Get parameter suggestions for a tool.
         
-        This tool helps AI agents understand how to use functions by providing
+        This tool helps AI agents understand how to use tools by providing
         type-specific parameter suggestions.
         
         Args:
-            function_name: Name of the function to get suggestions for
+            tool_name: Name of the tool to get suggestions for
             
         Returns:
             JSON string with parameter suggestions
         """
         try:
-            metadata = registry.get_function_metadata(function_name)
+            metadata = registry.get_tool_metadata(tool_name)
             
             if not metadata:
                 error_result = {
-                    "error": f"Function '{function_name}' not found",
-                    "function_name": function_name
+                    "error": f"Tool '{tool_name}' not found",
+                    "tool_name": tool_name
                 }
                 return json.dumps(error_result, indent=2)
             
@@ -430,7 +444,7 @@ def register_registry_tools(server, get_client_manager=None):
             suggestions = ParameterHelper.generate_parameter_suggestions(metadata)
             
             result = {
-                "function_name": function_name,
+                "tool_name": tool_name,
                 "parameter_suggestions": suggestions,
                 "required_parameters": [
                     name for name, info in metadata.parameters.items()
@@ -442,14 +456,14 @@ def register_registry_tools(server, get_client_manager=None):
         except Exception as e:
             error_result = {
                 "error": str(e),
-                "function_name": function_name
+                "tool_name": tool_name
             }
             return json.dumps(error_result, indent=2)
     
     @server.tool()
     async def migrate_tools(module_paths: Optional[List[str]] = None) -> str:
         """
-        Migrate existing tools to the function registry.
+        Migrate existing tools to the tool registry.
         
         This tool allows migrating tool modules to the registry, making them
         available through the unified interface.
@@ -551,11 +565,11 @@ def register_registry_tools(server, get_client_manager=None):
         """
         try:
             # Check if namespace exists
-            functions = registry.get_functions_by_namespace(namespace)
-            if not functions:
+            tools = registry.get_tools_by_namespace(namespace)
+            if not tools:
                 return json.dumps({
                     "status": "error",
-                    "message": f"Namespace '{namespace}' not found or has no functions"
+                    "message": f"Namespace '{namespace}' not found or has no tools"
                 })
             
             # Generate the IDE metadata
@@ -584,11 +598,11 @@ def register_registry_tools(server, get_client_manager=None):
             })
 
     @server.tool()
-    async def generate_function_documentation(format: str = "json", output_path: Optional[str] = None, version: str = "1.0.0") -> str:
+    async def generate_tool_documentation(format: str = "json", output_path: Optional[str] = None, version: str = "1.0.0") -> str:
         """
-        Generate comprehensive documentation for all registered functions.
+        Generate comprehensive documentation for all registered tools.
         
-        This tool creates documentation for all functions in the registry and exports
+        This tool creates documentation for all tools in the registry and exports
         it in the specified format.
         
         Args:
@@ -614,7 +628,7 @@ def register_registry_tools(server, get_client_manager=None):
                     docs = generate_documentation(version)
                     return json.dumps({
                         "status": "success",
-                        "message": f"Generated documentation for {docs['meta']['function_count']} functions",
+                        "message": f"Generated documentation for {docs['meta']['tool_count']} tools",
                         "documentation": docs
                     })
                 else:
@@ -646,39 +660,39 @@ def register_registry_tools(server, get_client_manager=None):
             })
     
     @server.tool()
-    async def get_function_examples(function_name: str) -> str:
+    async def get_tool_examples(tool_name: str) -> str:
         """
-        Get usage examples for a specific function.
+        Get usage examples for a specific tool.
         
-        This tool generates usage examples for a function, including basic
-        examples and specialized examples for common functions.
+        This tool generates usage examples for a tool, including basic
+        examples and specialized examples for common tools.
         
         Args:
-            function_name: Name of the function to get examples for
+            tool_name: Name of the tool to get examples for
             
         Returns:
             JSON string with usage examples
         """
         try:
-            # Check if function exists
-            metadata = registry.get_function_metadata(function_name)
+            # Check if tool exists
+            metadata = registry.get_tool_metadata(tool_name)
             if not metadata:
                 return json.dumps({
                     "status": "error",
-                    "message": f"Function '{function_name}' not found"
+                    "message": f"Tool '{tool_name}' not found"
                 })
             
             # Create a documentation generator
             from src.registry.documentation_generator import DocumentationGenerator
             generator = DocumentationGenerator()
             
-            # Generate examples for the function
+            # Generate examples for the tool
             examples = generator._generate_examples(metadata)
             
             return json.dumps({
                 "status": "success",
-                "message": f"Generated {len(examples)} examples for {function_name}",
-                "function_name": function_name,
+                "message": f"Generated {len(examples)} examples for {tool_name}",
+                "tool_name": tool_name,
                 "examples": examples
             })
         except Exception as e:
@@ -688,27 +702,27 @@ def register_registry_tools(server, get_client_manager=None):
             })
 
     @server.tool()
-    async def parse_natural_language_parameters(function_name: str, text: str) -> str:
+    async def parse_natural_language_parameters(tool_name: str, text: str) -> str:
         """
-        Parse parameters for a function from natural language text.
+        Parse parameters for a tool from natural language text.
         
         This tool extracts parameter values from natural language descriptions,
-        making it easier to use functions in conversational contexts.
+        making it easier to use tools in conversational contexts.
         
         Args:
-            function_name: Name of the function to parse parameters for
+            tool_name: Name of the tool to parse parameters for
             text: Natural language text containing parameter values
             
         Returns:
             JSON string with extracted parameters
         """
         try:
-            # Check if function exists
-            metadata = registry.get_function_metadata(function_name)
+            # Check if tool exists
+            metadata = registry.get_tool_metadata(tool_name)
             if not metadata:
                 return json.dumps({
                     "status": "error",
-                    "message": f"Function '{function_name}' not found"
+                    "message": f"Tool '{tool_name}' not found"
                 })
             
             # Parse parameters from text
@@ -718,8 +732,8 @@ def register_registry_tools(server, get_client_manager=None):
                 
                 return json.dumps({
                     "status": "success",
-                    "message": f"Extracted parameters for '{function_name}'",
-                    "function_name": function_name,
+                    "message": f"Extracted parameters for '{tool_name}'",
+                    "tool_name": tool_name,
                     "parameters": parameters,
                     "parameter_count": len(parameters)
                 })
@@ -740,7 +754,7 @@ def register_registry_tools(server, get_client_manager=None):
         Register user context data for parameter handling.
         
         This tool allows storing context information that can be used
-        to provide defaults for function parameters.
+        to provide defaults for tool parameters.
         
         Args:
             namespace: Context namespace (e.g., 'user', 'project')
@@ -778,11 +792,11 @@ def register_registry_tools(server, get_client_manager=None):
             })
 
     @server.tool()
-    async def get_function_recommendations(query: str, context: Optional[Dict[str, Any]] = None, limit: int = 5) -> str:
+    async def get_tool_recommendations(query: str, context: Optional[Dict[str, Any]] = None, limit: int = 5) -> str:
         """
-        Get function recommendations based on a natural language query.
+        Get tool recommendations based on a natural language query.
         
-        This tool helps suggest relevant functions based on what you're trying to do,
+        This tool helps suggest relevant tools based on what you're trying to do,
         using contextual understanding and usage patterns.
         
         Args:
@@ -791,14 +805,14 @@ def register_registry_tools(server, get_client_manager=None):
             limit: Maximum number of recommendations to return
             
         Returns:
-            JSON string with function recommendations
+            JSON string with tool recommendations
         """
         try:
             # Check if recommendation engine is available
             if get_recommendation_engine is None:
                 return json.dumps({
                     "status": "error",
-                    "message": "Function recommendation engine is not available"
+                    "message": "Tool recommendation engine is not available"
                 })
                 
             # Get recommendations
@@ -807,109 +821,65 @@ def register_registry_tools(server, get_client_manager=None):
             
             return json.dumps({
                 "status": "success",
-                "message": f"Found {len(recommendations)} function recommendations",
+                "message": f"Found {len(recommendations)} tool recommendations",
                 "recommendations": recommendations
             })
         except Exception as e:
             return json.dumps({
                 "status": "error",
-                "message": f"Error getting function recommendations: {str(e)}"
+                "message": f"Error getting tool recommendations: {str(e)}"
             })
     
     @server.tool()
-    async def get_function_chains(goal: str, limit: int = 3) -> str:
+    async def get_tool_chains(query: str, context: Optional[Dict[str, Any]] = None, limit: int = 3) -> List[Dict[str, Any]]:
         """
-        Get recommended function chains for accomplishing a goal.
-        
-        This tool suggests sequences of functions that work well together
-        to accomplish complex tasks.
+        Get recommended tool chains for accomplishing a goal.
         
         Args:
-            goal: Description of what you want to accomplish
+            query: The query describing the goal
+            context: Additional context for recommendations
             limit: Maximum number of chains to return
             
         Returns:
-            JSON string with function chains
+            List of recommended tool chains, where each chain contains information about the tools
         """
         try:
             # Check if recommendation engine is available
             if get_recommendation_engine is None:
-                return json.dumps({
-                    "status": "error",
-                    "message": "Function recommendation engine is not available"
-                })
+                return []
                 
-            # Get function chains
+            # Get the global recommendation engine instance
             engine = get_recommendation_engine()
-            chains = engine.get_function_chains(goal, limit)
-            
-            return json.dumps({
-                "status": "success",
-                "message": f"Found {len(chains)} function chains for your goal",
-                "chains": chains
-            })
+            return engine.get_tool_chains(query, limit)
         except Exception as e:
-            return json.dumps({
-                "status": "error",
-                "message": f"Error getting function chains: {str(e)}"
-            })
+            logger.error(f"Error getting tool chains: {str(e)}")
+            return []
     
     @server.tool()
-    async def track_function_usage(function_name: str, parameters: Dict[str, Any], 
-                                 result: Dict[str, Any], context: Optional[Dict[str, Any]] = None) -> str:
+    async def track_tool_usage(
+        tool_name: str,
+        params: Dict[str, Any],
+        context: Optional[Dict[str, Any]] = None,
+        success: bool = True
+    ) -> None:
         """
-        Track function usage for pattern analysis.
-        
-        This tool records function usage to improve recommendations and
-        detect patterns.
+        Track tool usage for analytics and recommendations.
         
         Args:
-            function_name: Name of the function used
-            parameters: Parameters passed to the function
-            result: Result of the function call (dict format of FunctionResult)
-            context: Optional context information
-            
-        Returns:
-            JSON string with confirmation
+            tool_name: The name of the tool that was used
+            params: The parameters that were passed to the tool
+            context: Additional context for the tool usage
+            success: Whether the tool execution was successful
         """
-        try:
-            # Check if tracking is available
-            if get_recommendation_engine is None or get_pattern_detector is None:
-                return json.dumps({
-                    "status": "error",
-                    "message": "Function usage tracking is not available"
-                })
-                
-            # Convert result dict to FunctionResult if needed
-            if isinstance(result, dict):
-                func_result = FunctionResult(**result)
-            else:
-                func_result = result
-                
-            # Track in recommendation engine
-            engine = get_recommendation_engine()
-            engine.track_function_usage(function_name, parameters, func_result, context)
-            
-            # Add to pattern detector
-            detector = get_pattern_detector()
-            detector.add_function_call(function_name, parameters, func_result)
-            
-            return json.dumps({
-                "status": "success",
-                "message": f"Tracked usage of function '{function_name}'"
-            })
-        except Exception as e:
-            return json.dumps({
-                "status": "error",
-                "message": f"Error tracking function usage: {str(e)}"
-            })
+        recommendation_engine = FunctionRecommendationEngine()
+        recommendation_engine.track_tool_usage(tool_name, params, context, success)
     
     @server.tool()
-    async def end_function_sequence() -> str:
+    async def end_tool_sequence() -> str:
         """
-        End the current function call sequence.
+        End the current tool call sequence.
         
-        This tool marks the end of a logical sequence of function calls,
+        This tool marks the end of a logical sequence of tool calls,
         which helps with pattern detection and recommendations.
         
         Returns:
@@ -929,20 +899,20 @@ def register_registry_tools(server, get_client_manager=None):
             
             return json.dumps({
                 "status": "success",
-                "message": "Function sequence ended"
+                "message": "Tool sequence ended"
             })
         except Exception as e:
             return json.dumps({
                 "status": "error",
-                "message": f"Error ending function sequence: {str(e)}"
+                "message": f"Error ending tool sequence: {str(e)}"
             })
     
     @server.tool()
     async def get_detected_patterns() -> str:
         """
-        Get detected function usage patterns.
+        Get detected tool usage patterns.
         
-        This tool provides insights into common patterns of function usage,
+        This tool provides insights into common patterns of tool usage,
         which can help optimize your approach.
         
         Returns:
@@ -979,7 +949,7 @@ def register_registry_tools(server, get_client_manager=None):
         Execute a complex operation with multiple steps.
         
         This tool provides high-level operations that combine multiple
-        functions in a coordinated way.
+        tools in a coordinated way.
         
         Args:
             operation_name: Name of the complex operation
@@ -1086,10 +1056,10 @@ def register_registry_tools(server, get_client_manager=None):
     @server.tool()
     async def execute_batch(batch: List[Dict[str, Any]], parallel: bool = True, use_cache: bool = True) -> str:
         """
-        Execute a batch of function calls.
+        Execute a batch of tool calls.
         
         Args:
-            batch: List of function call specifications
+            batch: List of tool call specifications
             parallel: Whether to execute calls in parallel when possible
             use_cache: Whether to use the result cache
             
@@ -1126,7 +1096,7 @@ def register_registry_tools(server, get_client_manager=None):
             result = FunctionResult(
                 status="success",
                 data={"results": results},
-                message=f"Executed batch of {len(batch)} function calls",
+                message=f"Executed batch of {len(batch)} tool calls",
                 error_code="",
                 error_details={}
             )
@@ -1143,88 +1113,29 @@ def register_registry_tools(server, get_client_manager=None):
             return error_result.to_json()
 
     @server.tool()
-    async def configure_result_cache(function_name: str, ttl: int = 300, cacheable: bool = True) -> str:
+    async def configure_result_cache(
+        tool_name: str,
+        ttl: int,
+        cacheable: bool = True
+    ) -> None:
         """
-        Configure caching settings for a specific function.
+        Configure cache settings for a specific tool.
         
         Args:
-            function_name: Name of the function
-            ttl: Time-to-live in seconds for cache entries
-            cacheable: Whether this function's results should be cached
-            
-        Returns:
-            JSON string with confirmation of cache settings
+            tool_name: The name of the tool
+            ttl: Time-to-live in seconds for this tool's results
+            cacheable: Whether this tool's results should be cached
         """
-        # Check if cache is available
-        if get_result_cache is None:
-            error_result = FunctionResult(
-                status="error",
-                data=None,
-                message="Result caching is not available",
-                error_code="CACHE_UNAVAILABLE",
-                error_details={"reason": "Performance optimization module is not imported"}
-            )
-            return error_result.to_json()
-        
-        try:
-            # Get the cache
-            cache = get_result_cache()
-            if cache is None:
-                error_result = FunctionResult(
-                    status="error",
-                    data=None,
-                    message="Cache initialization failed",
-                    error_code="CACHE_INIT_FAILED",
-                    error_details={"reason": "Could not initialize cache"}
-                )
-                return error_result.to_json()
-            
-            # Check if function exists
-            registry = get_registry()
-            function_metadata = registry.get_function_metadata(function_name)
-            if function_metadata is None:
-                error_result = FunctionResult(
-                    status="error",
-                    data=None,
-                    message=f"Function '{function_name}' does not exist",
-                    error_code="FUNCTION_NOT_FOUND",
-                    error_details={"function_name": function_name}
-                )
-                return error_result.to_json()
-            
-            # Set cache settings
-            cache.set_function_cache_settings(function_name, ttl, cacheable)
-            
-            result = FunctionResult(
-                status="success",
-                data={
-                    "function_name": function_name,
-                    "ttl": ttl,
-                    "cacheable": cacheable
-                },
-                message=f"Cache settings configured for '{function_name}'",
-                error_code="",
-                error_details={}
-            )
-            return result.to_json()
-        except Exception as e:
-            logger.error(f"Error configuring cache settings: {str(e)}")
-            error_result = FunctionResult(
-                status="error",
-                data=None,
-                message=f"Error configuring cache settings: {str(e)}",
-                error_code="CACHE_CONFIG_ERROR",
-                error_details={"exception": str(e)}
-            )
-            return error_result.to_json()
+        result_cache = ResultCache()
+        result_cache.set_tool_cache_settings(tool_name, ttl, cacheable)
 
     @server.tool()
-    async def invalidate_cache(function_name: Optional[str] = None) -> str:
+    async def invalidate_cache(tool_name: Optional[str] = None) -> str:
         """
-        Invalidate cache entries for a function or all functions.
+        Invalidate cache entries for a tool or all tools.
         
         Args:
-            function_name: Name of the function or None to invalidate all
+            tool_name: Name of the tool or None to invalidate all
             
         Returns:
             JSON string with number of invalidated entries
@@ -1253,27 +1164,27 @@ def register_registry_tools(server, get_client_manager=None):
                 )
                 return error_result.to_json()
             
-            # If function name provided, check if it exists
-            if function_name is not None:
+            # If tool name provided, check if it exists
+            if tool_name is not None:
                 registry = get_registry()
-                function_metadata = registry.get_function_metadata(function_name)
-                if function_metadata is None:
+                tool_metadata = registry.get_tool_metadata(tool_name)
+                if tool_metadata is None:
                     error_result = FunctionResult(
                         status="error",
                         data=None,
-                        message=f"Function '{function_name}' does not exist",
-                        error_code="FUNCTION_NOT_FOUND",
-                        error_details={"function_name": function_name}
+                        message=f"Tool '{tool_name}' does not exist",
+                        error_code="TOOL_NOT_FOUND",
+                        error_details={"tool_name": tool_name}
                     )
                     return error_result.to_json()
             
             # Invalidate cache entries
-            count = cache.invalidate(function_name)
+            count = cache.invalidate(tool_name)
             
-            if function_name is None:
+            if tool_name is None:
                 message = f"Invalidated all cache entries ({count} total)"
             else:
-                message = f"Invalidated {count} cache entries for '{function_name}'"
+                message = f"Invalidated {count} cache entries for '{tool_name}'"
             
             result = FunctionResult(
                 status="success",

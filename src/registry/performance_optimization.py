@@ -60,6 +60,17 @@ class ResultCache:
             "cacheable": cacheable
         }
         
+    def set_tool_cache_settings(self, function_name: str, ttl: int, cacheable: bool = True) -> None:
+        """
+        Set cache settings for a specific tool.
+        
+        Args:
+            function_name: Name of the tool
+            ttl: Time-to-live in seconds for this tool's results
+            cacheable: Whether this tool's results should be cached
+        """
+        return self.set_function_cache_settings(function_name, ttl, cacheable)
+        
     def get_cache_key(self, function_name: str, params: Dict[str, Any]) -> str:
         """
         Generate a cache key for a function call.

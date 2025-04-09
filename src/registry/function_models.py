@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Function Registry Models
+Tool Registry Models
 
-This module defines the data models used for function registry, including
+This module defines the data models used for tool registry, including
 metadata, parameters, and results.
 """
 
@@ -12,14 +12,14 @@ import inspect
 import json
 
 
-class FunctionParameters(BaseModel):
+class ToolParameters(BaseModel):
     """
-    Parameters for a function in the registry.
+    Parameters for a tool in the registry.
     
-    This model is used to validate and normalize parameters passed to functions.
+    This model is used to validate and normalize parameters passed to tools.
     """
-    function_name: str = Field(..., description="The name of the function to execute")
-    params: Dict[str, Any] = Field(default_factory=dict, description="Parameters to pass to the function")
+    tool_name: str = Field(..., description="The name of the tool to execute")
+    params: Dict[str, Any] = Field(default_factory=dict, description="Parameters to pass to the tool")
     
     class Config:
         arbitrary_types_allowed = True
@@ -28,9 +28,9 @@ class FunctionParameters(BaseModel):
 
 class FunctionResult(BaseModel):
     """
-    Result of a function execution.
+    Result of a tool execution.
     
-    This model standardizes the return format from all registered functions.
+    This model standardizes the return format from all registered tools.
     """
     status: str = Field(..., description="Status of the execution (success/error)")
     message: str = Field(..., description="Human-readable message about the result")
@@ -66,28 +66,28 @@ class FunctionResult(BaseModel):
         return json.dumps(self.model_dump(), indent=2)
 
 
-class FunctionMetadata(BaseModel):
+class ToolMetadata(BaseModel):
     """
-    Metadata about a function in the registry.
+    Metadata about a tool in the registry.
     
-    This model contains information about the function, its parameters,
+    This model contains information about the tool, its parameters,
     return type, and documentation.
     """
-    name: str = Field(..., description="Full function name with namespace")
+    name: str = Field(..., description="Full tool name with namespace")
     short_name: str = Field(..., description="Short name without namespace")
-    namespace: str = Field(..., description="Category/namespace the function belongs to")
-    description: str = Field(..., description="Human-readable description of the function")
+    namespace: str = Field(..., description="Category/namespace the tool belongs to")
+    description: str = Field(..., description="Human-readable description of the tool")
     parameters: Dict[str, Dict[str, Any]] = Field(
         default_factory=dict, 
-        description="Parameters the function accepts"
+        description="Parameters the tool accepts"
     )
-    return_type: str = Field(..., description="Return type of the function")
-    is_async: bool = Field(False, description="Whether the function is asynchronous")
+    return_type: str = Field(..., description="Return type of the tool")
+    is_async: bool = Field(False, description="Whether the tool is asynchronous")
     examples: List[Dict[str, Any]] = Field(
         default_factory=list,
-        description="Example usage of the function"
+        description="Example usage of the tool"
     )
-    source_file: Optional[str] = Field(None, description="Source file where the function is defined")
+    source_file: Optional[str] = Field(None, description="Source file where the tool is defined")
     
     @validator('parameters')
     def validate_parameters(cls, v):
@@ -103,17 +103,17 @@ class FunctionMetadata(BaseModel):
         return v
     
     @classmethod
-    def from_function(cls, namespace: str, name: str, func: Callable) -> 'FunctionMetadata':
+    def from_function(cls, namespace: str, name: str, func: Callable) -> 'ToolMetadata':
         """
-        Create function metadata by inspecting the function.
+        Create tool metadata by inspecting the function.
         
         Args:
-            namespace: Category/namespace for the function
-            name: Name of the function (without namespace)
+            namespace: Category/namespace for the tool
+            name: Name of the tool (without namespace)
             func: The function to inspect
         
         Returns:
-            FunctionMetadata object
+            ToolMetadata object
         """
         try:
             # Import our enhanced docstring parser
@@ -240,9 +240,9 @@ class ValidationError(BaseModel):
 
 class ParameterInfo(BaseModel):
     """
-    Information about a function parameter.
+    Information about a tool parameter.
     
-    This model contains metadata about a function parameter, including its type,
+    This model contains metadata about a tool parameter, including its type,
     description, and validation requirements.
     """
     type: str = Field(..., description="Data type of the parameter")
@@ -259,4 +259,11 @@ class ParameterInfo(BaseModel):
     custom_validator: Optional[str] = Field(None, description="Name of custom validator function")
     
     class Config:
-        arbitrary_types_allowed = True 
+        arbitrary_types_allowed = True
+
+
+# Add backward compatibility aliases at the end of the file
+FunctionMetadata = ToolMetadata
+FunctionParameters = ToolParameters
+FunctionInfo = ToolMetadata  # For performance_demo.py which imports this
+# The registry will continue to work since we kept the FunctionResult name 

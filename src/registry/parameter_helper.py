@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
 """
-Parameter Helper System
+Parameter Helper Functions
 
-This module provides utilities for parameter validation, type conversion,
-and suggestion generation to help AI agents use functions correctly.
+This module provides utility functions for validating and converting
+parameters for registry functions.
 """
 
-import inspect
+from typing import Dict, List, Any, Optional, Union, Tuple, Type
 import json
+import inspect
 import re
-import datetime
-from typing import Any, Dict, List, Optional, Union, Callable, TypeVar, Type, cast, get_type_hints
-from enum import Enum
+from datetime import datetime
+import uuid
 
-from src.registry.function_models import FunctionMetadata, FunctionResult
+from src.registry.function_models import ToolMetadata
 from src.logger import get_logger
 
 # Initialize logger
@@ -27,7 +27,7 @@ TYPE_CONVERTERS = {
     "bool": lambda v: str(v).lower() in ("true", "t", "yes", "y", "1") if isinstance(v, str) else bool(v),
     "list": lambda v: json.loads(v) if isinstance(v, str) else list(v),
     "dict": lambda v: json.loads(v) if isinstance(v, str) else dict(v),
-    "datetime": lambda v: datetime.datetime.fromisoformat(v) if isinstance(v, str) else v
+    "datetime": lambda v: datetime.fromisoformat(v) if isinstance(v, str) else v
 }
 
 class ValidationError:
@@ -55,7 +55,7 @@ class ParameterHelper:
     """
     
     @staticmethod
-    def validate_parameters(metadata: FunctionMetadata, params: Dict[str, Any]) -> List[ValidationError]:
+    def validate_parameters(metadata: ToolMetadata, params: Dict[str, Any]) -> List[ValidationError]:
         """
         Validate parameters against function metadata.
         
@@ -103,7 +103,7 @@ class ParameterHelper:
         return errors
     
     @staticmethod
-    def convert_parameters(metadata: FunctionMetadata, params: Dict[str, Any]) -> Dict[str, Any]:
+    def convert_parameters(metadata: ToolMetadata, params: Dict[str, Any]) -> Dict[str, Any]:
         """
         Convert parameters to the correct types based on function metadata.
         
@@ -219,7 +219,7 @@ class ParameterHelper:
         return value
     
     @staticmethod
-    def generate_parameter_suggestions(metadata: FunctionMetadata) -> Dict[str, Any]:
+    def generate_parameter_suggestions(metadata: ToolMetadata) -> Dict[str, Any]:
         """
         Generate parameter suggestions for a function.
         

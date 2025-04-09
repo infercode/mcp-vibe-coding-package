@@ -75,6 +75,19 @@ class FunctionRecommendationEngine:
         if len(self.usage_history) > 1000:
             self.usage_history = self.usage_history[-1000:]
     
+    def track_tool_usage(self, function_name: str, parameters: Dict[str, Any], 
+                         result: FunctionResult, context: Optional[Dict[str, Any]] = None) -> None:
+        """
+        Track a tool call for usage analysis.
+        
+        Args:
+            function_name: Name of the tool called
+            parameters: Parameters passed to the tool
+            result: Result of the tool call
+            context: Optional context information
+        """
+        return self.track_function_usage(function_name, parameters, result, context)
+    
     def get_recommendations(self, query: str, context: Optional[Dict[str, Any]] = None, 
                           limit: int = 5) -> List[Dict[str, Any]]:
         """
@@ -164,6 +177,19 @@ class FunctionRecommendationEngine:
             })
         
         return chains
+    
+    def get_tool_chains(self, goal: str, limit: int = 3) -> List[Dict[str, Any]]:
+        """
+        Get recommended tool chains for accomplishing a goal.
+        
+        Args:
+            goal: Description of the goal to accomplish
+            limit: Maximum number of chains to return
+            
+        Returns:
+            List of tool chains
+        """
+        return self.get_function_chains(goal, limit)
     
     def _calculate_relevance(self, function: FunctionMetadata, query: str, 
                            context: Dict[str, Any]) -> float:
@@ -279,9 +305,9 @@ class UsagePatternDetector:
         Add a function call to the current sequence.
         
         Args:
-            function_name: Name of the function called
-            params: Parameters used in the call
-            result: Result of the function call
+            function_name: Name of the function
+            params: Function parameters
+            result: Function result
         """
         self.current_sequence.append({
             "function": function_name,
@@ -292,6 +318,18 @@ class UsagePatternDetector:
         
         # Check for anti-patterns after adding
         self._check_anti_patterns()
+    
+    def add_tool_call(self, function_name: str, params: Dict[str, Any], 
+                    result: FunctionResult) -> None:
+        """
+        Add a tool call to the current sequence.
+        
+        Args:
+            function_name: Name of the tool
+            params: Tool parameters
+            result: Tool result
+        """
+        return self.add_function_call(function_name, params, result)
     
     def end_sequence(self) -> None:
         """End the current sequence and add it to history."""

@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """
-Function Registry Pattern Implementation
+Tool Registry Pattern Implementation
 
-This module provides a registry pattern for consolidating multiple function tools
+This module provides a registry pattern for consolidating multiple tool functions
 into a few category-based meta-tools to address IDE integration limitations.
 """
 
-from src.registry.registry_manager import FunctionRegistry, register_function, get_registry
-from src.registry.function_models import FunctionMetadata, FunctionResult, FunctionParameters
+from src.registry.registry_manager import ToolRegistry, register_tool, get_registry
+from src.registry.function_models import ToolMetadata, FunctionResult, ToolParameters
 from src.registry.registry_tools import register_registry_tools
 from src.registry.parameter_helper import ParameterHelper, ValidationError
 
-# Import all modules that register functions with the registry
+# Import all modules that register tools with the registry
 from src.registry import registry_tools
 from src.registry import function_models
 from src.registry import parameter_helper
@@ -25,12 +25,12 @@ from src.registry import health_diagnostics
 from src.registry import feedback_mechanism
 
 __all__ = [
-    "FunctionRegistry",
-    "register_function",
+    "ToolRegistry",
+    "register_tool",
     "get_registry",
-    "FunctionMetadata",
+    "ToolMetadata",
     "FunctionResult",
-    "FunctionParameters",
+    "ToolParameters",
     "ParameterHelper",
     "register_registry_tools",
     "ValidationError",
@@ -39,20 +39,20 @@ __all__ = [
 
 def initialize_registry():
     """
-    Initialize all registry functions without exposing them as tools.
+    Initialize all registry tools without exposing them directly.
     
-    This function ensures that all function modules register their functions
-    with the registry, making them available via the execute_function tool
+    This function ensures that all tool modules register their tools
+    with the registry, making them available via the execute_tool tool
     even when not all tools are directly exposed to the MCP server.
     
     Returns:
-        FunctionRegistry: The initialized registry instance
+        ToolRegistry: The initialized registry instance
     """
     # Get the registry singleton
     registry = get_registry()
     
     # The imports at the top of this file should trigger registration
-    # of functions in each module on import, so we don't need to call
+    # of tools in each module on import, so we don't need to call
     # explicit registration functions.
     
     # Import additional modules if needed
@@ -61,9 +61,9 @@ def initialize_registry():
     except ImportError:
         pass
     
-    # Log the number of registered functions
-    function_count = len(registry.get_all_functions())
+    # Log the number of registered tools
+    tool_count = len(registry.get_all_tools())
     namespace_count = len(registry.get_namespaces())
-    print(f"Registry initialized with {function_count} functions in {namespace_count} namespaces")
+    print(f"Registry initialized with {tool_count} tools in {namespace_count} namespaces")
     
     return registry 

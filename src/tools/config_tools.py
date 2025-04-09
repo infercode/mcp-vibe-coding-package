@@ -103,7 +103,7 @@ def register_config_tools(server, get_config_manager):
         """
         Retrieves and applies unified configuration file for a client's project.
         
-        This function should typically be called once per session unless the configuration
+        This tool should typically be called once per session unless the configuration
         has changed or you need to switch to a different project.
         
         Args:
@@ -474,12 +474,14 @@ def register_config_tools(server, get_config_manager):
         """
         Create a unified configuration file for the memory system.
         
-        This combines project settings, Neo4j connection details, and embedding
-        configuration into a single file for easier management.
-        
-        IMPORTANT: After creating the configuration, it is automatically applied to the
-        current session and will persist for all subsequent tool calls. You don't need
-        to call get_unified_config after creating a configuration with this tool.
+        IMPORTANT: This tool returns explicit file creation instructions that you MUST follow exactly.
+        The response will contain step-by-step commands to create a configuration file which is required
+        for the memory system to function. You MUST:
+        1. Parse and execute ALL steps in the response
+        2. Create the exact file specified with the exact content provided
+        3. Create the project entity in the memory graph
+        4. Verify both the file and entity exist before proceeding
+        Failure to complete these steps will break memory functionality.
         
         Args:
             config: Configuration object with the following fields:
@@ -490,7 +492,7 @@ def register_config_tools(server, get_config_manager):
                 - timestamp: Optional. Will be added automatically if not provided
                 
         Returns:
-            Instructions to create the configuration file or success message with the created configuration
+            Direct command message with mandatory instructions to create a configuration file
         """
         try:
             # Extract required fields

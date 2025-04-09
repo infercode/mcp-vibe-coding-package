@@ -16,7 +16,7 @@ from datetime import datetime, timedelta
 from enum import Enum
 import os
 
-from src.registry.registry_manager import get_registry, register_function
+from src.registry.registry_manager import get_registry, register_function, register_tool
 from src.registry.function_models import FunctionResult, FunctionMetadata
 from src.logger import get_logger
 
@@ -121,23 +121,23 @@ class FeedbackManager:
     def submit_feedback(self, 
                        feedback_type: Union[FeedbackType, str],
                        content: str,
-                       function_name: Optional[str] = None,
+                       tool_name: Optional[str] = None,
                        severity: Union[FeedbackSeverity, str] = FeedbackSeverity.MEDIUM,
                        context: Optional[Dict[str, Any]] = None,
                        agent_id: Optional[str] = None) -> Dict[str, Any]:
         """
-        Submit feedback about a function or the registry system.
+        Submit feedback about the function registry system.
         
         Args:
-            feedback_type: Type of feedback
-            content: Feedback content
-            function_name: Optional name of the function the feedback is about
+            feedback_type: Type of feedback (general, error, suggestion, etc.)
+            content: The feedback content
+            tool_name: Optional name of the specific tool the feedback is about
             severity: Severity level of the feedback
-            context: Optional context information
+            context: Optional context information (e.g., parameters used)
             agent_id: Optional identifier for the agent submitting feedback
             
         Returns:
-            Dictionary with feedback submission results
+            Dictionary with the submitted feedback information including ID
         """
         # Convert enum values to strings if needed
         fb_type = feedback_type.value if isinstance(feedback_type, FeedbackType) else feedback_type
@@ -151,7 +151,7 @@ class FeedbackManager:
             "id": feedback_id,
             "type": fb_type,
             "content": content,
-            "function_name": function_name,
+            "tool_name": tool_name,
             "severity": sev,
             "context": context or {},
             "agent_id": agent_id,
@@ -166,10 +166,10 @@ class FeedbackManager:
         self.feedback_counters[fb_type] = self.feedback_counters.get(fb_type, 0) + 1
         
         # Update function-specific feedback
-        if function_name:
-            if function_name not in self.function_feedback:
-                self.function_feedback[function_name] = []
-            self.function_feedback[function_name].append(feedback_id)
+        if tool_name:
+            if tool_name not in self.function_feedback:
+                self.function_feedback[tool_name] = []
+            self.function_feedback[tool_name].append(feedback_id)
         
         # Save to storage
         self._save_feedback()
@@ -204,15 +204,15 @@ class FeedbackManager:
     
     def _process_error_feedback(self, feedback: Dict[str, Any]):
         """Process error feedback for potential improvements."""
-        function_name = feedback.get("function_name")
-        if not function_name:
+        tool_name = feedback.get("tool_name")
+        if not tool_name:
             return
             
         # Create recommendation for error handling improvement
-        recommendation_id = f"rec_error_{function_name}_{int(time.time())}"
+        recommendation_id = f"rec_error_{tool_name}_{int(time.time())}"
         
         error_feedback_count = 0
-        for fb_id in self.function_feedback.get(function_name, []):
+        for fb_id in self.function_feedback.get(tool_name, []):
             fb = self.feedback_store.get(fb_id, {})
             if fb.get("type") == FeedbackType.ERROR.value:
                 error_feedback_count += 1
@@ -221,8 +221,8 @@ class FeedbackManager:
             self.optimization_recommendations[recommendation_id] = {
                 "id": recommendation_id,
                 "type": "error_handling",
-                "function_name": function_name,
-                "description": f"Improve error handling for function '{function_name}'",
+                "tool_name": tool_name,
+                "description": f"Improve error handling for tool '{tool_name}'",
                 "evidence": [feedback["id"]],
                 "severity": FeedbackSeverity.HIGH.value if error_feedback_count >= 5 else FeedbackSeverity.MEDIUM.value,
                 "created": datetime.now().isoformat(),
@@ -231,14 +231,14 @@ class FeedbackManager:
     
     def _process_suggestion_feedback(self, feedback: Dict[str, Any]):
         """Process suggestion feedback."""
-        function_name = feedback.get("function_name")
+        tool_name = feedback.get("tool_name")
         content = feedback.get("content", "")
         
         # Store the suggestion
         suggestion_id = f"sug_{int(time.time())}"
         self.suggestion_store[suggestion_id] = {
             "id": suggestion_id,
-            "function_name": function_name,
+            "tool_name": tool_name,
             "content": content,
             "source_feedback": feedback["id"],
             "created": datetime.now().isoformat(),
@@ -247,14 +247,14 @@ class FeedbackManager:
     
     def _process_usage_problem_feedback(self, feedback: Dict[str, Any]):
         """Process usage problem feedback."""
-        function_name = feedback.get("function_name")
-        if not function_name:
+        tool_name = feedback.get("tool_name")
+        if not tool_name:
             return
             
         # Create recommendation for documentation or parameter improvement
         has_similar_rec = False
         for rec_id, rec in self.optimization_recommendations.items():
-            if rec.get("function_name") == function_name and rec.get("type") == "usability":
+            if rec.get("tool_name") == tool_name and rec.get("type") == "usability":
                 # Update existing recommendation
                 rec["evidence"].append(feedback["id"])
                 rec["severity"] = FeedbackSeverity.HIGH.value if len(rec["evidence"]) >= 3 else FeedbackSeverity.MEDIUM.value
@@ -262,12 +262,12 @@ class FeedbackManager:
                 break
         
         if not has_similar_rec:
-            recommendation_id = f"rec_usability_{function_name}_{int(time.time())}"
+            recommendation_id = f"rec_usability_{tool_name}_{int(time.time())}"
             self.optimization_recommendations[recommendation_id] = {
                 "id": recommendation_id,
                 "type": "usability",
-                "function_name": function_name,
-                "description": f"Improve usability of function '{function_name}'",
+                "tool_name": tool_name,
+                "description": f"Improve usability of tool '{tool_name}'",
                 "evidence": [feedback["id"]],
                 "severity": FeedbackSeverity.MEDIUM.value,
                 "created": datetime.now().isoformat(),
@@ -280,7 +280,7 @@ class FeedbackManager:
         suggestion_id = f"feat_{int(time.time())}"
         self.suggestion_store[suggestion_id] = {
             "id": suggestion_id,
-            "function_name": feedback.get("function_name"),
+            "tool_name": feedback.get("tool_name"),
             "content": feedback.get("content", ""),
             "type": "feature_request",
             "source_feedback": feedback["id"],
@@ -306,26 +306,26 @@ class FeedbackManager:
         all_feedback.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
         return all_feedback
     
-    def get_function_feedback(self, function_name: str) -> List[Dict[str, Any]]:
+    def get_tool_feedback(self, tool_name: str) -> List[Dict[str, Any]]:
         """
-        Get all feedback for a specific function.
+        Get all feedback for a specific tool.
         
         Args:
-            function_name: Name of the function
+            tool_name: Name of the tool to get feedback for
             
         Returns:
-            List of feedback entries for the function
+            List of feedback items for the specified tool
         """
-        feedback_ids = self.function_feedback.get(function_name, [])
-        function_feedback = []
+        feedback_ids = self.function_feedback.get(tool_name, [])
+        tool_feedback = []
         
         for fb_id in feedback_ids:
             if fb_id in self.feedback_store:
-                function_feedback.append(self.feedback_store[fb_id])
+                tool_feedback.append(self.feedback_store[fb_id])
         
         # Sort by timestamp
-        function_feedback.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
-        return function_feedback
+        tool_feedback.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+        return tool_feedback
     
     def get_feedback_summary(self) -> Dict[str, Any]:
         """
@@ -355,23 +355,23 @@ class FeedbackManager:
             if status in status_counts:
                 status_counts[status] += 1
         
-        # Get functions with most feedback
-        function_feedback_counts = {}
+        # Get tools with most feedback
+        tool_feedback_counts = {}
         for func_name, fb_ids in self.function_feedback.items():
-            function_feedback_counts[func_name] = len(fb_ids)
+            tool_feedback_counts[func_name] = len(fb_ids)
         
-        top_functions = sorted(
-            function_feedback_counts.items(),
+        top_tools = sorted(
+            tool_feedback_counts.items(),
             key=lambda x: x[1],
             reverse=True
-        )[:5]  # Top 5 functions
+        )[:5]  # Top 5 tools
         
         return {
             "total_feedback": len(self.feedback_store),
             "feedback_by_type": type_counts,
             "feedback_by_severity": severity_counts,
             "feedback_by_status": status_counts,
-            "top_functions": top_functions,
+            "top_tools": top_tools,
             "total_suggestions": len(self.suggestion_store),
             "total_recommendations": len(self.optimization_recommendations)
         }
@@ -409,20 +409,20 @@ class FeedbackManager:
             "message": f"Feedback status updated to {status_value}"
         }
     
-    def get_suggestions(self, function_name: Optional[str] = None) -> List[Dict[str, Any]]:
+    def get_suggestions(self, tool_name: Optional[str] = None) -> List[Dict[str, Any]]:
         """
-        Get improvement suggestions, optionally filtered by function.
+        Get improvement suggestions, optionally filtered by tool.
         
         Args:
-            function_name: Optional function name to filter suggestions
+            tool_name: Optional tool name to filter suggestions
             
         Returns:
             List of suggestions
         """
         suggestions = list(self.suggestion_store.values())
         
-        if function_name:
-            suggestions = [s for s in suggestions if s.get("function_name") == function_name]
+        if tool_name:
+            suggestions = [s for s in suggestions if s.get("tool_name") == tool_name]
         
         # Sort by created timestamp
         suggestions.sort(key=lambda x: x.get("created", ""), reverse=True)
@@ -447,33 +447,33 @@ class FeedbackManager:
         
         return recommendations
     
-    def analyze_function_usage_patterns(self, function_name: str) -> Dict[str, Any]:
+    def analyze_tool_usage_patterns(self, tool_name: str) -> Dict[str, Any]:
         """
-        Analyze usage patterns for a specific function based on feedback.
+        Analyze usage patterns for a specific tool.
         
         Args:
-            function_name: Name of the function to analyze
+            tool_name: Name of the tool to analyze
             
         Returns:
-            Dictionary with analysis results
+            Dictionary with usage pattern information
         """
-        if function_name not in self.function_feedback:
+        if tool_name not in self.function_feedback:
             return {
-                "function_name": function_name,
+                "tool_name": tool_name,
                 "total_feedback": 0,
-                "message": "No feedback available for this function"
+                "message": "No feedback available for this tool"
             }
         
-        feedback_ids = self.function_feedback.get(function_name, [])
-        function_feedback = []
+        feedback_ids = self.function_feedback.get(tool_name, [])
+        tool_feedback = []
         
         for fb_id in feedback_ids:
             if fb_id in self.feedback_store:
-                function_feedback.append(self.feedback_store[fb_id])
+                tool_feedback.append(self.feedback_store[fb_id])
         
         # Analyze feedback by type
         feedback_by_type = {}
-        for feedback in function_feedback:
+        for feedback in tool_feedback:
             fb_type = feedback.get("type")
             if fb_type not in feedback_by_type:
                 feedback_by_type[fb_type] = []
@@ -488,7 +488,7 @@ class FeedbackManager:
             common_issues.append({
                 "type": "error",
                 "count": len(error_feedback),
-                "description": f"{len(error_feedback)} error reports for this function"
+                "description": f"{len(error_feedback)} error reports for this tool"
             })
         
         if FeedbackType.USAGE_PROBLEM.value in feedback_by_type:
@@ -497,18 +497,18 @@ class FeedbackManager:
             common_issues.append({
                 "type": "usage_problem",
                 "count": len(usage_problems),
-                "description": f"{len(usage_problems)} usage problems reported for this function"
+                "description": f"{len(usage_problems)} usage problems reported for this tool"
             })
         
         # Get improvement suggestions
-        function_suggestions = self.get_suggestions(function_name)
+        tool_suggestions = self.get_suggestions(tool_name)
         
         return {
-            "function_name": function_name,
-            "total_feedback": len(function_feedback),
+            "tool_name": tool_name,
+            "total_feedback": len(tool_feedback),
             "feedback_by_type": {k: len(v) for k, v in feedback_by_type.items()},
             "common_issues": common_issues,
-            "suggestions": function_suggestions[:5],  # Top 5 suggestions
+            "suggestions": tool_suggestions[:5],  # Top 5 suggestions
             "analyzed_at": datetime.now().isoformat()
         }
     
@@ -521,146 +521,138 @@ class FeedbackManager:
         """
         recommendations = []
         
-        # Analyze functions with the most feedback
-        function_feedback_counts = {}
+        # Analyze tools with the most feedback
+        tool_feedback_counts = {}
         for func_name, fb_ids in self.function_feedback.items():
-            function_feedback_counts[func_name] = len(fb_ids)
+            tool_feedback_counts[func_name] = len(fb_ids)
         
-        top_functions = sorted(
-            function_feedback_counts.items(),
+        top_tools = sorted(
+            tool_feedback_counts.items(),
             key=lambda x: x[1],
             reverse=True
-        )[:10]  # Top 10 functions
+        )[:10]  # Top 10 tools
         
-        for func_name, count in top_functions:
+        for func_name, count in top_tools:
             # Skip if count is too low
             if count < 3:
                 continue
                 
-            # Analyze the function
-            analysis = self.analyze_function_usage_patterns(func_name)
+            # Analyze the tool
+            analysis = self.analyze_tool_usage_patterns(func_name)
             
             # Generate recommendations based on analysis
-            function_recommendations = []
+            tool_recommendations = []
             
             # Check for high error counts
             feedback_by_type = analysis.get("feedback_by_type", {})
             if feedback_by_type.get(FeedbackType.ERROR.value, 0) >= 3:
-                function_recommendations.append({
+                tool_recommendations.append({
                     "type": "error_handling",
                     "severity": FeedbackSeverity.HIGH.value,
-                    "description": f"Improve error handling for function '{func_name}'"
+                    "description": f"Improve error handling for tool '{func_name}'"
                 })
             
             # Check for usage problems
             if feedback_by_type.get(FeedbackType.USAGE_PROBLEM.value, 0) >= 2:
-                function_recommendations.append({
+                tool_recommendations.append({
                     "type": "usability",
                     "severity": FeedbackSeverity.MEDIUM.value,
-                    "description": f"Improve usability of function '{func_name}'"
+                    "description": f"Improve usability of tool '{func_name}'"
                 })
             
             # Check for documentation issues
             if feedback_by_type.get(FeedbackType.DOCUMENTATION.value, 0) >= 1:
-                function_recommendations.append({
+                tool_recommendations.append({
                     "type": "documentation",
                     "severity": FeedbackSeverity.MEDIUM.value,
-                    "description": f"Improve documentation for function '{func_name}'"
+                    "description": f"Improve documentation for tool '{func_name}'"
                 })
             
             # Add the recommendations
-            if function_recommendations:
+            if tool_recommendations:
                 recommendations.append({
-                    "function_name": func_name,
+                    "tool_name": func_name,
                     "feedback_count": count,
-                    "recommendations": function_recommendations,
+                    "recommendations": tool_recommendations,
                     "generated_at": datetime.now().isoformat()
                 })
         
         return recommendations
 
 
-class FunctionImprover:
+class ToolImprover:
     """
-    Generates improvement suggestions for functions based on feedback.
+    Tool improvement suggestion generator.
     
-    This class analyzes feedback and creates specific suggestions for
-    improving function implementation, documentation, and usability.
+    Uses feedback and usage data to generate improvement suggestions for tools
+    and the overall system.
     """
     
     def __init__(self, feedback_manager: Optional[FeedbackManager] = None):
-        """
-        Initialize the function improver.
-        
-        Args:
-            feedback_manager: Optional existing feedback manager to use
-        """
-        self.registry = get_registry()
+        """Initialize the tool improver."""
         self.feedback_manager = feedback_manager or FeedbackManager()
+        self.registry = get_registry()
     
-    def generate_function_suggestions(self, function_name: str) -> Dict[str, Any]:
+    def generate_tool_suggestions(self, tool_name: str) -> Dict[str, Any]:
         """
-        Generate improvement suggestions for a specific function.
+        Generate improvement suggestions for a specific tool.
         
         Args:
-            function_name: Name of the function to generate suggestions for
+            tool_name: Name of the tool to generate suggestions for
             
         Returns:
-            Dictionary with improvement suggestions
+            Dictionary with various improvement suggestions
         """
-        # Get function metadata
-        function_metadata = None
-        if self.registry:
-            function_metadata = self.registry.get_function_metadata(function_name)
-            
-        if not function_metadata:
+        # Get the tool metadata
+        tool_metadata = self.registry.get_tool_metadata(tool_name)
+        if not tool_metadata:
             return {
-                "function_name": function_name,
-                "error": "Function not found in registry"
+                "error": f"Tool '{tool_name}' not found",
+                "suggestions": []
             }
+            
+        # Get all feedback for this tool
+        tool_feedback = self.feedback_manager.get_tool_feedback(tool_name)
         
-        # Get feedback for the function
-        function_feedback = self.feedback_manager.get_function_feedback(function_name)
-        
-        if not function_feedback:
+        if not tool_feedback:
             return {
-                "function_name": function_name,
-                "message": "No feedback available for this function",
+                "tool_name": tool_name,
+                "message": "No feedback available for this tool",
                 "suggestions": []
             }
         
         # Analyze feedback for issues
-        error_feedback = [fb for fb in function_feedback if fb.get("type") == FeedbackType.ERROR.value]
-        usage_feedback = [fb for fb in function_feedback if fb.get("type") == FeedbackType.USAGE_PROBLEM.value]
-        doc_feedback = [fb for fb in function_feedback if fb.get("type") == FeedbackType.DOCUMENTATION.value]
+        error_feedback = [fb for fb in tool_feedback if fb.get("type") == FeedbackType.ERROR.value]
+        usage_feedback = [fb for fb in tool_feedback if fb.get("type") == FeedbackType.USAGE_PROBLEM.value]
+        doc_feedback = [fb for fb in tool_feedback if fb.get("type") == FeedbackType.DOCUMENTATION.value]
         
         # Generate suggestions
         suggestions = []
         
         # Parameter improvement suggestions
         if usage_feedback:
-            parameter_suggestions = self._generate_parameter_suggestions(function_metadata, usage_feedback)
+            parameter_suggestions = self._generate_parameter_suggestions(tool_metadata, usage_feedback)
             suggestions.extend(parameter_suggestions)
         
         # Error handling suggestions
         if error_feedback:
-            error_suggestions = self._generate_error_handling_suggestions(function_metadata, error_feedback)
+            error_suggestions = self._generate_error_handling_suggestions(tool_metadata, error_feedback)
             suggestions.extend(error_suggestions)
         
         # Documentation suggestions
         if doc_feedback:
-            doc_suggestions = self._generate_documentation_suggestions(function_metadata, doc_feedback)
+            doc_suggestions = self._generate_documentation_suggestions(tool_metadata, doc_feedback)
             suggestions.extend(doc_suggestions)
         
         return {
-            "function_name": function_name,
-            "total_feedback": len(function_feedback),
+            "tool_name": tool_name,
+            "total_feedback": len(tool_feedback),
             "suggestions": suggestions,
             "generated_at": datetime.now().isoformat()
         }
     
     def _generate_parameter_suggestions(self, 
-                                       function_metadata: FunctionMetadata,
+                                       tool_metadata: FunctionMetadata,
                                        usage_feedback: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Generate parameter improvement suggestions."""
         suggestions = []
@@ -678,14 +670,14 @@ class FunctionImprover:
             suggestions.append({
                 "type": "parameter_improvement",
                 "title": "Add parameter examples",
-                "description": "Provide usage examples for parameters in the function documentation",
-                "implementation_hint": "Update the function docstring with example parameter values"
+                "description": "Provide usage examples for parameters in the tool documentation",
+                "implementation_hint": "Update the tool docstring with example parameter values"
             })
         
         return suggestions
     
     def _generate_error_handling_suggestions(self,
-                                           function_metadata: FunctionMetadata,
+                                           tool_metadata: FunctionMetadata,
                                            error_feedback: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Generate error handling improvement suggestions."""
         suggestions = []
@@ -709,7 +701,7 @@ class FunctionImprover:
         return suggestions
     
     def _generate_documentation_suggestions(self,
-                                          function_metadata: FunctionMetadata,
+                                          tool_metadata: FunctionMetadata,
                                           doc_feedback: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Generate documentation improvement suggestions."""
         suggestions = []
@@ -718,9 +710,9 @@ class FunctionImprover:
         if len(doc_feedback) >= 1:
             suggestions.append({
                 "type": "documentation",
-                "title": "Improve function description",
-                "description": "Enhance the function description with more details",
-                "implementation_hint": "Expand the docstring with clearer explanation of function purpose"
+                "title": "Improve tool description",
+                "description": "Enhance the tool description with more details",
+                "implementation_hint": "Expand the docstring with clearer explanation of tool purpose"
             })
             
             suggestions.append({
@@ -749,25 +741,25 @@ class FunctionImprover:
             "low_priority": []
         }
         
-        # Check for functions with high error rates
-        top_functions = feedback_summary.get("top_functions", [])
-        for func_name, count in top_functions:
-            function_feedback = self.feedback_manager.get_function_feedback(func_name)
-            error_count = len([fb for fb in function_feedback if fb.get("type") == FeedbackType.ERROR.value])
+        # Check for tools with high error rates
+        top_tools = feedback_summary.get("top_tools", [])
+        for func_name, count in top_tools:
+            tool_feedback = self.feedback_manager.get_tool_feedback(func_name)
+            error_count = len([fb for fb in tool_feedback if fb.get("type") == FeedbackType.ERROR.value])
             
             if error_count >= 5:
                 recommendations["high_priority"].append({
-                    "type": "function_improvement",
-                    "function_name": func_name,
+                    "type": "tool_improvement",
+                    "tool_name": func_name,
                     "description": f"Fix critical error issues in '{func_name}' (reported {error_count} times)",
-                    "action": "review_function"
+                    "action": "review_tool"
                 })
             elif error_count >= 3:
                 recommendations["medium_priority"].append({
-                    "type": "function_improvement",
-                    "function_name": func_name,
+                    "type": "tool_improvement",
+                    "tool_name": func_name,
                     "description": f"Address error issues in '{func_name}' (reported {error_count} times)",
-                    "action": "review_function"
+                    "action": "review_tool"
                 })
         
         # Check for documentation issues
@@ -797,26 +789,26 @@ class FunctionImprover:
 
 # Main feedback functions with direct registration decorators
 
-@register_function("feedback", "submit_feedback")
+@register_tool("feedback", "submit_feedback")
 async def submit_feedback(feedback_type: str,
                      content: str,
-                     function_name: Optional[str] = None,
+                     tool_name: Optional[str] = None,
                      severity: str = "medium",
                      context: Optional[Dict[str, Any]] = None,
                      agent_id: Optional[str] = None) -> FunctionResult:
     """
-    Submit feedback about a function or the registry system.
+    Submit feedback about a tool or the registry system.
     
     Args:
         feedback_type: Type of feedback (general, error, suggestion, rating, etc.)
-        content: Feedback content
-        function_name: Optional function name that the feedback is about
-        severity: Severity level (low, medium, high, critical)
-        context: Additional context information
-        agent_id: Identifier for the agent submitting feedback
+        content: Parameter content
+        tool_name: Parameter tool_name
+        severity: Parameter severity
+        context: Parameter context
+        agent_id: Parameter agent_id
         
     Returns:
-        Function result with feedback submission status
+        FunctionResult with the submitted feedback
     """
     try:
         feedback_manager = FeedbackManager()
@@ -824,7 +816,7 @@ async def submit_feedback(feedback_type: str,
         result = feedback_manager.submit_feedback(
             feedback_type=feedback_type,
             content=content,
-            function_name=function_name,
+            tool_name=tool_name,
             severity=severity,
             context=context,
             agent_id=agent_id
@@ -847,51 +839,51 @@ async def submit_feedback(feedback_type: str,
             error_details={"details": traceback.format_exc()}
         )
 
-@register_function("feedback", "get_function_suggestions")
-async def get_function_suggestions(function_name: str) -> FunctionResult:
+@register_tool("feedback", "get_tool_suggestions")
+async def get_tool_suggestions(tool_name: str) -> FunctionResult:
     """
-    Get function improvement suggestions.
+    Get tool improvement suggestions.
     
     Args:
-        function_name: Name of the function to get suggestions for
+        tool_name: Name of the tool to get suggestions for
         
     Returns:
-        Function result with function suggestions
+        Function result with tool suggestions
     """
     try:
         feedback_manager = FeedbackManager()
-        improver = FunctionImprover(feedback_manager)
+        improver = ToolImprover(feedback_manager)
         
-        suggestions = improver.generate_function_suggestions(function_name)
+        suggestions = improver.generate_tool_suggestions(tool_name)
         
         return FunctionResult(
             data=suggestions,
             status="SUCCESS",
-            message="Function suggestions generated successfully",
+            message="Tool suggestions generated successfully",
             error_code=None,
             error_details=None
         )
     except Exception as e:
-        logger.error(f"Error generating function suggestions: {str(e)}")
+        logger.error(f"Error generating tool suggestions: {str(e)}")
         return FunctionResult(
             data=None,
             status="ERROR",
-            message=f"Error generating function suggestions: {str(e)}",
+            message=f"Error generating tool suggestions: {str(e)}",
             error_code="SUGGESTION_GENERATION_ERROR",
             error_details={"details": traceback.format_exc()}
         )
 
-@register_function("feedback", "get_optimization_recommendations")
+@register_tool("feedback", "get_optimization_recommendations")
 async def get_optimization_recommendations() -> FunctionResult:
     """
-    Get optimization recommendations for the Function Registry system.
+    Get optimization recommendations for the Tool Registry system.
     
     Returns:
         Function result with optimization recommendations
     """
     try:
         feedback_manager = FeedbackManager()
-        improver = FunctionImprover(feedback_manager)
+        improver = ToolImprover(feedback_manager)
         
         recommendations = improver.generate_system_improvement_recommendations()
         
@@ -912,7 +904,7 @@ async def get_optimization_recommendations() -> FunctionResult:
             error_details={"details": traceback.format_exc()}
         )
 
-@register_function("feedback", "get_feedback_summary")
+@register_tool("feedback", "get_feedback_summary")
 async def get_feedback_summary() -> FunctionResult:
     """
     Get a summary of all feedback.
