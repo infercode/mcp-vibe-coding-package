@@ -24,7 +24,7 @@ from src.models.lesson_memory import (
     LessonObservationCreate, StructuredLessonObservations,
     LessonRelationshipCreate, SearchQuery
 )
-from src.models.responses import SuccessResponse, create_error_response, parse_json_to_model
+from src.models.responses import SuccessResponse, create_error_response, parse_json_to_model, create_success_response
 from pydantic import ValidationError
 
 class LessonMemoryManager:
@@ -106,8 +106,11 @@ class LessonMemoryManager:
         """
         try:
             # Call the container component directly
-            response = self.container.get_container()
-            return response
+            response_json = self.container.get_container()
+            
+            # Parse the JSON response to a SuccessResponse model
+            response = parse_json_to_model(response_json, SuccessResponse)
+            return json.dumps(response.model_dump(), default=str)
             
         except Exception as e:
             self.logger.error(f"Error retrieving lesson container: {str(e)}")
@@ -235,7 +238,12 @@ class LessonMemoryManager:
                     container = dict(record['c'].items())
                     containers.append(container)
             
-            return {"status": "success", "containers": containers}
+            # Use the helper function from responses module
+            success_response = create_success_response(
+                message="Successfully retrieved lesson containers",
+                data={"containers": containers}
+            )
+            return success_response.model_dump()
         except Exception as e:
             self.logger.error(f"Error listing containers: {str(e)}")
             return create_error_response(
@@ -255,7 +263,6 @@ class LessonMemoryManager:
             Dictionary with success/error status
         """
         try:
-            # Direct implementation as fallback for missing method
             # First verify container exists
             container_query = """
             MATCH (c:LessonContainer {name: $name})
@@ -268,7 +275,10 @@ class LessonMemoryManager:
             )
             
             if not container_records:
-                return {"error": f"Container '{container_name}' not found"}
+                return create_error_response(
+                    message=f"Container '{container_name}' not found",
+                    code="container_not_found"
+                ).model_dump()
                 
             # Verify entity exists
             entity_query = """
@@ -282,7 +292,10 @@ class LessonMemoryManager:
             )
             
             if not entity_records:
-                return {"error": f"Entity '{entity_name}' not found"}
+                return create_error_response(
+                    message=f"Entity '{entity_name}' not found",
+                    code="entity_not_found"
+                ).model_dump()
                 
             # Create relationship between container and entity
             relation_query = """
@@ -301,7 +314,10 @@ class LessonMemoryManager:
                 }
             )
             
-            return {"status": "success", "message": f"Entity added to container"}
+            return create_success_response(
+                message=f"Entity '{entity_name}' added to container '{container_name}'",
+                data={"entity_name": entity_name, "container_name": container_name}
+            ).model_dump()
         except Exception as e:
             self.logger.error(f"Error adding entity to container: {str(e)}")
             return create_error_response(
@@ -321,7 +337,6 @@ class LessonMemoryManager:
             Dictionary with success/error status
         """
         try:
-            # Direct implementation as fallback for missing method
             # Delete relationship between container and entity
             relation_query = """
             MATCH (c:LessonContainer {name: $container_name})-[r:CONTAINS]->(e:Entity {name: $entity_name})
@@ -336,7 +351,10 @@ class LessonMemoryManager:
                 }
             )
             
-            return {"status": "success", "message": f"Entity removed from container"}
+            return create_success_response(
+                message=f"Entity '{entity_name}' removed from container '{container_name}'",
+                data={"entity_name": entity_name, "container_name": container_name}
+            ).model_dump()
         except Exception as e:
             self.logger.error(f"Error removing entity from container: {str(e)}")
             return create_error_response(
@@ -344,12 +362,9 @@ class LessonMemoryManager:
                 code="container_remove_entity_error"
             ).model_dump()
     
-    def get_lesson_container_entities(
-            self,
-            container_name: str, 
-            entity_type: Optional[str] = None,
-            limit: int = 100
-        ) -> Dict[str, Any]:
+    def get_lesson_container_entities(self, container_name: str, 
+                            entity_type: Optional[str] = None,
+                            limit: int = 100) -> Dict[str, Any]:
         """
         Get all entities in a container.
         
@@ -362,7 +377,24 @@ class LessonMemoryManager:
             Dictionary with success/error status and list of entities
         """
         try:
-            # Direct implementation as fallback for missing method
+            # First verify container exists
+            container_query = """
+            MATCH (c:LessonContainer {name: $name})
+            RETURN c
+            """
+            
+            container_records = self.base_manager.safe_execute_read_query(
+                container_query,
+                {"name": container_name}
+            )
+            
+            if not container_records:
+                return create_error_response(
+                    message=f"Container '{container_name}' not found",
+                    code="container_not_found"
+                ).model_dump()
+                
+            # Query for entities in the container
             query = """
             MATCH (c:LessonContainer {name: $container_name})-[:CONTAINS]->(e:Entity)
             """
@@ -388,7 +420,10 @@ class LessonMemoryManager:
                     entity = dict(record['e'].items())
                     entities.append(entity)
             
-            return {"status": "success", "entities": entities}
+            return create_success_response(
+                message=f"Retrieved {len(entities)} entities from container '{container_name}'",
+                data={"container_name": container_name, "entities": entities}
+            ).model_dump()
         except Exception as e:
             self.logger.error(f"Error getting container entities: {str(e)}")
             return create_error_response(
@@ -612,7 +647,20 @@ class LessonMemoryManager:
                     entity = dict(record['e'].items())
                     entities.append(entity)
             
-            return json.dumps({"entities": entities})
+            search_description = f"'{search_model.search_term}'" if search_model.search_term else "all entities"
+            if search_model.container_name:
+                search_description += f" in container '{search_model.container_name}'"
+            
+            response = create_success_response(
+                message=f"Found {len(entities)} entities matching {search_description}",
+                data={
+                    "entities": entities,
+                    "query": search_data,
+                    "count": len(entities)
+                }
+            )
+            
+            return json.dumps(response.model_dump(), default=str)
                 
         except ValidationError as ve:
             self.logger.error(f"Validation error searching lesson entities: {str(ve)}")
@@ -799,86 +847,52 @@ class LessonMemoryManager:
                 "error": f"Failed to merge lessons: {str(e)}"
             })
     
-    def get_lesson_knowledge_evolution(
-            self,
-            entity_name: Optional[str] = None,
-            lesson_type: Optional[str] = None,
-            start_date: Optional[str] = None,
-            end_date: Optional[str] = None,
-            include_superseded: bool = True
-        ) -> str:
+    def get_lesson_knowledge_evolution(self, entity_name: Optional[str] = None,
+                             lesson_type: Optional[str] = None,
+                             start_date: Optional[str] = None,
+                             end_date: Optional[str] = None,
+                             include_superseded: bool = True) -> str:
         """
         Track the evolution of knowledge in the lesson graph.
         
         Args:
             entity_name: Optional entity name to filter by
             lesson_type: Optional lesson type to filter by
-            start_date: Optional start date for time range
-            end_date: Optional end date for time range
+            start_date: Optional start date for time range (ISO format)
+            end_date: Optional end date for time range (ISO format)
             include_superseded: Whether to include superseded lessons
             
         Returns:
             JSON string with evolution data
         """
         try:
-            # Direct implementation as fallback
-            self.logger.error("Evolution component doesn't have track_knowledge_evolution method")
+            # Delegate to the evolution component
+            response_json = self.evolution.get_knowledge_evolution(
+                entity_name, lesson_type, start_date, end_date, include_superseded
+            )
             
-            # Build a query to track knowledge evolution
-            query = """
-            MATCH (e:Entity)
-            WHERE e.domain = 'lesson'
-            """
+            # Parse and enhance the response
+            response_data = json.loads(response_json)
             
-            params = {}
+            # If it's already an error response, just return it
+            if "error" in response_data:
+                return response_json
+                
+            # Create a standardized success response
+            lesson_count = response_data.get("count", 0)
+            entity_filter = f" for '{entity_name}'" if entity_name else ""
             
-            if entity_name:
-                query += " AND e.name = $entity_name"
-                params["entity_name"] = entity_name
-                
-            if lesson_type:
-                query += " AND e.entityType = $lesson_type"
-                params["lesson_type"] = lesson_type
-                
-            # Add time range if specified
-            if start_date:
-                query += " AND e.created >= datetime($start_date)"
-                params["start_date"] = start_date
-                
-            if end_date:
-                query += " AND e.created <= datetime($end_date)"
-                params["end_date"] = end_date
-                
-            if not include_superseded:
-                query += " AND NOT EXISTS((e)<-[:SUPERSEDES]-())"
-                
-            query += """
-            RETURN e,
-                   e.created as created_time,
-                   e.lastUpdated as updated_time
-            ORDER BY e.created
-            """
-            
-            # Execute the query
-            records = self.base_manager.safe_execute_read_query(query, params)
-            
-            # Process results
-            evolution_data = []
-            for record in records:
-                entity = record.get("e")
-                if entity:
-                    entity_dict = dict(entity.items())
-                    entity_dict["created_time"] = record.get("created_time")
-                    entity_dict["updated_time"] = record.get("updated_time")
-                    evolution_data.append(entity_dict)
-                    
-            return json.dumps({"evolution": evolution_data})
+            return json.dumps(create_success_response(
+                message=f"Retrieved evolution data for {lesson_count} lessons{entity_filter}",
+                data=response_data
+            ).model_dump(), default=str)
             
         except Exception as e:
             self.logger.error(f"Error getting knowledge evolution: {str(e)}")
-            return json.dumps({
-                "error": f"Failed to get knowledge evolution: {str(e)}"
-            })
+            return json.dumps(create_error_response(
+                message=f"Failed to get knowledge evolution: {str(e)}",
+                code="knowledge_evolution_error"
+            ).model_dump(), default=str)
 
     # Missing observation methods
     def add_lesson_observation(self, observation_data: Dict[str, Any]) -> str:
@@ -1200,3 +1214,393 @@ class LessonMemoryManager:
             return json.dumps({
                 "error": f"Failed to perform semantic lesson search: {str(e)}"
             })
+
+    def check_lesson_observation_completeness(self, entity_name: str) -> str:
+        """
+        Check which structured observation types are present for a lesson entity.
+        
+        Args:
+            entity_name: Name of the entity to check
+            
+        Returns:
+            JSON string with completeness assessment including:
+            - Which standard observation types are present
+            - Completeness score
+            - Missing observation types
+        """
+        try:
+            # Delegate to the observation component's existing method
+            response_json = self.observation.check_observation_completeness(entity_name)
+            
+            # Parse and enhance the response if needed
+            response_data = json.loads(response_json)
+            
+            # If it's already an error response, just return it
+            if "error" in response_data:
+                return response_json
+                
+            # Create a standardized success response
+            return json.dumps(create_success_response(
+                message=f"Lesson observation completeness check for '{entity_name}'",
+                data=response_data
+            ).model_dump(), default=str)
+            
+        except Exception as e:
+            self.logger.error(f"Error checking lesson observation completeness: {str(e)}")
+            return json.dumps(create_error_response(
+                message=f"Failed to check lesson observation completeness: {str(e)}",
+                code="observation_completeness_error"
+            ).model_dump(), default=str)
+
+    # Consolidation Methods
+    def identify_similar_lessons(self, min_similarity: float = 0.7, 
+                              entity_type: Optional[str] = None,
+                              max_results: int = 20) -> str:
+        """
+        Identify clusters of similar lessons based on semantic similarity.
+        
+        Args:
+            min_similarity: Minimum similarity threshold (0.0-1.0)
+            entity_type: Optional specific lesson type to filter by
+            max_results: Maximum number of similarity pairs to return
+            
+        Returns:
+            JSON string with similar lesson pairs
+        """
+        try:
+            # Delegate to the consolidation component
+            response_json = self.consolidation.identify_similar_lessons(
+                min_similarity, entity_type, max_results
+            )
+            
+            # Parse and enhance the response
+            response_data = json.loads(response_json)
+            
+            # If it's already an error response, just return it
+            if "error" in response_data:
+                return response_json
+                
+            # Create a standardized success response
+            return json.dumps(create_success_response(
+                message=f"Found {response_data.get('similar_pair_count', 0)} similar lesson pairs",
+                data=response_data
+            ).model_dump(), default=str)
+            
+        except Exception as e:
+            self.logger.error(f"Error identifying similar lessons: {str(e)}")
+            return json.dumps(create_error_response(
+                message=f"Failed to identify similar lessons: {str(e)}",
+                code="similarity_analysis_error"
+            ).model_dump(), default=str)
+            
+    def suggest_lesson_consolidations(self, threshold: float = 0.8, max_suggestions: int = 10) -> str:
+        """
+        Suggest lessons that could be consolidated based on similarity.
+        
+        Args:
+            threshold: Similarity threshold for suggestions (0.0-1.0)
+            max_suggestions: Maximum number of suggestions to return
+            
+        Returns:
+            JSON string with consolidation suggestions
+        """
+        try:
+            # Delegate to the consolidation component
+            response_json = self.consolidation.suggest_consolidations(
+                threshold, max_suggestions
+            )
+            
+            # Parse and enhance the response
+            response_data = json.loads(response_json)
+            
+            # If it's already an error response, just return it
+            if "error" in response_data:
+                return response_json
+                
+            # Create a standardized success response
+            return json.dumps(create_success_response(
+                message=f"Found {response_data.get('suggestion_count', 0)} consolidation suggestions",
+                data=response_data
+            ).model_dump(), default=str)
+            
+        except Exception as e:
+            self.logger.error(f"Error suggesting lesson consolidations: {str(e)}")
+            return json.dumps(create_error_response(
+                message=f"Failed to suggest lesson consolidations: {str(e)}",
+                code="consolidation_suggestion_error"
+            ).model_dump(), default=str)
+            
+    def cleanup_superseded_lessons(self, older_than_days: int = 30, 
+                                 min_confidence: float = 0.0,
+                                 dry_run: bool = True) -> str:
+        """
+        Clean up lessons that have been superseded and are older than a given threshold.
+        
+        Args:
+            older_than_days: Only include lessons older than this many days
+            min_confidence: Only include lessons with confidence >= this value
+            dry_run: If True, only report what would be done without making changes
+            
+        Returns:
+            JSON string with cleanup details
+        """
+        try:
+            # Delegate to the consolidation component
+            response_json = self.consolidation.cleanup_superseded_lessons(
+                older_than_days, min_confidence, dry_run
+            )
+            
+            # Parse and enhance the response
+            response_data = json.loads(response_json)
+            
+            # If it's already an error response, just return it
+            if "error" in response_data:
+                return response_json
+                
+            # Create a standardized success response
+            action = "would be deleted" if dry_run else "deleted"
+            count = response_data.get("count", 0) if dry_run else response_data.get("deleted_count", 0)
+            
+            return json.dumps(create_success_response(
+                message=f"{count} superseded lessons {action}",
+                data=response_data
+            ).model_dump(), default=str)
+            
+        except Exception as e:
+            self.logger.error(f"Error cleaning up superseded lessons: {str(e)}")
+            return json.dumps(create_error_response(
+                message=f"Failed to clean up superseded lessons: {str(e)}",
+                code="cleanup_error"
+            ).model_dump(), default=str)
+
+    # Evolution Tracker Methods
+    def get_lesson_confidence_evolution(self, entity_name: str) -> str:
+        """
+        Track how confidence in knowledge has changed over time.
+        
+        Args:
+            entity_name: Name of the entity to track
+            
+        Returns:
+            JSON string with confidence evolution data
+        """
+        try:
+            # Delegate to the evolution component
+            response_json = self.evolution.get_confidence_evolution(entity_name)
+            
+            # Parse and enhance the response
+            response_data = json.loads(response_json)
+            
+            # If it's already an error response, just return it
+            if "error" in response_data:
+                return response_json
+                
+            # Create a standardized success response
+            return json.dumps(create_success_response(
+                message=f"Confidence evolution for '{entity_name}'",
+                data=response_data
+            ).model_dump(), default=str)
+            
+        except Exception as e:
+            self.logger.error(f"Error retrieving lesson confidence evolution: {str(e)}")
+            return json.dumps(create_error_response(
+                message=f"Failed to retrieve lesson confidence evolution: {str(e)}",
+                code="confidence_evolution_error"
+            ).model_dump(), default=str)
+    
+    def get_lesson_application_impact(self, entity_name: str) -> str:
+        """
+        Analyze the impact of lesson application over time.
+        
+        Args:
+            entity_name: Name of the entity to analyze
+            
+        Returns:
+            JSON string with application impact data
+        """
+        try:
+            # Delegate to the evolution component
+            response_json = self.evolution.get_lesson_application_impact(entity_name)
+            
+            # Parse and enhance the response
+            response_data = json.loads(response_json)
+            
+            # If it's already an error response, just return it
+            if "error" in response_data:
+                return response_json
+                
+            # Create a standardized success response
+            application_count = response_data.get("application_count", 0)
+            return json.dumps(create_success_response(
+                message=f"Analyzed {application_count} applications of lesson '{entity_name}'",
+                data=response_data
+            ).model_dump(), default=str)
+            
+        except Exception as e:
+            self.logger.error(f"Error analyzing lesson application impact: {str(e)}")
+            return json.dumps(create_error_response(
+                message=f"Failed to analyze lesson application impact: {str(e)}",
+                code="application_impact_error"
+            ).model_dump(), default=str)
+    
+    def get_lesson_learning_progression(self, entity_name: str, max_depth: int = 3) -> str:
+        """
+        Analyze the learning progression by tracking superseded versions.
+        
+        Args:
+            entity_name: Name of the entity to analyze
+            max_depth: Maximum depth of superseded relationships to traverse
+            
+        Returns:
+            JSON string with learning progression data
+        """
+        try:
+            # Delegate to the evolution component
+            response_json = self.evolution.get_learning_progression(entity_name, max_depth)
+            
+            # Parse and enhance the response
+            response_data = json.loads(response_json)
+            
+            # If it's already an error response, just return it
+            if "error" in response_data:
+                return response_json
+                
+            # Create a standardized success response
+            version_count = response_data.get("version_count", 0)
+            return json.dumps(create_success_response(
+                message=f"Analyzed learning progression for '{entity_name}' with {version_count} versions",
+                data=response_data
+            ).model_dump(), default=str)
+            
+        except Exception as e:
+            self.logger.error(f"Error analyzing lesson learning progression: {str(e)}")
+            return json.dumps(create_error_response(
+                message=f"Failed to analyze lesson learning progression: {str(e)}",
+                code="learning_progression_error"
+            ).model_dump(), default=str)
+
+    def tag_lesson_entity(self, entity_name: str, tags: List[str], 
+                       container_name: Optional[str] = None) -> str:
+        """
+        Add tags to a lesson entity.
+        
+        Args:
+            entity_name: Name of the entity
+            tags: List of tags to add
+            container_name: Optional container to verify membership
+            
+        Returns:
+            JSON string with the updated entity
+        """
+        try:
+            # Delegate to the entity component
+            response_json = self.entity.tag_lesson_entity(entity_name, tags, container_name)
+            
+            # Parse and enhance the response
+            response_data = json.loads(response_json)
+            
+            # If it's already an error response, just return it
+            if "error" in response_data:
+                return response_json
+                
+            # Create a standardized success response
+            tag_count = len(tags)
+            container_info = f" in container '{container_name}'" if container_name else ""
+            
+            return json.dumps(create_success_response(
+                message=f"Added {tag_count} tags to entity '{entity_name}'{container_info}",
+                data=response_data
+            ).model_dump(), default=str)
+            
+        except Exception as e:
+            self.logger.error(f"Error tagging lesson entity: {str(e)}")
+            return json.dumps(create_error_response(
+                message=f"Failed to tag lesson entity: {str(e)}",
+                code="tag_entity_error"
+            ).model_dump(), default=str)
+
+    def update_lesson_relation(self, container_name: str, from_entity: str, to_entity: str,
+                           relation_type: str, updates: Dict[str, Any]) -> str:
+        """
+        Update properties of a relationship between lesson entities.
+        
+        Args:
+            container_name: Name of the container
+            from_entity: Name of the source entity
+            to_entity: Name of the target entity
+            relation_type: Type of the relationship
+            updates: Dictionary of property updates
+            
+        Returns:
+            JSON string with the updated relationship
+        """
+        try:
+            # Delegate to the relation component
+            response_json = self.relation.update_lesson_relation(
+                container_name, from_entity, to_entity, relation_type, updates
+            )
+            
+            # Parse and enhance the response
+            response_data = json.loads(response_json)
+            
+            # If it's already an error response, just return it
+            if "error" in response_data:
+                return response_json
+                
+            # Create a standardized success response
+            return json.dumps(create_success_response(
+                message=f"Updated {relation_type} relation from '{from_entity}' to '{to_entity}'",
+                data=response_data
+            ).model_dump(), default=str)
+            
+        except Exception as e:
+            self.logger.error(f"Error updating lesson relation: {str(e)}")
+            return json.dumps(create_error_response(
+                message=f"Failed to update lesson relation: {str(e)}",
+                code="relation_update_error"
+            ).model_dump(), default=str)
+    
+    def get_lesson_knowledge_graph(self, container_name: str, depth: int = 2) -> str:
+        """
+        Get a complete knowledge graph of all entities and relationships in a lesson container.
+        
+        Args:
+            container_name: Name of the container
+            depth: Maximum relationship depth to include (1-3)
+            
+        Returns:
+            JSON string with nodes and relationships comprising the knowledge graph
+        """
+        try:
+            # Validate depth parameter
+            if depth < 1:
+                depth = 1
+            elif depth > 3:
+                depth = 3  # Cap at 3 for performance reasons
+                
+            # Delegate to the relation component
+            response_json = self.relation.get_lesson_knowledge_graph(container_name, depth)
+            
+            # Parse and enhance the response
+            response_data = json.loads(response_json)
+            
+            # If it's already an error response, just return it
+            if "error" in response_data:
+                return response_json
+                
+            # Get counts for summary
+            node_count = len(response_data.get("nodes", []))
+            relationship_count = len(response_data.get("relationships", []))
+            
+            # Create a standardized success response
+            return json.dumps(create_success_response(
+                message=f"Retrieved knowledge graph with {node_count} nodes and {relationship_count} relationships",
+                data=response_data
+            ).model_dump(), default=str)
+            
+        except Exception as e:
+            self.logger.error(f"Error retrieving lesson knowledge graph: {str(e)}")
+            return json.dumps(create_error_response(
+                message=f"Failed to retrieve lesson knowledge graph: {str(e)}",
+                code="knowledge_graph_error"
+            ).model_dump(), default=str)
