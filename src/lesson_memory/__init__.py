@@ -94,13 +94,13 @@ class LessonMemoryManager:
             self.logger.error(f"Error creating lesson container: {str(e)}")
             return json.dumps({
                 "error": f"Failed to create lesson container: {str(e)}",
-                "code": "container_creation_error"
-            })
+                    "code": "container_creation_error"
+                })
     
     def get_lesson_container(self) -> str:
         """
         Retrieve a lesson container.
-                
+            
         Returns:
             JSON response with lesson container data
         """
@@ -436,7 +436,7 @@ class LessonMemoryManager:
             self,
             container_name: str,
             entity_name: str, entity_type: str,
-            observations: Optional[List[str]] = None,
+                          observations: Optional[List[str]] = None,
             metadata: Optional[Dict[str, Any]] = None
         ) -> Dict[str, Any]:
         """
@@ -496,11 +496,11 @@ class LessonMemoryManager:
     # For example:
     def create_structured_lesson_observations(
             self, entity_name: str,
-            what_was_learned: Optional[str] = None,
-            why_it_matters: Optional[str] = None,
-            how_to_apply: Optional[str] = None,
-            root_cause: Optional[str] = None,
-            evidence: Optional[str] = None,
+                                           what_was_learned: Optional[str] = None,
+                                           why_it_matters: Optional[str] = None,
+                                           how_to_apply: Optional[str] = None,
+                                           root_cause: Optional[str] = None,
+                                           evidence: Optional[str] = None,
             container_name: Optional[str] = None
         ) -> Dict[str, Any]:
         """
@@ -720,7 +720,7 @@ class LessonMemoryManager:
             self,
             lesson_name: str,
             context_entity: str,
-            success_score: float = 0.8,
+                              success_score: float = 0.8,
             application_notes: Optional[str] = None
         ) -> str:
         """
@@ -793,7 +793,7 @@ class LessonMemoryManager:
             self,
             source_lessons: List[Dict[str, Any]],
             new_name: str,
-            merge_strategy: str = "union",
+                    merge_strategy: str = "union",
             container_name: Optional[str] = None
         ) -> str:
         """

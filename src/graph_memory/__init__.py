@@ -1584,7 +1584,7 @@ class GraphMemoryManager:
             return dict_to_json({"error": f"Failed to get project status: {str(e)}"})
 
     # Domain management methods
-    def create_domain(self, name: str, container_name: str, 
+    def create_project_domain(self, name: str, container_name: str, 
                     description: Optional[str] = None,
                     properties: Optional[Dict[str, Any]] = None) -> str:
         """
@@ -1601,7 +1601,7 @@ class GraphMemoryManager:
         """
         try:
             self._ensure_initialized()
-            result = self.project_memory.create_domain(name, container_name, description, properties)
+            result = self.project_memory.create_project_domain(name, container_name, description, properties)
             if isinstance(result, dict):
                 return dict_to_json(result)
             return result
@@ -1610,7 +1610,7 @@ class GraphMemoryManager:
                 self.logger.error(f"Error creating domain: {str(e)}")
             return dict_to_json({"error": f"Failed to create domain: {str(e)}"})
     
-    def get_domain(self, name: str, container_name: str) -> str:
+    def get_project_domain(self, name: str, container_name: str) -> str:
         """
         Retrieve a domain from a project container.
         
@@ -1623,7 +1623,7 @@ class GraphMemoryManager:
         """
         try:
             self._ensure_initialized()
-            result = self.project_memory.get_domain(name, container_name)
+            result = self.project_memory.get_project_domain(name, container_name)
             if isinstance(result, dict):
                 return dict_to_json(result)
             return result
@@ -1632,7 +1632,7 @@ class GraphMemoryManager:
                 self.logger.error(f"Error getting domain: {str(e)}")
             return dict_to_json({"error": f"Failed to get domain: {str(e)}"})
     
-    def update_domain(self, name: str, container_name: str, 
+    def update_project_domain(self, name: str, container_name: str, 
                     updates: Dict[str, Any]) -> str:
         """
         Update a domain's properties.
@@ -1647,7 +1647,7 @@ class GraphMemoryManager:
         """
         try:
             self._ensure_initialized()
-            result = self.project_memory.update_domain(name, container_name, updates)
+            result = self.project_memory.update_project_domain(name, container_name, updates)
             if isinstance(result, dict):
                 return dict_to_json(result)
             return result
@@ -1656,7 +1656,7 @@ class GraphMemoryManager:
                 self.logger.error(f"Error updating domain: {str(e)}")
             return dict_to_json({"error": f"Failed to update domain: {str(e)}"})
     
-    def delete_domain(self, name: str, container_name: str, 
+    def delete_project_domain(self, name: str, container_name: str, 
                     delete_components: bool = False) -> str:
         """
         Delete a domain from a project container.
@@ -1671,7 +1671,7 @@ class GraphMemoryManager:
         """
         try:
             self._ensure_initialized()
-            result = self.project_memory.delete_domain(name, container_name, delete_components)
+            result = self.project_memory.delete_project_domain(name, container_name, delete_components)
             if isinstance(result, dict):
                 return dict_to_json(result)
             return result
@@ -1680,7 +1680,7 @@ class GraphMemoryManager:
                 self.logger.error(f"Error deleting domain: {str(e)}")
             return dict_to_json({"error": f"Failed to delete domain: {str(e)}"})
     
-    def list_domains(self, container_name: str, sort_by: str = "name", 
+    def list_project_domains(self, container_name: str, sort_by: str = "name", 
                    limit: int = 100) -> str:
         """
         List all domains in a project container.
@@ -1695,7 +1695,7 @@ class GraphMemoryManager:
         """
         try:
             self._ensure_initialized()
-            result = self.project_memory.list_domains(container_name, sort_by, limit)
+            result = self.project_memory.list_project_domains(container_name, sort_by, limit)
             if isinstance(result, dict):
                 return dict_to_json(result)
             return result
@@ -1705,7 +1705,7 @@ class GraphMemoryManager:
             return dict_to_json({"error": f"Failed to list domains: {str(e)}"})
     
     # Additional dependency management methods
-    def get_dependencies(self, component_name: str, domain_name: str, 
+    def get_project_dependencies(self, component_name: str, domain_name: str, 
                       container_name: str, direction: str = "outgoing",
                       dependency_type: Optional[str] = None) -> str:
         """
@@ -1723,7 +1723,7 @@ class GraphMemoryManager:
         """
         try:
             self._ensure_initialized()
-            result = self.project_memory.get_dependencies(
+            result = self.project_memory.get_project_dependencies(
                 component_name, domain_name, container_name, direction, dependency_type
             )
             if isinstance(result, dict):
@@ -1734,7 +1734,7 @@ class GraphMemoryManager:
                 self.logger.error(f"Error getting dependencies: {str(e)}")
             return dict_to_json({"error": f"Failed to get dependencies: {str(e)}"})
     
-    def delete_dependency(self, from_component: str, to_component: str,
+    def delete_project_dependency(self, from_component: str, to_component: str,
                        domain_name: str, container_name: str,
                        dependency_type: str) -> str:
         """
@@ -1752,7 +1752,7 @@ class GraphMemoryManager:
         """
         try:
             self._ensure_initialized()
-            result = self.project_memory.delete_dependency(
+            result = self.project_memory.delete_project_dependency(
                 from_component, to_component, domain_name, container_name, dependency_type
             )
             if isinstance(result, dict):
@@ -1763,7 +1763,7 @@ class GraphMemoryManager:
                 self.logger.error(f"Error deleting dependency: {str(e)}")
             return dict_to_json({"error": f"Failed to delete dependency: {str(e)}"})
     
-    def analyze_dependency_graph(self, domain_name: str, container_name: str) -> str:
+    def analyze_project_dependency_graph(self, domain_name: str, container_name: str) -> str:
         """
         Analyze the dependency graph for a domain.
         
@@ -1776,7 +1776,7 @@ class GraphMemoryManager:
         """
         try:
             self._ensure_initialized()
-            result = self.project_memory.analyze_dependency_graph(domain_name, container_name)
+            result = self.project_memory.analyze_project_dependency_graph(domain_name, container_name)
             if isinstance(result, dict):
                 return dict_to_json(result)
             return result
@@ -1785,7 +1785,7 @@ class GraphMemoryManager:
                 self.logger.error(f"Error analyzing dependency graph: {str(e)}")
             return dict_to_json({"error": f"Failed to analyze dependency graph: {str(e)}"})
     
-    def find_path(self, from_component: str, to_component: str,
+    def find_project_dependency_path(self, from_component: str, to_component: str,
                domain_name: str, container_name: str,
                max_depth: int = 5) -> str:
         """
@@ -1803,7 +1803,7 @@ class GraphMemoryManager:
         """
         try:
             self._ensure_initialized()
-            result = self.project_memory.find_path(
+            result = self.project_memory.find_project_dependency_path(
                 from_component, to_component, domain_name, container_name, max_depth
             )
             if isinstance(result, dict):
@@ -1814,7 +1814,7 @@ class GraphMemoryManager:
                 self.logger.error(f"Error finding path: {str(e)}")
             return dict_to_json({"error": f"Failed to find path: {str(e)}"})
     
-    def import_dependencies_from_code(self, dependencies: List[Dict[str, Any]],
+    def import_project_dependencies_from_code(self, dependencies: List[Dict[str, Any]],
                                   domain_name: str, container_name: str) -> str:
         """
         Import dependencies detected from code analysis.
@@ -1829,7 +1829,7 @@ class GraphMemoryManager:
         """
         try:
             self._ensure_initialized()
-            result = self.project_memory.import_dependencies_from_code(
+            result = self.project_memory.import_project_dependencies_from_code(
                 dependencies, domain_name, container_name
             )
             if isinstance(result, dict):
@@ -1841,7 +1841,7 @@ class GraphMemoryManager:
             return dict_to_json({"error": f"Failed to import dependencies: {str(e)}"})
     
     # Additional version management methods
-    def get_version(self, component_name: str, domain_name: str,
+    def get_project_version(self, component_name: str, domain_name: str,
                  container_name: str, version_number: Optional[str] = None) -> str:
         """
         Get a specific version of a component.
@@ -1857,7 +1857,7 @@ class GraphMemoryManager:
         """
         try:
             self._ensure_initialized()
-            result = self.project_memory.get_version(
+            result = self.project_memory.get_project_version(
                 component_name, domain_name, container_name, version_number
             )
             if isinstance(result, dict):
@@ -1868,7 +1868,7 @@ class GraphMemoryManager:
                 self.logger.error(f"Error getting version: {str(e)}")
             return dict_to_json({"error": f"Failed to get version: {str(e)}"})
     
-    def list_versions(self, component_name: str, domain_name: str,
+    def list_project_versions(self, component_name: str, domain_name: str,
                    container_name: str, limit: int = 10) -> str:
         """
         List all versions of a component.
@@ -1884,7 +1884,7 @@ class GraphMemoryManager:
         """
         try:
             self._ensure_initialized()
-            result = self.project_memory.list_versions(
+            result = self.project_memory.list_project_versions(
                 component_name, domain_name, container_name, limit
             )
             if isinstance(result, dict):
@@ -1895,7 +1895,7 @@ class GraphMemoryManager:
                 self.logger.error(f"Error listing versions: {str(e)}")
             return dict_to_json({"error": f"Failed to list versions: {str(e)}"})
     
-    def get_version_history(self, component_name: str, domain_name: str,
+    def get_project_version_history(self, component_name: str, domain_name: str,
                          container_name: str, include_content: bool = False) -> str:
         """
         Get the version history of a component.
@@ -1911,7 +1911,7 @@ class GraphMemoryManager:
         """
         try:
             self._ensure_initialized()
-            result = self.project_memory.get_version_history(
+            result = self.project_memory.get_project_version_history(
                 component_name, domain_name, container_name, include_content
             )
             if isinstance(result, dict):
@@ -1922,7 +1922,7 @@ class GraphMemoryManager:
                 self.logger.error(f"Error getting version history: {str(e)}")
             return dict_to_json({"error": f"Failed to get version history: {str(e)}"})
     
-    def compare_versions(self, component_name: str, domain_name: str,
+    def compare_project_versions(self, component_name: str, domain_name: str,
                       container_name: str, version1: str, version2: str) -> str:
         """
         Compare two versions of a component.
@@ -1939,7 +1939,7 @@ class GraphMemoryManager:
         """
         try:
             self._ensure_initialized()
-            result = self.project_memory.compare_versions(
+            result = self.project_memory.compare_project_versions(
                 component_name, domain_name, container_name, version1, version2
             )
             if isinstance(result, dict):
@@ -1950,7 +1950,7 @@ class GraphMemoryManager:
                 self.logger.error(f"Error comparing versions: {str(e)}")
             return dict_to_json({"error": f"Failed to compare versions: {str(e)}"})
     
-    def tag_version(self, component_name: str, domain_name: str,
+    def tag_project_version(self, component_name: str, domain_name: str,
                  container_name: str, version_number: str,
                  tag_name: str, tag_description: Optional[str] = None) -> str:
         """
@@ -1969,7 +1969,7 @@ class GraphMemoryManager:
         """
         try:
             self._ensure_initialized()
-            result = self.project_memory.tag_version(
+            result = self.project_memory.tag_project_version(
                 component_name, domain_name, container_name, 
                 version_number, tag_name, tag_description
             )
@@ -1981,7 +1981,7 @@ class GraphMemoryManager:
                 self.logger.error(f"Error tagging version: {str(e)}")
             return dict_to_json({"error": f"Failed to tag version: {str(e)}"})
     
-    def sync_with_version_control(self, component_name: str, domain_name: str,
+    def sync_project_version_control(self, component_name: str, domain_name: str,
                                container_name: str,
                                commit_data: List[Dict[str, Any]]) -> str:
         """
@@ -1998,7 +1998,7 @@ class GraphMemoryManager:
         """
         try:
             self._ensure_initialized()
-            result = self.project_memory.sync_with_version_control(
+            result = self.project_memory.sync_project_version_control(
                 component_name, domain_name, container_name, commit_data
             )
             if isinstance(result, dict):
@@ -2010,7 +2010,7 @@ class GraphMemoryManager:
             return dict_to_json({"error": f"Failed to sync with version control: {str(e)}"})
 
     # Component management methods
-    def create_component(self, name: str, component_type: str, domain_name: str,
+    def create_project_component(self, name: str, component_type: str, domain_name: str,
                        container_name: str, description: Optional[str] = None,
                        content: Optional[str] = None,
                        metadata: Optional[Dict[str, Any]] = None) -> str:
@@ -2031,7 +2031,7 @@ class GraphMemoryManager:
         """
         try:
             self._ensure_initialized()
-            result = self.project_memory.create_component(
+            result = self.project_memory.create_project_component(
                 name, component_type, domain_name, container_name,
                 description, content, metadata
             )
@@ -2043,7 +2043,7 @@ class GraphMemoryManager:
                 self.logger.error(f"Error creating component: {str(e)}")
             return dict_to_json({"error": f"Failed to create component: {str(e)}"})
     
-    def get_component(self, name: str, domain_name: str, container_name: str) -> str:
+    def get_project_component(self, name: str, domain_name: str, container_name: str) -> str:
         """
         Get a component from a project.
         
@@ -2057,7 +2057,7 @@ class GraphMemoryManager:
         """
         try:
             self._ensure_initialized()
-            result = self.project_memory.get_component(name, domain_name, container_name)
+            result = self.project_memory.get_project_component(name, domain_name, container_name)
             if isinstance(result, dict):
                 return dict_to_json(result)
             return result
@@ -2066,7 +2066,7 @@ class GraphMemoryManager:
                 self.logger.error(f"Error getting component: {str(e)}")
             return dict_to_json({"error": f"Failed to get component: {str(e)}"})
     
-    def update_component(self, name: str, container_name: str, updates: Dict[str, Any], domain_name: Optional[str] = None) -> str:
+    def update_project_component(self, name: str, container_name: str, updates: Dict[str, Any], domain_name: Optional[str] = None) -> str:
         """
         Update a component's properties.
         
@@ -2082,7 +2082,7 @@ class GraphMemoryManager:
         try:
             self._ensure_initialized()
             # The project_memory.update_component expects: name, container_name, updates, domain_name
-            result = self.project_memory.update_component(name, container_name, updates, domain_name)
+            result = self.project_memory.update_project_component(name, container_name, updates, domain_name)
             if isinstance(result, dict):
                 return dict_to_json(result)
             return result
@@ -2091,7 +2091,7 @@ class GraphMemoryManager:
                 self.logger.error(f"Error updating component: {str(e)}")
             return dict_to_json({"error": f"Failed to update component: {str(e)}"})
     
-    def delete_component(self, component_id: str, domain_name: Optional[str] = None, container_name: Optional[str] = None) -> str:
+    def delete_project_component(self, component_id: str, domain_name: Optional[str] = None, container_name: Optional[str] = None) -> str:
         """
         Delete a component from a domain.
         
@@ -2105,7 +2105,7 @@ class GraphMemoryManager:
         """
         try:
             self._ensure_initialized()
-            result = self.project_memory.delete_component(component_id, domain_name, container_name)
+            result = self.project_memory.delete_project_component(component_id, domain_name, container_name)
             if isinstance(result, dict):
                 return dict_to_json(result)
             return result
@@ -2114,7 +2114,7 @@ class GraphMemoryManager:
                 self.logger.error(f"Error deleting component: {str(e)}")
             return dict_to_json({"error": f"Failed to delete component: {str(e)}"})
     
-    def list_components(self, domain_name: str, container_name: str, 
+    def list_project_components(self, domain_name: str, container_name: str, 
                       component_type: Optional[str] = None,
                       sort_by: str = "name", limit: int = 100) -> str:
         """
@@ -2132,7 +2132,7 @@ class GraphMemoryManager:
         """
         try:
             self._ensure_initialized()
-            result = self.project_memory.list_components(
+            result = self.project_memory.list_project_components(
                 domain_name, container_name, component_type, sort_by, limit
             )
             if isinstance(result, dict):
@@ -2143,7 +2143,7 @@ class GraphMemoryManager:
                 self.logger.error(f"Error listing components: {str(e)}")
             return dict_to_json({"error": f"Failed to list components: {str(e)}"})
     
-    def create_component_relationship(self, from_component: str, to_component: str,
+    def create_project_component_relationship(self, from_component: str, to_component: str,
                                    domain_name: str, container_name: str,
                                    relation_type: str, 
                                    properties: Optional[Dict[str, Any]] = None) -> str:
@@ -2163,7 +2163,7 @@ class GraphMemoryManager:
         """
         try:
             self._ensure_initialized()
-            result = self.project_memory.create_component_relationship(
+            result = self.project_memory.create_project_component_relationship(
                 from_component, to_component, domain_name, container_name,
                 relation_type, properties
             )
@@ -2176,7 +2176,7 @@ class GraphMemoryManager:
             return dict_to_json({"error": f"Failed to create component relationship: {str(e)}"})
     
     # Domain entity relationship methods
-    def add_entity_to_domain(self, entity_name: str, entity_type: str,
+    def add_entity_to_project_domain(self, entity_name: str, entity_type: str,
                           domain_name: str, container_name: str,
                           properties: Optional[Dict[str, Any]] = None) -> str:
         """
@@ -2196,7 +2196,7 @@ class GraphMemoryManager:
             self._ensure_initialized()
             # Note: The ProjectMemoryManager expects only domain_name, container_name, entity_name
             # But our implementation expects more parameters, so we need to adapt
-            result = self.project_memory.add_entity_to_domain(
+            result = self.project_memory.add_entity_to_project_domain(
                 domain_name, container_name, entity_name
             )
             if isinstance(result, dict):
@@ -2207,7 +2207,7 @@ class GraphMemoryManager:
                 self.logger.error(f"Error adding entity to domain: {str(e)}")
             return dict_to_json({"error": f"Failed to add entity to domain: {str(e)}"})
     
-    def remove_entity_from_domain(self, entity_name: str, entity_type: str,
+    def remove_entity_from_project_domain(self, entity_name: str, entity_type: str,
                                domain_name: str, container_name: str) -> str:
         """
         Remove an entity from a domain.
@@ -2225,7 +2225,7 @@ class GraphMemoryManager:
             self._ensure_initialized()
             # Note: The ProjectMemoryManager expects only domain_name, container_name, entity_name
             # But our implementation expects more parameters, so we need to adapt
-            result = self.project_memory.remove_entity_from_domain(
+            result = self.project_memory.remove_entity_from_project_domain(
                 domain_name, container_name, entity_name
             )
             if isinstance(result, dict):
@@ -2236,7 +2236,7 @@ class GraphMemoryManager:
                 self.logger.error(f"Error removing entity from domain: {str(e)}")
             return dict_to_json({"error": f"Failed to remove entity from domain: {str(e)}"})
     
-    def get_domain_entities(self, domain_name: str, container_name: str,
+    def get_project_domain_entities(self, domain_name: str, container_name: str,
                          entity_type: Optional[str] = None) -> str:
         """
         Get all entities in a domain.
@@ -2251,7 +2251,7 @@ class GraphMemoryManager:
         """
         try:
             self._ensure_initialized()
-            result = self.project_memory.get_domain_entities(
+            result = self.project_memory.get_project_domain_entities(
                 domain_name, container_name, entity_type
             )
             if isinstance(result, dict):
@@ -2262,7 +2262,7 @@ class GraphMemoryManager:
                 self.logger.error(f"Error getting domain entities: {str(e)}")
             return dict_to_json({"error": f"Failed to get domain entities: {str(e)}"})
     
-    def create_domain_relationship(self, from_domain: str, to_domain: str,
+    def create_project_domain_relationship(self, from_domain: str, to_domain: str,
                                 container_name: str, relation_type: str,
                                 properties: Optional[Dict[str, Any]] = None) -> str:
         """
@@ -2280,7 +2280,7 @@ class GraphMemoryManager:
         """
         try:
             self._ensure_initialized()
-            result = self.project_memory.create_domain_relationship(
+            result = self.project_memory.create_project_domain_relationship(
                 from_domain, to_domain, container_name, relation_type, properties
             )
             if isinstance(result, dict):
@@ -2292,7 +2292,7 @@ class GraphMemoryManager:
             return dict_to_json({"error": f"Failed to create domain relationship: {str(e)}"})
     
     # Dependency management methods
-    def create_dependency(self, from_component: str, to_component: str, 
+    def create_project_dependency(self, from_component: str, to_component: str, 
                         domain_name: str, container_name: str,
                         dependency_type: str,
                         properties: Optional[Dict[str, Any]] = None) -> str:
@@ -2312,7 +2312,7 @@ class GraphMemoryManager:
         """
         try:
             self._ensure_initialized()
-            result = self.project_memory.create_dependency(
+            result = self.project_memory.create_project_dependency(
                 from_component, to_component, domain_name, container_name,
                 dependency_type, properties
             )
@@ -2325,7 +2325,7 @@ class GraphMemoryManager:
             return dict_to_json({"error": f"Failed to create dependency: {str(e)}"})
     
     # Version management methods
-    def create_version(self, component_name: str, domain_name: str,
+    def create_project_version(self, component_name: str, domain_name: str,
                      container_name: str, version_number: str,
                      commit_hash: Optional[str] = None,
                      content: Optional[str] = None,
@@ -2349,7 +2349,7 @@ class GraphMemoryManager:
         """
         try:
             self._ensure_initialized()
-            result = self.project_memory.create_version(
+            result = self.project_memory.create_project_version(
                 component_name, domain_name, container_name, version_number,
                 commit_hash, content, changes, metadata
             )
