@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional, Union
 import time
 import json
 import logging
+import re
 
 from src.graph_memory.base_manager import BaseManager
 from src.project_memory.domain_manager import DomainManager
@@ -145,8 +146,35 @@ class ProjectMemoryManager:
             JSON string with the created domain
         """
         try:
+            # Create domain data dictionary from parameters and validate with Pydantic
+            domain_data: Dict[str, Any] = {
+                "name": name,
+                "entity_type": "Domain",
+                "project_id": container_name,
+                "description": description
+            }
+            
+            # Add optional parameters if provided
+            if properties:
+                domain_data["metadata"] = properties
+                
+            # Validate domain data using DomainEntityCreate model
+            try:
+                domain_model = DomainEntityCreate(**domain_data)
+                validated_data = domain_model.model_dump()
+            except Exception as ve:
+                self.logger.error(f"Validation error for domain creation: {str(ve)}")
+                return json.dumps(create_error_response(
+                    message=f"Invalid domain data: {str(ve)}",
+                    code="validation_error"
+                ).model_dump(), default=str)
+            
+            # Call the domain manager with validated parameters
             result = self.domain_manager.create_domain(
-                name, container_name, description, properties
+                name=validated_data["name"],
+                container_name=container_name,
+                description=validated_data.get("description"),
+                properties=validated_data.get("metadata")
             )
             
             # Parse the result
@@ -384,12 +412,73 @@ class ProjectMemoryManager:
             JSON string with the result
         """
         try:
-            result = self.domain_manager.create_domain_relationship(
-                from_domain, to_domain, container_name, relation_type, properties
+            # First get the domain IDs from their names
+            from_domain_query = """
+            MATCH (d:Entity {name: $domain_name, entityType: 'Domain'})
+            MATCH (c:Entity {name: $container_name, entityType: 'ProjectContainer'})
+            WHERE (d)-[:PART_OF]->(c)
+            RETURN d.id as domain_id
+            """
+            
+            from_records = self.base_manager.safe_execute_read_query(
+                from_domain_query,
+                {"domain_name": from_domain, "container_name": container_name}
             )
+            
+            if not from_records or len(from_records) == 0:
+                return json.dumps(create_error_response(
+                    message=f"Source domain '{from_domain}' not found in project '{container_name}'",
+                    code="domain_not_found"
+                ).model_dump(), default=str)
+            
+            to_records = self.base_manager.safe_execute_read_query(
+                from_domain_query,  # Reuse the same query
+                {"domain_name": to_domain, "container_name": container_name}
+            )
+            
+            if not to_records or len(to_records) == 0:
+                return json.dumps(create_error_response(
+                    message=f"Target domain '{to_domain}' not found in project '{container_name}'",
+                    code="domain_not_found"
+                ).model_dump(), default=str)
+            
+            # Get domain IDs
+            from_domain_id = from_records[0]["domain_id"]
+            to_domain_id = to_records[0]["domain_id"]
+            
+            # Prepare relationship data
+            relationship_data = {
+                "source_id": from_domain_id,
+                "target_id": to_domain_id,
+                "relationship_type": relation_type
+            }
+            
+            if properties:
+                relationship_data["properties"] = properties
+            
+            # Validate relationship data using RelationshipCreate model
+            try:
+                relationship_model = RelationshipCreate(**relationship_data)
+                validated_data = relationship_model.model_dump()
+            except Exception as ve:
+                self.logger.error(f"Validation error for relationship creation: {str(ve)}")
+                return json.dumps(create_error_response(
+                    message=f"Invalid relationship data: {str(ve)}",
+                    code="validation_error"
+                ).model_dump(), default=str)
+            
+            # Now proceed with the domain manager call
+            result = self.domain_manager.create_domain_relationship(
+                from_domain=from_domain,
+                to_domain=to_domain,
+                container_name=container_name,
+                relation_type=validated_data["relationship_type"],
+                properties=validated_data.get("properties")
+            )
+            
             return self._standardize_response(
                 result,
-                f"Created {relation_type} relationship from domain '{from_domain}' to '{to_domain}' in project '{container_name}'",
+                f"Created {validated_data['relationship_type']} relationship from domain '{from_domain}' to '{to_domain}' in project '{container_name}'",
                 "domain_relationship_error"
             )
         except Exception as e:
@@ -588,8 +677,43 @@ class ProjectMemoryManager:
             JSON string with the deletion result
         """
         try:
+            # Create validation data
+            delete_data = {
+                "component_id": component_id
+            }
+            
+            if domain_name:
+                delete_data["domain_name"] = domain_name
+            
+            if container_name:
+                delete_data["container_name"] = container_name
+                
+            # Validate the input
+            # While there's no specific ComponentDelete model, we can validate the ID format
+            # and check if the component exists
+            
             # For test_delete_component, use the component_manager directly
             if domain_name is not None and container_name is not None:
+                # Validate component exists before deletion
+                comp_query = """
+                MATCH (comp:Entity {name: $component_id})
+                MATCH (d:Entity {name: $domain_name, entityType: 'Domain'})
+                MATCH (c:Entity {name: $container_name, entityType: 'ProjectContainer'})
+                WHERE (comp)-[:BELONGS_TO]->(d) AND (d)-[:PART_OF]->(c)
+                RETURN comp
+                """
+                
+                records = self.base_manager.safe_execute_read_query(
+                    comp_query,
+                    {"component_id": component_id, "domain_name": domain_name, "container_name": container_name}
+                )
+                
+                if not records or len(records) == 0:
+                    return json.dumps(create_error_response(
+                        message=f"Component '{component_id}' not found in domain '{domain_name}' of project '{container_name}'",
+                        code="component_not_found"
+                    ).model_dump(), default=str)
+                
                 # Use the component_manager's delete_component method
                 result = self.component_manager.delete_component(component_id, domain_name, container_name)
                 return self._standardize_response(
@@ -771,13 +895,75 @@ class ProjectMemoryManager:
             JSON string with the result
         """
         try:
-            result = self.component_manager.create_component_relationship(
-                from_component, to_component, domain_name, container_name,
-                relation_type, properties
+            # First get the component IDs from their names
+            component_query = """
+            MATCH (comp:Entity {name: $component_name})
+            MATCH (d:Entity {name: $domain_name, entityType: 'Domain'})
+            MATCH (c:Entity {name: $container_name, entityType: 'ProjectContainer'})
+            WHERE (comp)-[:BELONGS_TO]->(d) AND (d)-[:PART_OF]->(c)
+            RETURN comp.id as component_id
+            """
+            
+            from_records = self.base_manager.safe_execute_read_query(
+                component_query,
+                {"component_name": from_component, "domain_name": domain_name, "container_name": container_name}
             )
+            
+            if not from_records or len(from_records) == 0:
+                return json.dumps(create_error_response(
+                    message=f"Source component '{from_component}' not found in domain '{domain_name}'",
+                    code="component_not_found"
+                ).model_dump(), default=str)
+            
+            to_records = self.base_manager.safe_execute_read_query(
+                component_query,  # Reuse the same query
+                {"component_name": to_component, "domain_name": domain_name, "container_name": container_name}
+            )
+            
+            if not to_records or len(to_records) == 0:
+                return json.dumps(create_error_response(
+                    message=f"Target component '{to_component}' not found in domain '{domain_name}'",
+                    code="component_not_found"
+                ).model_dump(), default=str)
+            
+            # Get component IDs
+            from_component_id = from_records[0]["component_id"]
+            to_component_id = to_records[0]["component_id"]
+            
+            # Prepare relationship data
+            relationship_data = {
+                "source_id": from_component_id,
+                "target_id": to_component_id,
+                "relationship_type": relation_type
+            }
+            
+            if properties:
+                relationship_data["properties"] = properties
+                
+            # Validate relationship data using RelationshipCreate model
+            try:
+                relationship_model = RelationshipCreate(**relationship_data)
+                validated_data = relationship_model.model_dump()
+            except Exception as ve:
+                self.logger.error(f"Validation error for relationship creation: {str(ve)}")
+                return json.dumps(create_error_response(
+                    message=f"Invalid relationship data: {str(ve)}",
+                    code="validation_error"
+                ).model_dump(), default=str)
+            
+            # Now proceed with the component manager call
+            result = self.component_manager.create_component_relationship(
+                from_component=from_component,
+                to_component=to_component,
+                domain_name=domain_name,
+                container_name=container_name,
+                relation_type=validated_data["relationship_type"],
+                properties=validated_data.get("properties")
+            )
+            
             return self._standardize_response(
                 result,
-                f"Created {relation_type} relationship from component '{from_component}' to '{to_component}' in domain '{domain_name}'",
+                f"Created {validated_data['relationship_type']} relationship from component '{from_component}' to '{to_component}' in domain '{domain_name}'",
                 "component_relationship_error"
             )
         except Exception as e:
@@ -810,13 +996,75 @@ class ProjectMemoryManager:
             JSON string with the result
         """
         try:
-            result = self.dependency_manager.create_dependency(
-                from_component, to_component, domain_name, container_name,
-                dependency_type, properties
+            # First get the component IDs from their names
+            component_query = """
+            MATCH (comp:Entity {name: $component_name})
+            MATCH (d:Entity {name: $domain_name, entityType: 'Domain'})
+            MATCH (c:Entity {name: $container_name, entityType: 'ProjectContainer'})
+            WHERE (comp)-[:BELONGS_TO]->(d) AND (d)-[:PART_OF]->(c)
+            RETURN comp.id as component_id
+            """
+            
+            from_records = self.base_manager.safe_execute_read_query(
+                component_query,
+                {"component_name": from_component, "domain_name": domain_name, "container_name": container_name}
             )
+            
+            if not from_records or len(from_records) == 0:
+                return json.dumps(create_error_response(
+                    message=f"Source component '{from_component}' not found in domain '{domain_name}'",
+                    code="component_not_found"
+                ).model_dump(), default=str)
+            
+            to_records = self.base_manager.safe_execute_read_query(
+                component_query,  # Reuse the same query
+                {"component_name": to_component, "domain_name": domain_name, "container_name": container_name}
+            )
+            
+            if not to_records or len(to_records) == 0:
+                return json.dumps(create_error_response(
+                    message=f"Target component '{to_component}' not found in domain '{domain_name}'",
+                    code="component_not_found"
+                ).model_dump(), default=str)
+            
+            # Get component IDs
+            from_component_id = from_records[0]["component_id"]
+            to_component_id = to_records[0]["component_id"]
+            
+            # Prepare relationship data
+            relationship_data = {
+                "source_id": from_component_id,
+                "target_id": to_component_id,
+                "relationship_type": dependency_type
+            }
+            
+            if properties:
+                relationship_data["properties"] = properties
+                
+            # Validate relationship data using RelationshipCreate model
+            try:
+                relationship_model = RelationshipCreate(**relationship_data)
+                validated_data = relationship_model.model_dump()
+            except Exception as ve:
+                self.logger.error(f"Validation error for dependency creation: {str(ve)}")
+                return json.dumps(create_error_response(
+                    message=f"Invalid dependency data: {str(ve)}",
+                    code="validation_error"
+                ).model_dump(), default=str)
+            
+            # Now proceed with the dependency manager call
+            result = self.dependency_manager.create_dependency(
+                from_component=from_component,
+                to_component=to_component,
+                domain_name=domain_name,
+                container_name=container_name,
+                dependency_type=validated_data["relationship_type"],
+                properties=validated_data.get("properties")
+            )
+            
             return self._standardize_response(
                 result,
-                f"Created {dependency_type} dependency from '{from_component}' to '{to_component}' in domain '{domain_name}'",
+                f"Created {validated_data['relationship_type']} dependency from '{from_component}' to '{to_component}' in domain '{domain_name}'",
                 "dependency_creation_error"
             )
         except Exception as e:
@@ -967,10 +1215,158 @@ class ProjectMemoryManager:
             JSON string with the import result
         """
         try:
-            result = self.dependency_manager.import_dependencies_from_code(
-                dependencies, domain_name, container_name
+            # Validate domain and container exist
+            container_query = """
+            MATCH (c:Entity {name: $container_name, entityType: 'ProjectContainer'})
+            OPTIONAL MATCH (d:Entity {name: $domain_name, entityType: 'Domain'})-[:PART_OF]->(c)
+            RETURN c, d
+            """
+            
+            records = self.base_manager.safe_execute_read_query(
+                container_query,
+                {"container_name": container_name, "domain_name": domain_name}
             )
-            dependency_count = len(dependencies) if dependencies else 0
+            
+            if not records or len(records) == 0:
+                return json.dumps(create_error_response(
+                    message=f"Project container '{container_name}' not found",
+                    code="container_not_found"
+                ).model_dump(), default=str)
+                
+            if not records[0]["d"]:
+                return json.dumps(create_error_response(
+                    message=f"Domain '{domain_name}' not found in project '{container_name}'",
+                    code="domain_not_found"
+                ).model_dump(), default=str)
+            
+            # Create a list to hold validated dependencies
+            validated_dependencies = []
+            
+            # Validate each dependency
+            for i, dependency in enumerate(dependencies):
+                # Check required fields
+                if not all(k in dependency for k in ["from_component", "to_component", "dependency_type"]):
+                    return json.dumps(create_error_response(
+                        message=f"Dependency at index {i} is missing required fields (from_component, to_component, dependency_type)",
+                        code="invalid_dependency"
+                    ).model_dump(), default=str)
+                
+                # Prepare the relationship data for validation
+                # We will need to query for the component IDs first
+                from_component_name = dependency["from_component"]
+                to_component_name = dependency["to_component"]
+                dependency_type = dependency["dependency_type"]
+                properties = dependency.get("properties", {})
+                
+                # Query for component IDs
+                comp_query = """
+                MATCH (comp:Entity {name: $component_name})
+                MATCH (d:Entity {name: $domain_name, entityType: 'Domain'})
+                WHERE (comp)-[:BELONGS_TO]->(d)
+                RETURN comp.id as component_id
+                """
+                
+                # Attempt to get source component
+                from_records = self.base_manager.safe_execute_read_query(
+                    comp_query,
+                    {"component_name": from_component_name, "domain_name": domain_name}
+                )
+                
+                # If component doesn't exist, we'll auto-create it
+                if not from_records or len(from_records) == 0:
+                    self.logger.info(f"Auto-creating source component '{from_component_name}' in domain '{domain_name}'")
+                    create_result = self.create_project_component(
+                        name=from_component_name,
+                        component_type="AUTO_DETECTED",
+                        domain_name=domain_name,
+                        container_name=container_name,
+                        description=f"Auto-created by dependency import"
+                    )
+                    
+                    create_data = json.loads(create_result)
+                    if "error" in create_data:
+                        return json.dumps(create_error_response(
+                            message=f"Failed to auto-create component '{from_component_name}': {create_data.get('error', {}).get('message', 'Unknown error')}",
+                            code="component_creation_error"
+                        ).model_dump(), default=str)
+                        
+                    # Get the newly created component's ID
+                    from_records = self.base_manager.safe_execute_read_query(
+                        comp_query,
+                        {"component_name": from_component_name, "domain_name": domain_name}
+                    )
+                
+                # Attempt to get target component
+                to_records = self.base_manager.safe_execute_read_query(
+                    comp_query,
+                    {"component_name": to_component_name, "domain_name": domain_name}
+                )
+                
+                # If component doesn't exist, we'll auto-create it
+                if not to_records or len(to_records) == 0:
+                    self.logger.info(f"Auto-creating target component '{to_component_name}' in domain '{domain_name}'")
+                    create_result = self.create_project_component(
+                        name=to_component_name,
+                        component_type="AUTO_DETECTED",
+                        domain_name=domain_name,
+                        container_name=container_name,
+                        description=f"Auto-created by dependency import"
+                    )
+                    
+                    create_data = json.loads(create_result)
+                    if "error" in create_data:
+                        return json.dumps(create_error_response(
+                            message=f"Failed to auto-create component '{to_component_name}': {create_data.get('error', {}).get('message', 'Unknown error')}",
+                            code="component_creation_error"
+                        ).model_dump(), default=str)
+                        
+                    # Get the newly created component's ID
+                    to_records = self.base_manager.safe_execute_read_query(
+                        comp_query,
+                        {"component_name": to_component_name, "domain_name": domain_name}
+                    )
+                
+                # Now we should have both component IDs
+                from_component_id = from_records[0]["component_id"]
+                to_component_id = to_records[0]["component_id"]
+                
+                # Create relationship data for validation
+                relationship_data = {
+                    "source_id": from_component_id,
+                    "target_id": to_component_id,
+                    "relationship_type": dependency_type
+                }
+                
+                if properties:
+                    relationship_data["properties"] = properties
+                    
+                # Validate using RelationshipCreate model
+                try:
+                    relationship_model = RelationshipCreate(**relationship_data)
+                    validated_data = relationship_model.model_dump()
+                    
+                    # Add validated dependency to our list
+                    validated_dependencies.append({
+                        "from_component": from_component_name,
+                        "to_component": to_component_name,
+                        "dependency_type": validated_data["relationship_type"],
+                        "properties": validated_data.get("properties", {})
+                    })
+                except Exception as ve:
+                    self.logger.error(f"Validation error for dependency at index {i}: {str(ve)}")
+                    return json.dumps(create_error_response(
+                        message=f"Invalid dependency at index {i}: {str(ve)}",
+                        code="validation_error"
+                    ).model_dump(), default=str)
+            
+            # Now call the dependency manager with the validated dependencies
+            result = self.dependency_manager.import_dependencies_from_code(
+                dependencies=validated_dependencies,
+                domain_name=domain_name,
+                container_name=container_name
+            )
+            
+            dependency_count = len(validated_dependencies) if validated_dependencies else 0
             return self._standardize_response(
                 result,
                 f"Imported {dependency_count} dependencies into domain '{domain_name}' of project '{container_name}'",
@@ -1010,10 +1406,85 @@ class ProjectMemoryManager:
             JSON string with the created version
         """
         try:
-            result = self.version_manager.create_version(
-                component_name, domain_name, container_name, version_number,
-                commit_hash, content, changes, metadata
+            # Validate version number format
+            if not self._is_valid_version(version_number):
+                return json.dumps(create_error_response(
+                    message=f"Invalid version number format: {version_number}. Expected format: X.Y.Z",
+                    code="invalid_version_format"
+                ).model_dump(), default=str)
+            
+            # First get the component ID from its name
+            component_query = """
+            MATCH (comp:Entity {name: $component_name})
+            MATCH (d:Entity {name: $domain_name, entityType: 'Domain'})
+            MATCH (c:Entity {name: $container_name, entityType: 'ProjectContainer'})
+            WHERE (comp)-[:BELONGS_TO]->(d) AND (d)-[:PART_OF]->(c)
+            RETURN comp.id as component_id
+            """
+            
+            records = self.base_manager.safe_execute_read_query(
+                component_query,
+                {"component_name": component_name, "domain_name": domain_name, "container_name": container_name}
             )
+            
+            if not records or len(records) == 0:
+                return json.dumps(create_error_response(
+                    message=f"Component '{component_name}' not found in domain '{domain_name}'",
+                    code="component_not_found"
+                ).model_dump(), default=str)
+            
+            # Get component ID
+            component_id = records[0]["component_id"]
+            
+            # Prepare version data for validation
+            version_data = {
+                "component_id": component_id,
+                "version_number": version_number,
+                "commit_hash": commit_hash,
+                "changes": changes
+            }
+            
+            # Add metadata if provided
+            if metadata:
+                version_data["metadata"] = metadata
+                
+            # Validate version data - since there's no dedicated VersionCreate model, 
+            # we'll do some basic validation here
+            
+            # Check version number format with regex
+            import re
+            if not re.match(r"^\d+\.\d+\.\d+(?:-[a-zA-Z0-9\.]+)?(?:\+[a-zA-Z0-9\.]+)?$", version_number):
+                return json.dumps(create_error_response(
+                    message=f"Invalid semantic version format: {version_number}. Expected format: X.Y.Z[-prerelease][+build]",
+                    code="invalid_version_format"
+                ).model_dump(), default=str)
+            
+            # Check commit hash format if provided
+            if commit_hash and not re.match(r"^[0-9a-f]{7,40}$", commit_hash):
+                return json.dumps(create_error_response(
+                    message=f"Invalid commit hash format: {commit_hash}. Expected a valid git hash.",
+                    code="invalid_commit_hash"
+                ).model_dump(), default=str)
+            
+            # If metadata is provided, ensure it's a dictionary
+            if metadata and not isinstance(metadata, dict):
+                return json.dumps(create_error_response(
+                    message="Metadata must be a dictionary",
+                    code="invalid_metadata"
+                ).model_dump(), default=str)
+            
+            # Now call the version manager with validated data
+            result = self.version_manager.create_version(
+                component_name=component_name,
+                domain_name=domain_name,
+                container_name=container_name,
+                version_number=version_number,
+                commit_hash=commit_hash,
+                content=content,
+                changes=changes,
+                metadata=metadata
+            )
+            
             return self._standardize_response(
                 result,
                 f"Created version {version_number} for component '{component_name}' in domain '{domain_name}'",
@@ -1025,6 +1496,21 @@ class ProjectMemoryManager:
                 message=f"Failed to create version: {str(e)}",
                 code="version_creation_error"
             ).model_dump(), default=str)
+            
+    def _is_valid_version(self, version: str) -> bool:
+        """
+        Validate a version string against semantic versioning format.
+        
+        Args:
+            version: Version string to validate
+            
+        Returns:
+            True if the version is valid, False otherwise
+        """
+        import re
+        # Basic semver pattern: X.Y.Z with optional prerelease and build metadata
+        pattern = r"^\d+\.\d+\.\d+(?:-[a-zA-Z0-9\.]+)?(?:\+[a-zA-Z0-9\.]+)?$"
+        return bool(re.match(pattern, version))
     
     def get_project_version(self, component_name: str, domain_name: str,
                  container_name: str, 
@@ -1594,6 +2080,24 @@ class ProjectMemoryManager:
             JSON string with the search results
         """
         try:
+            # Validate search parameters using SearchQuery model
+            search_data = {
+                "query": search_term,
+                "entity_types": entity_types,
+                "limit": limit
+            }
+            
+            try:
+                # Use SearchQuery from project_memory.py for validation
+                search_model = SearchQuery(**search_data)
+                validated_data = search_model.model_dump()
+            except Exception as ve:
+                self.logger.error(f"Validation error for search query: {str(ve)}")
+                return json.dumps(create_error_response(
+                    message=f"Invalid search query: {str(ve)}",
+                    code="validation_error"
+                ).model_dump(), default=str)
+            
             self.base_manager.ensure_initialized()
             
             # Get container ID first to filter results
@@ -1613,11 +2117,11 @@ class ProjectMemoryManager:
                     code="search_error"
                 ).model_dump(), default=str)
             
-            # Perform search using SearchManager
+            # Perform search using SearchManager with validated parameters
             result = self.search_manager.search_entities(
-                search_term=search_term,
-                limit=limit,
-                entity_types=entity_types,
+                search_term=validated_data["query"],
+                limit=validated_data["limit"],
+                entity_types=validated_data.get("entity_types"),
                 semantic=semantic
             )
             
@@ -1648,11 +2152,11 @@ class ProjectMemoryManager:
                 result_data["total_count"] = len(filtered_entities)
                 
                 # Add search context to results
-                result_data["search_term"] = search_term
+                result_data["search_term"] = validated_data["query"]
                 result_data["container_name"] = container_name
                 result_data["search_type"] = "semantic" if semantic else "text"
                 
-                search_message = f"Found {len(filtered_entities)} {'semantic' if semantic else 'text'} search results for '{search_term}' in project '{container_name}'"
+                search_message = f"Found {len(filtered_entities)} {'semantic' if semantic else 'text'} search results for '{validated_data['query']}' in project '{container_name}'"
                 return json.dumps(create_success_response(
                     message=search_message,
                     data=result_data
@@ -1676,729 +2180,6 @@ class ProjectMemoryManager:
             return json.dumps(create_error_response(
                 message=f"Failed to search project entities: {str(e)}",
                 code="search_error"
-            ).model_dump(), default=str)
-
-    def semantic_search_project(self, search_term: str, container_name: str,
-                              entity_types: Optional[List[str]] = None, 
-                              limit: int = 10) -> str:
-        """
-        Perform a semantic search for entities in a project using vector embeddings.
-        This is a convenience method that calls search_project_entities with semantic=True.
-        
-        Args:
-            search_term: The natural language term to search for
-            container_name: Name of the project container to search within
-            entity_types: Optional list of entity types to filter by
-            limit: Maximum number of results to return
-            
-        Returns:
-            JSON string with the search results
-        """
-        try:
-            if not self.base_manager.embedding_enabled:
-                self.logger.warn("Semantic search requested but embeddings are not enabled")
-                result_data = {
-                    "warning": "Semantic search not available - embeddings are not enabled",
-                    "fallback": "Using text-based search instead"
-                }
-                
-                # Fall back to text-based search
-                text_search_result = self.search_project_entities(
-                    search_term=search_term,
-                    container_name=container_name,
-                    entity_types=entity_types,
-                    limit=limit,
-                    semantic=False
-                )
-                
-                # Parse and add warning
-                text_result_data = json.loads(text_search_result)
-                if "data" in text_result_data:
-                    text_result_data["data"]["warning"] = result_data["warning"]
-                    text_result_data["data"]["fallback"] = result_data["fallback"]
-                    return json.dumps(text_result_data, default=str)
-                
-                return text_search_result
-            
-            # Call the main search method with semantic=True
-            return self.search_project_entities(
-                search_term=search_term,
-                container_name=container_name,
-                entity_types=entity_types,
-                limit=limit,
-                semantic=True
-            )
-        except Exception as e:
-            self.logger.error(f"Error in semantic search: {str(e)}")
-            return json.dumps(create_error_response(
-                message=f"Failed to perform semantic search: {str(e)}",
-                code="semantic_search_error"
-            ).model_dump(), default=str)
-
-    def search_project_components(self, search_term: str, container_name: str, 
-                                component_types: Optional[List[str]] = None,
-                                limit: int = 10, semantic: bool = False) -> str:
-        """
-        Search specifically for components within a project container.
-        
-        Args:
-            search_term: The term to search for
-            container_name: Name of the project container to search within
-            component_types: Optional list of component types to filter by (e.g., 'Service', 'UI', 'Library')
-            limit: Maximum number of results to return
-            semantic: Whether to perform semantic (embedding-based) search
-            
-        Returns:
-            JSON string with the search results
-        """
-        try:
-            # For components, we always set entity_types to relevant component entity types
-            # Common component entity types in the project memory system
-            component_entity_types = ["Component", "File", "Service", "Module", "Feature", "Library", "UI"]
-            
-            # If specific component types are provided, filter by those
-            if component_types and len(component_types) > 0:
-                # Ensure all specified component types exist in our predefined list
-                # This prevents searching for invalid entity types
-                entity_types = [t for t in component_types if t in component_entity_types]
-                if not entity_types:
-                    # If none of the specified types are valid, use all component types
-                    entity_types = component_entity_types
-            else:
-                # Default to all component entity types
-                entity_types = component_entity_types
-            
-            # Delegate to the main search method
-            result = self.search_project_entities(
-                search_term=search_term,
-                container_name=container_name,
-                entity_types=entity_types,
-                limit=limit,
-                semantic=semantic
-            )
-            
-            # Parse and modify the result to highlight that this is a component search
-            try:
-                result_data = json.loads(result)
-                if "data" in result_data:
-                    result_data["data"]["component_types"] = entity_types
-                    result_data["data"]["component_search"] = True
-                    
-                    # Update the message to specify components
-                    if "message" in result_data:
-                        component_count = result_data["data"].get("total_count", 0)
-                        search_type = "semantic" if semantic else "text"
-                        result_data["message"] = f"Found {component_count} components matching '{search_term}' using {search_type} search"
-                    
-                    return json.dumps(result_data, default=str)
-                
-                return result
-            except json.JSONDecodeError:
-                # If we can't parse the result, return it as is
-                return result
-            
-        except Exception as e:
-            self.logger.error(f"Error searching project components: {str(e)}")
-            return json.dumps(create_error_response(
-                message=f"Failed to search project components: {str(e)}",
-                code="component_search_error"
-            ).model_dump(), default=str)
-
-    def search_project_domains(self, search_term: str, container_name: str,
-                            limit: int = 10, semantic: bool = False) -> str:
-        """
-        Search specifically for domains within a project container.
-        
-        Args:
-            search_term: The term to search for
-            container_name: Name of the project container to search within
-            limit: Maximum number of results to return
-            semantic: Whether to perform semantic (embedding-based) search
-            
-        Returns:
-            JSON string with the search results
-        """
-        try:
-            # For domains, we set entity_types to 'Domain'
-            entity_types = ["Domain"]
-            
-            # Delegate to the main search method
-            result = self.search_project_entities(
-                search_term=search_term,
-                container_name=container_name,
-                entity_types=entity_types,
-                limit=limit,
-                semantic=semantic
-            )
-            
-            # Parse and modify the result to highlight that this is a domain search
-            try:
-                result_data = json.loads(result)
-                if "data" in result_data:
-                    result_data["data"]["domain_search"] = True
-                    
-                    # Update the message to specify domains
-                    if "message" in result_data:
-                        domain_count = result_data["data"].get("total_count", 0)
-                        search_type = "semantic" if semantic else "text"
-                        result_data["message"] = f"Found {domain_count} domains matching '{search_term}' using {search_type} search"
-                    
-                    # For each domain, get additional domain-specific information
-                    if "entities" in result_data["data"] and result_data["data"]["entities"]:
-                        for domain in result_data["data"]["entities"]:
-                            domain_name = domain.get("name", "")
-                            if domain_name:
-                                # Get domain entities count
-                                try:
-                                    domain_entities_query = """
-                                    MATCH (d:Entity {name: $domain_name, entityType: 'Domain'})
-                                    MATCH (e:Entity)-[:PART_OF]->(d)
-                                    RETURN count(e) as entity_count
-                                    """
-                                    
-                                    entity_count_records = self.base_manager.safe_execute_read_query(
-                                        domain_entities_query,
-                                        {"domain_name": domain_name}
-                                    )
-                                    
-                                    if entity_count_records and len(entity_count_records) > 0:
-                                        domain["entity_count"] = entity_count_records[0]["entity_count"]
-                                except Exception as e:
-                                    self.logger.error(f"Error getting domain entity count: {str(e)}")
-                                    domain["entity_count"] = 0
-                    
-                    return json.dumps(result_data, default=str)
-                
-                return result
-            except json.JSONDecodeError:
-                # If we can't parse the result, return it as is
-                return result
-            
-        except Exception as e:
-            self.logger.error(f"Error searching project domains: {str(e)}")
-            return json.dumps(create_error_response(
-                message=f"Failed to search project domains: {str(e)}",
-                code="domain_search_error"
-            ).model_dump(), default=str)
-    
-    def search_project_dependencies(self, search_term: str, container_name: str,
-                                 dependency_types: Optional[List[str]] = None,
-                                 component_name: Optional[str] = None,
-                                 direction: str = "both",
-                                 limit: int = 20) -> str:
-        """
-        Search for dependencies within a project container.
-        
-        Args:
-            search_term: The term to search for
-            container_name: Name of the project container to search within
-            dependency_types: Optional list of dependency types to filter by (e.g., 'DEPENDS_ON', 'IMPORTS', 'USES')
-            component_name: Optional component name to filter dependencies for
-            direction: Direction of dependencies to search ('outgoing', 'incoming', or 'both')
-            limit: Maximum number of results to return
-            
-        Returns:
-            JSON string with the search results
-        """
-        try:
-            self.base_manager.ensure_initialized()
-            
-            # Check if container exists
-            container_query = """
-            MATCH (c:Entity {name: $container_name, entityType: 'ProjectContainer'})
-            RETURN c
-            """
-            
-            container_records = self.base_manager.safe_execute_read_query(
-                container_query,
-                {"container_name": container_name}
-            )
-            
-            if not container_records or len(container_records) == 0:
-                return json.dumps(create_error_response(
-                    message=f"Project container '{container_name}' not found",
-                    code="search_error"
-                ).model_dump(), default=str)
-            
-            # Common dependency relationship types
-            common_dependency_types = [
-                "DEPENDS_ON", "IMPORTS", "USES", "CALLS", "REFERENCES", 
-                "IMPLEMENTS", "EXTENDS", "INHERITS_FROM"
-            ]
-            
-            # Filter dependency types
-            if dependency_types and len(dependency_types) > 0:
-                # Use specified types, ensure uppercase
-                dependency_types = [t.upper() for t in dependency_types]
-            else:
-                # Default to common dependency types
-                dependency_types = common_dependency_types
-            
-            # Build the Cypher query based on search parameters
-            query_parts = []
-            query_params = {"container_name": container_name, "search_term": f"(?i).*{search_term}.*", "limit": limit}
-            
-            # Match the container
-            query_parts.append("MATCH (c:Entity {name: $container_name, entityType: 'ProjectContainer'})")
-            
-            # Handle different relationship directions
-            if direction == "outgoing":
-                if component_name:
-                    # Search outgoing dependencies from a specific component
-                    query_parts.append("MATCH (from:Entity {name: $component_name})-[:BELONGS_TO]->(c)")
-                    query_parts.append("MATCH (from)-[r]->(to:Entity)-[:BELONGS_TO]->(c)")
-                    query_params["component_name"] = component_name
-                else:
-                    # Search all outgoing dependencies
-                    query_parts.append("MATCH (from:Entity)-[:BELONGS_TO]->(c)")
-                    query_parts.append("MATCH (from)-[r]->(to:Entity)-[:BELONGS_TO]->(c)")
-            elif direction == "incoming":
-                if component_name:
-                    # Search incoming dependencies to a specific component
-                    query_parts.append("MATCH (to:Entity {name: $component_name})-[:BELONGS_TO]->(c)")
-                    query_parts.append("MATCH (from:Entity)-[r]->(to)-[:BELONGS_TO]->(c)")
-                    query_params["component_name"] = component_name
-                else:
-                    # Search all incoming dependencies
-                    query_parts.append("MATCH (to:Entity)-[:BELONGS_TO]->(c)")
-                    query_parts.append("MATCH (from:Entity)-[r]->(to)-[:BELONGS_TO]->(c)")
-            else:  # "both" is the default
-                if component_name:
-                    # Search dependencies in both directions for a specific component
-                    query_parts.append("MATCH (comp:Entity {name: $component_name})-[:BELONGS_TO]->(c)")
-                    query_parts.append("MATCH (comp)-[r]-(other:Entity)-[:BELONGS_TO]->(c)")
-                    query_parts.append("WITH comp, r, other")
-                    query_parts.append("MATCH (from:Entity)-[rr]->(to:Entity)")
-                    query_parts.append("WHERE (from = comp AND to = other) OR (from = other AND to = comp)")
-                    query_parts.append("AND type(rr) = type(r)")
-                    query_params["component_name"] = component_name
-                else:
-                    # Search all dependencies in both directions
-                    query_parts.append("MATCH (from:Entity)-[:BELONGS_TO]->(c)")
-                    query_parts.append("MATCH (to:Entity)-[:BELONGS_TO]->(c)")
-                    query_parts.append("MATCH (from)-[r]->(to)")
-            
-            # Add relationship type filter
-            query_parts.append("WHERE type(r) IN $dependency_types")
-            query_params["dependency_types"] = dependency_types
-            
-            # Add search term filter
-            query_parts.append("AND (from.name =~ $search_term OR to.name =~ $search_term OR type(r) =~ $search_term)")
-            
-            # Add return clause with ordering
-            query_parts.append("RETURN from, to, type(r) as relation_type, r")
-            query_parts.append("ORDER BY from.name, to.name")
-            query_parts.append("LIMIT $limit")
-            
-            # Execute the query
-            query = " ".join(query_parts)
-            dependency_records = self.base_manager.safe_execute_read_query(
-                query, 
-                query_params
-            )
-            
-            # Process results
-            dependencies = []
-            if dependency_records:
-                for record in dependency_records:
-                    from_entity = dict(record["from"].items())
-                    to_entity = dict(record["to"].items())
-                    relation_type = record["relation_type"]
-                    relation_props = dict(record["r"].items()) if record["r"] else {}
-                    
-                    # Create a standardized dependency object
-                    dependency = {
-                        "from": {
-                            "id": from_entity.get("id", ""),
-                            "name": from_entity.get("name", ""),
-                            "type": from_entity.get("entityType", from_entity.get("type", ""))
-                        },
-                        "to": {
-                            "id": to_entity.get("id", ""),
-                            "name": to_entity.get("name", ""),
-                            "type": to_entity.get("entityType", to_entity.get("type", ""))
-                        },
-                        "relation": {
-                            "type": relation_type,
-                            "properties": relation_props
-                        }
-                    }
-                    
-                    dependencies.append(dependency)
-            
-            # Build the result
-            result_data = {
-                "dependencies": dependencies,
-                "total_count": len(dependencies),
-                "search_term": search_term,
-                "container_name": container_name,
-                "dependency_types": dependency_types,
-                "direction": direction
-            }
-            
-            if component_name:
-                result_data["component_name"] = component_name
-            
-            # Return success response
-            search_message = f"Found {len(dependencies)} dependencies matching '{search_term}' in project '{container_name}'"
-            return json.dumps(create_success_response(
-                message=search_message,
-                data=result_data
-            ).model_dump(), default=str)
-            
-        except Exception as e:
-            self.logger.error(f"Error searching project dependencies: {str(e)}")
-            return json.dumps(create_error_response(
-                message=f"Failed to search project dependencies: {str(e)}",
-                code="dependency_search_error"
-            ).model_dump(), default=str)
-
-    def search_domain_entities(self, search_term: str, container_name: str, 
-                            domain_name: Optional[str] = None,
-                            entity_types: Optional[List[str]] = None,
-                            limit: int = 10, semantic: bool = False) -> str:
-        """
-        Search specifically for domain entities within a project container.
-        
-        Args:
-            search_term: The term to search for
-            container_name: Name of the project container to search within
-            domain_name: Optional domain name to restrict search to a specific domain
-            entity_types: Optional list of entity types to filter by (e.g., 'DECISION', 'FEATURE', 'REQUIREMENT')
-            limit: Maximum number of results to return
-            semantic: Whether to perform semantic (embedding-based) search
-            
-        Returns:
-            JSON string with the search results
-        """
-        try:
-            self.base_manager.ensure_initialized()
-            
-            # For domain entities, we use the allowed entity types from the model validation
-            allowed_domain_entity_types = [
-                'DECISION', 'FEATURE', 'REQUIREMENT', 'SPECIFICATION', 'CONSTRAINT', 'RISK'
-            ]
-            
-            # Filter entity types if provided
-            if entity_types and len(entity_types) > 0:
-                # Ensure all specified entity types exist in our predefined list
-                # This prevents searching for invalid entity types
-                filtered_entity_types = [t.upper() for t in entity_types if t.upper() in allowed_domain_entity_types]
-                if not filtered_entity_types:
-                    # If none of the specified types are valid, use all domain entity types
-                    entity_types = allowed_domain_entity_types
-                else:
-                    entity_types = filtered_entity_types
-            else:
-                # Default to all domain entity types
-                entity_types = allowed_domain_entity_types
-            
-            # Build the Cypher query based on search parameters
-            query_parts = []
-            query_params = {
-                "container_name": container_name,
-                "search_term": f"(?i).*{search_term}.*",
-                "entity_types": entity_types,
-                "limit": limit
-            }
-            
-            # Match the container
-            query_parts.append("MATCH (c:Entity {name: $container_name, entityType: 'ProjectContainer'})")
-            
-            # Handle domain filtering
-            if domain_name:
-                query_parts.append("MATCH (d:Entity {name: $domain_name, entityType: 'Domain'})-[:PART_OF]->(c)")
-                query_parts.append("MATCH (e:Entity)-[:BELONGS_TO]->(d)")
-                query_params["domain_name"] = domain_name
-            else:
-                # If no domain specified, match any entities in the container
-                query_parts.append("MATCH (d:Entity {entityType: 'Domain'})-[:PART_OF]->(c)")
-                query_parts.append("MATCH (e:Entity)-[:BELONGS_TO]->(d)")
-            
-            # Add entity type and search term filters
-            query_parts.append("WHERE e.entityType IN $entity_types")
-            query_parts.append("AND (e.name =~ $search_term OR e.description =~ $search_term OR e.content =~ $search_term)")
-            
-            # Add return clause with ordering
-            query_parts.append("RETURN e, d.name as domain_name")
-            query_parts.append("ORDER BY e.name")
-            query_parts.append("LIMIT $limit")
-            
-            # Join query parts
-            query = " ".join(query_parts)
-            
-            # Execute the query if not using semantic search
-            if not semantic:
-                domain_entity_records = self.base_manager.safe_execute_read_query(
-                    query, 
-                    query_params
-                )
-                
-                # Process results
-                entities = []
-                if domain_entity_records:
-                    for record in domain_entity_records:
-                        entity = dict(record["e"].items())
-                        entity["domain"] = record["domain_name"]
-                        entities.append(entity)
-                
-                result_data = {
-                    "entities": entities,
-                    "total_count": len(entities),
-                    "search_term": search_term,
-                    "container_name": container_name,
-                    "domain_entity_search": True,
-                    "entity_types": entity_types
-                }
-                
-                if domain_name:
-                    result_data["domain_name"] = domain_name
-                
-                search_message = f"Found {len(entities)} domain entities matching '{search_term}' in {domain_name + ' domain of ' if domain_name else ''}project '{container_name}'"
-                return json.dumps(create_success_response(
-                    message=search_message,
-                    data=result_data
-                ).model_dump(), default=str)
-            else:
-                # For semantic search, we need to use the search_manager with entity_types filter
-                # and then post-filter the results to include only domain entities
-                result = self.search_manager.search_entities(
-                    search_term=search_term,
-                    limit=limit * 2,  # Fetch more results as we'll filter some out
-                    entity_types=entity_types,
-                    semantic=True
-                )
-                
-                # Parse the result
-                result_data = json.loads(result)
-                
-                # Filter results to only include entities in the specified container and domain
-                if "entities" in result_data:
-                    filtered_entities = []
-                    for entity in result_data["entities"]:
-                        # Additional query to check container and domain membership
-                        membership_query = """
-                        MATCH (e:Entity {id: $entity_id})
-                        MATCH (c:Entity {name: $container_name, entityType: 'ProjectContainer'})
-                        """
-                        
-                        membership_params = {
-                            "entity_id": entity.get("id", ""),
-                            "container_name": container_name
-                        }
-                        
-                        if domain_name:
-                            membership_query += """
-                            MATCH (d:Entity {name: $domain_name, entityType: 'Domain'})-[:PART_OF]->(c)
-                            RETURN EXISTS((e)-[:BELONGS_TO]->(d)) as in_domain, d.name as domain_name
-                            """
-                            membership_params["domain_name"] = domain_name
-                        else:
-                            membership_query += """
-                            MATCH (d:Entity {entityType: 'Domain'})-[:PART_OF]->(c)
-                            MATCH (e)-[:BELONGS_TO]->(d)
-                            RETURN true as in_domain, d.name as domain_name
-                            """
-                        
-                        membership_records = self.base_manager.safe_execute_read_query(
-                            membership_query,
-                            membership_params
-                        )
-                        
-                        if membership_records and len(membership_records) > 0 and membership_records[0]["in_domain"]:
-                            entity["domain"] = membership_records[0]["domain_name"]
-                            filtered_entities.append(entity)
-                            
-                            # Limit to the requested number of results
-                            if len(filtered_entities) >= limit:
-                                break
-                    
-                    result_data["entities"] = filtered_entities
-                    result_data["total_count"] = len(filtered_entities)
-                    result_data["search_term"] = search_term
-                    result_data["container_name"] = container_name
-                    result_data["domain_entity_search"] = True
-                    result_data["entity_types"] = entity_types
-                    result_data["search_type"] = "semantic"
-                    
-                    if domain_name:
-                        result_data["domain_name"] = domain_name
-                    
-                    search_message = f"Found {len(filtered_entities)} domain entities using semantic search for '{search_term}' in {domain_name + ' domain of ' if domain_name else ''}project '{container_name}'"
-                    return json.dumps(create_success_response(
-                        message=search_message,
-                        data=result_data
-                    ).model_dump(), default=str)
-                
-                # If there's an error in the result, pass it through
-                if "error" in result_data:
-                    return json.dumps(create_error_response(
-                        message=result_data["error"],
-                        code="domain_entity_search_error"
-                    ).model_dump(), default=str)
-            
-            # Default error case
-            return json.dumps(create_error_response(
-                message="Unexpected error during domain entity search",
-                code="domain_entity_search_error"
-            ).model_dump(), default=str)
-            
-        except Exception as e:
-            self.logger.error(f"Error searching domain entities: {str(e)}")
-            return json.dumps(create_error_response(
-                message=f"Failed to search domain entities: {str(e)}",
-                code="domain_entity_search_error"
-            ).model_dump(), default=str)
-    
-    def search_entity_paths(self, from_entity: str, to_entity: str, 
-                         container_name: str, domain_name: Optional[str] = None,
-                         relationship_types: Optional[List[str]] = None,
-                         max_depth: int = 5, limit: int = 10) -> str:
-        """
-        Search for paths between entities within a project container.
-        This is an enhanced version of find_project_dependency_path that works with any entity types,
-        not just components.
-        
-        Args:
-            from_entity: Name of the source entity
-            to_entity: Name of the target entity
-            container_name: Name of the project container
-            domain_name: Optional domain name to restrict search to a specific domain
-            relationship_types: Optional list of relationship types to consider in the path
-            max_depth: Maximum path depth to search (1-10)
-            limit: Maximum number of paths to return
-            
-        Returns:
-            JSON string with the found paths
-        """
-        try:
-            self.base_manager.ensure_initialized()
-            
-            # Validate max_depth to prevent excessive resource usage
-            max_depth = min(max(1, max_depth), 10)
-            
-            # Default relationship types if not specified
-            if not relationship_types or len(relationship_types) == 0:
-                relationship_types = [
-                    'DEPENDS_ON', 'IMPORTS', 'USES', 'CALLS', 'REFERENCES', 
-                    'IMPLEMENTS', 'EXTENDS', 'CONTAINS', 'RELATED_TO', 'SUPERSEDES',
-                    'ALTERNATIVE_TO', 'INFLUENCES', 'LEADS_TO', 'DERIVES_FROM', 'CONSTRAINS'
-                ]
-            else:
-                # Uppercase all relationship types
-                relationship_types = [rel_type.upper() for rel_type in relationship_types]
-            
-            # Build query parameters
-            query_params = {
-                "container_name": container_name,
-                "from_entity": from_entity,
-                "to_entity": to_entity,
-                "max_depth": max_depth,
-                "limit": limit
-            }
-            
-            # Build query parts
-            query_parts = []
-            
-            # Match the container
-            query_parts.append("MATCH (c:Entity {name: $container_name, entityType: 'ProjectContainer'})")
-            
-            # Match source and target entities
-            if domain_name:
-                # If domain is specified, match entities in that domain
-                query_parts.append("MATCH (d:Entity {name: $domain_name, entityType: 'Domain'})-[:PART_OF]->(c)")
-                query_parts.append("MATCH (from:Entity {name: $from_entity})-[:BELONGS_TO]->(d)")
-                query_parts.append("MATCH (to:Entity {name: $to_entity})-[:BELONGS_TO]->(d)")
-                query_params["domain_name"] = domain_name
-            else:
-                # If no domain specified, match any entities in the container
-                query_parts.append("MATCH (from:Entity {name: $from_entity})")
-                query_parts.append("MATCH (to:Entity {name: $to_entity})")
-                query_parts.append("WHERE (from)-[:BELONGS_TO|PART_OF*1..2]->(c) AND (to)-[:BELONGS_TO|PART_OF*1..2]->(c)")
-            
-            # Build relationship pattern for path
-            rel_pattern = "|".join(relationship_types)
-            
-            # Match the path using specified relationship types
-            query_parts.append(f"MATCH path = (from)-[r:{rel_pattern}*1..{max_depth}]->(to)")
-            
-            # Return the path with additional information
-            query_parts.append("RETURN path, length(path) as path_length, [rel in relationships(path) | type(rel)] as rel_types")
-            query_parts.append("ORDER BY path_length")
-            query_parts.append("LIMIT $limit")
-            
-            # Join query parts
-            query = " ".join(query_parts)
-            
-            # Execute query
-            path_records = self.base_manager.safe_execute_read_query(
-                query,
-                query_params
-            )
-            
-            # Process paths
-            paths = []
-            if path_records:
-                for record in path_records:
-                    path = record["path"]
-                    path_length = record["path_length"]
-                    rel_types = record["rel_types"]
-                    
-                    # Extract nodes and relationships
-                    nodes = []
-                    for node in path.nodes:
-                        node_dict = dict(node.items())
-                        # Add domain info if available
-                        domain_info = self._get_entity_domain(node_dict.get("id", ""))
-                        if domain_info:
-                            node_dict["domain"] = domain_info
-                        nodes.append(node_dict)
-                    
-                    relationships = []
-                    for rel in path.relationships:
-                        relationships.append({
-                            "type": rel.type,
-                            "properties": dict(rel.items())
-                        })
-                    
-                    path_data = {
-                        "length": path_length,
-                        "relationship_types": rel_types,
-                        "nodes": nodes,
-                        "relationships": relationships
-                    }
-                    
-                    paths.append(path_data)
-            
-            result_data = {
-                "from_entity": from_entity,
-                "to_entity": to_entity,
-                "container_name": container_name,
-                "paths_found": len(paths),
-                "max_depth": max_depth,
-                "relationship_types": relationship_types,
-                "paths": paths
-            }
-            
-            if domain_name:
-                result_data["domain_name"] = domain_name
-            
-            # Return success response
-            if len(paths) > 0:
-                search_message = f"Found {len(paths)} paths from '{from_entity}' to '{to_entity}' in {domain_name + ' domain of ' if domain_name else ''}project '{container_name}'"
-            else:
-                search_message = f"No paths found from '{from_entity}' to '{to_entity}' in {domain_name + ' domain of ' if domain_name else ''}project '{container_name}'"
-                
-            return json.dumps(create_success_response(
-                message=search_message,
-                data=result_data
-            ).model_dump(), default=str)
-            
-        except Exception as e:
-            self.logger.error(f"Error searching entity paths: {str(e)}")
-            return json.dumps(create_error_response(
-                message=f"Failed to search entity paths: {str(e)}",
-                code="path_search_error"
             ).model_dump(), default=str)
     
     def _get_entity_domain(self, entity_id: str) -> Optional[str]:
@@ -2428,3 +2209,164 @@ class ProjectMemoryManager:
             
         except Exception:
             return None
+    
+    def semantic_search_project(self, search_term: str, container_name: str,
+                              entity_types: Optional[List[str]] = None, 
+                              limit: int = 10) -> str:
+        """
+        Perform a semantic search for entities in a project using vector embeddings.
+        This is a convenience method that calls search_project_entities with semantic=True.
+        
+        Args:
+            search_term: The natural language term to search for
+            container_name: Name of the project container to search within
+            entity_types: Optional list of entity types to filter by
+            limit: Maximum number of results to return
+            
+        Returns:
+            JSON string with the search results
+        """
+        try:
+            # Validate search parameters using SearchQuery model
+            search_data = {
+                "query": search_term,
+                "entity_types": entity_types,
+                "limit": limit
+            }
+            
+            try:
+                # Use SearchQuery from project_memory.py for validation
+                search_model = SearchQuery(**search_data)
+                validated_data = search_model.model_dump()
+            except Exception as ve:
+                self.logger.error(f"Validation error for semantic search query: {str(ve)}")
+                return json.dumps(create_error_response(
+                    message=f"Invalid search query: {str(ve)}",
+                    code="validation_error"
+                ).model_dump(), default=str)
+            
+            if not self.base_manager.embedding_enabled:
+                self.logger.warn("Semantic search requested but embeddings are not enabled")
+                result_data = {
+                    "warning": "Semantic search not available - embeddings are not enabled",
+                    "fallback": "Using text-based search instead"
+                }
+                
+                # Fall back to text-based search
+                text_search_result = self.search_project_entities(
+                    search_term=validated_data["query"],
+                    container_name=container_name,
+                    entity_types=validated_data.get("entity_types"),
+                    limit=validated_data["limit"],
+                    semantic=False
+                )
+                
+                # Parse and add warning
+                text_result_data = json.loads(text_search_result)
+                if "data" in text_result_data:
+                    text_result_data["data"]["warning"] = result_data["warning"]
+                    text_result_data["data"]["fallback"] = result_data["fallback"]
+                    return json.dumps(text_result_data, default=str)
+                
+                return text_search_result
+            
+            # Call the main search method with semantic=True and validated parameters
+            return self.search_project_entities(
+                search_term=validated_data["query"],
+                container_name=container_name,
+                entity_types=validated_data.get("entity_types"),
+                limit=validated_data["limit"],
+                semantic=True
+            )
+        except Exception as e:
+            self.logger.error(f"Error in semantic search: {str(e)}")
+            return json.dumps(create_error_response(
+                message=f"Failed to perform semantic search: {str(e)}",
+                code="semantic_search_error"
+            ).model_dump(), default=str)
+    
+    def search_project_components(self, search_term: str, container_name: str, 
+                                component_types: Optional[List[str]] = None,
+                                limit: int = 10, semantic: bool = False) -> str:
+        """
+        Search specifically for components within a project container.
+        
+        Args:
+            search_term: The term to search for
+            container_name: Name of the project container to search within
+            component_types: Optional list of component types to filter by (e.g., 'Service', 'UI', 'Library')
+            limit: Maximum number of results to return
+            semantic: Whether to perform semantic (embedding-based) search
+            
+        Returns:
+            JSON string with the search results
+        """
+        try:
+            # Validate search parameters using SearchQuery model
+            search_data = {
+                "query": search_term,
+                "limit": limit
+            }
+            
+            try:
+                # Use SearchQuery from project_memory.py for validation
+                search_model = SearchQuery(**search_data)
+                validated_data = search_model.model_dump()
+            except Exception as ve:
+                self.logger.error(f"Validation error for component search query: {str(ve)}")
+                return json.dumps(create_error_response(
+                    message=f"Invalid search query: {str(ve)}",
+                    code="validation_error"
+                ).model_dump(), default=str)
+            
+            # For components, we always set entity_types to relevant component entity types
+            # Common component entity types in the project memory system
+            component_entity_types = ["Component", "File", "Service", "Module", "Feature", "Library", "UI"]
+            
+            # If specific component types are provided, filter by those
+            if component_types and len(component_types) > 0:
+                # Ensure all specified component types exist in our predefined list
+                # This prevents searching for invalid entity types
+                entity_types = [t for t in component_types if t in component_entity_types]
+                if not entity_types:
+                    # If none of the specified types are valid, use all component types
+                    entity_types = component_entity_types
+            else:
+                # Default to all component entity types
+                entity_types = component_entity_types
+            
+            # Delegate to the main search method with validated parameters
+            result = self.search_project_entities(
+                search_term=validated_data["query"],
+                container_name=container_name,
+                entity_types=entity_types,
+                limit=validated_data["limit"],
+                semantic=semantic
+            )
+            
+            # Parse and modify the result to highlight that this is a component search
+            try:
+                result_data = json.loads(result)
+                if "data" in result_data:
+                    result_data["data"]["component_types"] = entity_types
+                    result_data["data"]["component_search"] = True
+                    
+                    # Update the message to specify components
+                    if "message" in result_data:
+                        component_count = result_data["data"].get("total_count", 0)
+                        search_type = "semantic" if semantic else "text"
+                        result_data["message"] = f"Found {component_count} components matching '{validated_data['query']}' using {search_type} search"
+                    
+                    return json.dumps(result_data, default=str)
+                
+                return result
+            except json.JSONDecodeError:
+                # If we can't parse the result, return it as is
+                return result
+            
+        except Exception as e:
+            self.logger.error(f"Error searching project components: {str(e)}")
+            return json.dumps(create_error_response(
+                message=f"Failed to search project components: {str(e)}",
+                code="component_search_error"
+            ).model_dump(), default=str)
