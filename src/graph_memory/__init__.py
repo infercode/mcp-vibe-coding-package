@@ -682,27 +682,22 @@ class GraphMemoryManager:
         
         return self.search_manager.search_entities(query, limit, semantic=True)
     
-    def get_all_memories(self, project_name: Optional[str] = None) -> str:
+    def get_all_memories(self) -> str:
         """
         Get all entities in the knowledge graph.
-        
-        Args:
-            project_name: Optional project name to scope the query
             
         Returns:
             JSON string with all entities
         """
-        if project_name:
-            self.set_project_name(project_name)
-        
         try:
-            # Query all entities
+            # Build query
             query = """
-            MATCH (e:Entity)
-            RETURN e
-            ORDER BY e.name
-            """
+                MATCH (e:Entity)
+                RETURN e
+                ORDER BY e.name
+                """
             
+            # Execute query with appropriate parameters
             records = self.base_manager.safe_execute_read_query(query)
             
             # Process results
@@ -722,16 +717,67 @@ class GraphMemoryManager:
             if self.logger:
                 self.logger.error(f"Error getting all memories: {str(e)}")
             return dict_to_json({"error": f"Failed to get all memories: {str(e)}"})
-    
+
+    def get_all_project_memories(self, project_name: Optional[str] = None) -> str:
+        """
+        Get all project entities in the knowledge graph.
+        
+        Args:
+            project_name: Optional project name to scope the query
+            
+        Returns:
+            JSON string with all project entities
+        """
+        try:
+            # Build query based on whether project_name is provided
+            if project_name:
+                query = """
+                MATCH (e:Entity)
+                WHERE e.project = $project_name
+                AND e.domain = 'project'
+                RETURN e
+                ORDER BY e.name
+                """
+                params = {"project_name": project_name}
+            else:
+                query = """
+                MATCH (e:Entity)
+                WHERE e.domain = 'project'
+                RETURN e
+                ORDER BY e.name
+                """
+                params = {}
+            
+            # Execute query with appropriate parameters
+            records = self.base_manager.safe_execute_read_query(query, params)
+            
+            # Process results
+            entities = []
+            if records:
+                for record in records:
+                    entity = record.get("e")
+                    if entity:
+                        # Convert Neo4j node to dict
+                        entity_dict = dict(entity.items())
+                        entity_dict["id"] = entity.id
+                        entities.append(entity_dict)
+            
+            return dict_to_json({"memories": entities})
+            
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"Error getting all project memories: {str(e)}")
+            return dict_to_json({"error": f"Failed to get all project memories: {str(e)}"})
+
     def delete_all_memories(self, project_name: Optional[str] = None) -> str:
         """
-        Delete all entities in the knowledge graph.
+        Delete all memories in the knowledge graph.
         
         Args:
             project_name: Optional project name to scope the deletion
             
         Returns:
-            JSON string with the result of the deletion
+            JSON string with operation result
         """
         if project_name:
             self.set_project_name(project_name)
@@ -937,29 +983,49 @@ class GraphMemoryManager:
     
     # Lesson Memory System methods for backward compatibility
     
-    def create_lesson_container(self, lesson_data: Dict[str, Any]) -> str:
+    def create_lesson_container(self, container_data: Dict[str, Any]) -> str:
         """
-        Create a new lesson container.
+        Create the lesson container if it doesn't exist.
+        Only one container named 'Lessons' is allowed in the system.
         
         Args:
-            lesson_data: Dictionary containing lesson container data
+            container_data: Dictionary containing container information
+                
+        Returns:
+            JSON string with operation result
+        """
+        try:
+            description = container_data.get("description")
+            metadata = container_data.get("metadata")
+            
+            # Delegate to the lesson container component
+            response = self.lesson_memory.create_lesson_container(
+                description=description,
+                metadata=metadata
+            )
+            return response
+            
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"Error creating lesson container: {str(e)}")
+            return dict_to_json({
+                "status": "error",
+                "error": f"Failed to create lesson container: {str(e)}"
+            })
+    
+    def get_lesson_container(self) -> str:
+        """
+        Retrieve the lesson container. There should only be one container
+        named 'Lessons' in the system.
             
         Returns:
-            JSON string with the created container information
+            JSON string with the container information
         """
         try:
             self._ensure_initialized()
             
-            # Extract basic container information
-            title = lesson_data.get("title", "Untitled Lesson")
-            description = lesson_data.get("description", "")
-            
-            # Delegate to the lesson container component via lesson_memory facade
-            response = self.lesson_memory.container.create_container(
-                title, 
-                description,
-                metadata=lesson_data.get("metadata")
-            )
+            # Delegate to the lesson container component
+            response = self.lesson_memory.container.get_container()
             
             # Parse the response
             result = json.loads(response)
@@ -973,15 +1039,62 @@ class GraphMemoryManager:
                 
             return json.dumps({
                 "status": "error",
-                "error": result.get("error", "Failed to create lesson container")
+                "error": result.get("error", "Lesson container 'Lessons' not found")
             })
             
         except Exception as e:
             if self.logger:
-                self.logger.error(f"Error creating lesson container: {str(e)}")
+                self.logger.error(f"Error retrieving lesson container: {str(e)}")
             return json.dumps({
                 "status": "error",
-                "error": f"Failed to create lesson container: {str(e)}"
+                "error": f"Failed to retrieve lesson container: {str(e)}"
+            })
+    
+    def get_all_lesson_memories(self, container_name: Optional[str] = None) -> str:
+        """
+        Get all lesson entities in the knowledge graph.
+        All lessons are stored in the single 'Lessons' container by default.
+        
+        Args:
+            container_name: Optional container name to scope query (defaults to "Lessons")
+            
+        Returns:
+            JSON string with all lesson entities
+        """
+        try:
+            self._ensure_initialized()
+            
+            # Use client-specific container if available, otherwise use default "Lessons"
+            effective_container = container_name or "Lessons"
+            
+            # Get all entities in the specified lesson container
+            # The client_id is already used internally via the initialized memory manager
+            response = self.lesson_memory.get_lesson_container_entities(effective_container)
+            
+            # Return response with "status":"success" format for consistency
+            if isinstance(response, dict) and "error" not in response:
+                return json.dumps({
+                    "status": "success",
+                    "entities": response.get("entities", []),
+                    "count": len(response.get("entities", [])),
+                    "container": effective_container,
+                    "client_id": self._client_id or "default-client"  # Include client_id for debugging
+                })
+            
+            return json.dumps({
+                "status": "error",
+                "error": response.get("error", "Failed to retrieve lesson entities"),
+                "container": effective_container,
+                "client_id": self._client_id or "default-client"  # Include client_id for debugging
+            })
+            
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"Error retrieving lesson memories: {str(e)}")
+            return json.dumps({
+                "status": "error",
+                "error": f"Failed to get lesson memories: {str(e)}",
+                "client_id": self._client_id or "default-client"  # Include client_id for debugging
             })
     
     def create_lesson(self, name: str, problem_description: str, **kwargs) -> str:
@@ -2381,45 +2494,6 @@ class GraphMemoryManager:
             return json.dumps({
                 "error": f"Failed to get project entities: {str(e)}",
                 "entities": []
-            })
-
-    def get_lesson_container(self, container_id: str) -> str:
-        """
-        Retrieve a lesson container by ID or name.
-        
-        Args:
-            container_id: ID or name of the container to retrieve
-            
-        Returns:
-            JSON string with the container information
-        """
-        try:
-            self._ensure_initialized()
-            
-            # Delegate to the lesson container component via lesson_memory facade
-            response = self.lesson_memory.container.get_container(container_id)
-            
-            # Parse the response
-            result = json.loads(response)
-            
-            # Return response with "status":"success" format for consistency with tests
-            if "error" not in result:
-                return json.dumps({
-                    "status": "success",
-                    "container": result.get("container", result)
-                })
-                
-            return json.dumps({
-                "status": "error",
-                "error": result.get("error", f"Lesson container '{container_id}' not found")
-            })
-            
-        except Exception as e:
-            if self.logger:
-                self.logger.error(f"Error retrieving lesson container: {str(e)}")
-            return json.dumps({
-                "status": "error",
-                "error": f"Failed to retrieve lesson container: {str(e)}"
             })
 
     def get_entity_observations(self, entity_name: str, observation_type: Optional[str] = None) -> str:

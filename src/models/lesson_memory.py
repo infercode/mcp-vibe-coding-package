@@ -171,7 +171,6 @@ class LessonContainer(BaseModel):
 
 class LessonContainerCreate(BaseModel):
     """Model for creating a new lesson container."""
-    name: str = Field(..., description="Name of the container")
     description: Optional[str] = Field(None, description="Description of the container")
     tags: Optional[List[str]] = Field(default_factory=list, description="Tags for the container")
     metadata: Optional[Dict[str, Any]] = Field(None, description="Optional metadata for the container")

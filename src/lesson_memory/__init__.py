@@ -25,6 +25,7 @@ from src.models.lesson_memory import (
     LessonRelationshipCreate, SearchQuery
 )
 from src.models.responses import SuccessResponse, create_error_response, parse_json_to_model
+from pydantic import ValidationError
 
 class LessonMemoryManager:
     """
@@ -58,213 +59,54 @@ class LessonMemoryManager:
         self.consolidation = LessonConsolidation(base_manager)
     
     # Container Operations
-    def create_container(self, name: str, description: Optional[str] = None, 
-                      metadata: Optional[Dict[str, Any]] = None) -> str:
+    def create_lesson_container(self, description: Optional[str] = None, metadata: Optional[Dict[str, Any]] = None) -> str:
         """
-        Create a new lesson container.
+        Create a new lesson container. The container name is always 'Lessons' and there is only one instance of it.
         
         Args:
-            name: Unique name for the container
-            description: Optional description
-            metadata: Optional metadata dictionary
+            description: Optional description of the container
+            metadata: Optional metadata dictionary with additional properties
             
         Returns:
             JSON string with success/error status and container data
         """
-        # Validate parameters - raise error directly for critical validations
-        if not name:
-            raise TypeError("name cannot be empty")
-        
-        # Create container model for validation
         try:
+            # Create container model for validation
             container_data = {
-                "name": name,
-                "description": description
+                "description": description,
+                "metadata": metadata
             }
+            container_model = LessonContainerCreate(**{k: v for k, v in container_data.items() if v is not None})
             
-            if metadata:
-                container_data["metadata"] = metadata
-                
-            container_model = LessonContainerCreate(**container_data)
-            
-            # Create container using the refactored method - allow exceptions to propagate
-            # so test_create_container_missing_name can catch them
-            response = self.container.create_container(
-                container_model.name, 
-                container_model.description, 
-                container_model.metadata
+            # Create container using the container component
+            return self.container.create_container(
+                description=container_model.description,
+                metadata=container_model.metadata
             )
-            
-            # Return response directly (already JSON string)
-            return response
-        except Exception as e:
-            # For non-TypeErrors (which we want to propagate for testing), format as JSON error 
-            if isinstance(e, TypeError):
-                raise
-            
-            self.logger.error(f"Error creating container: {str(e)}")
-            error_response = create_error_response(
-                message=f"Failed to create container: {str(e)}",
-                code="container_creation_error"
-            )
-            try:
-                return json.dumps(error_response.model_dump(), default=str)
-            except TypeError:
-                # If JSON serialization fails due to non-serializable objects, use str
-                return json.dumps({
-                    "error": f"Failed to create container: {str(e)}",
-                    "code": "container_creation_error"
-                })
-    
-    def get_container(self, name: str) -> str:
-        """
-        Retrieve a lesson container by name.
-        
-        Args:
-            name: Name of the container to retrieve
-            
-        Returns:
-            JSON string with success/error status and container data
-        """
-        try:
-            response = self.container.get_container(name)
-            return response
-        except Exception as e:
-            self.logger.error(f"Error retrieving container: {str(e)}")
-            error_response = create_error_response(
-                message=f"Failed to retrieve container: {str(e)}",
-                code="container_retrieval_error"
-            )
-            try:
-                return json.dumps(error_response.model_dump(), default=str)
-            except TypeError:
-                # If JSON serialization fails due to non-serializable objects, use str
-                return json.dumps({
-                    "error": f"Failed to retrieve container: {str(e)}",
-                    "code": "container_retrieval_error"
-                })
-    
-    def update_container(self, name: str, updates: Dict[str, Any]) -> str:
-        """
-        Update a lesson container's properties.
-        
-        Args:
-            name: Name of the container to update
-            updates: Dictionary of fields to update
-            
-        Returns:
-            JSON string with success/error status and updated container data
-        """
-        try:
-            # Create update model for validation. The model expects container_name and updates fields
-            update_data = {
-                "container_name": name,
-                "updates": updates
-            }
-            update_model = LessonContainerUpdate(**update_data)
-            
-            # The container.update_container expects the name separately and then the updates
-            response = self.container.update_container(name, update_model.updates)
-            return response
-        except Exception as e:
-            self.logger.error(f"Error updating container: {str(e)}")
-            error_response = create_error_response(
-                message=f"Failed to update container: {str(e)}",
-                code="container_update_error"
-            )
-            # Convert to JSON string, handling datetime objects
-            try:
-                return json.dumps(error_response.model_dump(), default=str)
-            except TypeError:
-                # If JSON serialization fails due to non-serializable objects, use str
-                return json.dumps({
-                    "error": f"Failed to update container: {str(e)}",
-                    "code": "container_update_error"
-                })
-    
-    def delete_container(self, name: str, delete_contents: bool = False) -> str:
-        """
-        Delete a lesson container and optionally its contents.
-        
-        Args:
-            name: Name of the container to delete
-            delete_contents: Whether to delete all contained entities
-            
-        Returns:
-            JSON string with success/error status
-        """
-        try:
-            response = self.container.delete_container(name, delete_contents)
-            return response
-        except Exception as e:
-            self.logger.error(f"Error deleting container: {str(e)}")
-            error_response = create_error_response(
-                message=f"Failed to delete container: {str(e)}",
-                code="container_deletion_error"
-            )
-            try:
-                return json.dumps(error_response.model_dump(), default=str)
-            except TypeError:
-                # If JSON serialization fails due to non-serializable objects, use str
-                return json.dumps({
-                    "error": f"Failed to delete container: {str(e)}",
-                    "code": "container_deletion_error"
-                })
-    
-    def create_lesson_container(self, container_data: Dict[str, Any]) -> str:
-        """
-        Create a new lesson container.
-        
-        Args:
-            container_data: Dictionary containing container information
-                
-        Returns:
-            JSON string with operation result
-        """
-        try:
-            # Extract required fields from container_data
-            name = container_data.get("name")
-            description = container_data.get("description")
-            metadata = container_data.get("metadata")
-            
-            if not name:
-                return json.dumps({
-                    "status": "error",
-                    "error": "Container name is required"
-                })
-                
-            # Delegate to the existing create_container method
-            response = self.create_container(name, description, metadata)
-            return response
-            
+
+        except ValidationError as ve:
+            self.logger.error(f"Validation error creating lesson container: {str(ve)}")
+            return json.dumps({
+                "error": f"Invalid container data: {str(ve)}",
+                "code": "container_validation_error"
+            })
         except Exception as e:
             self.logger.error(f"Error creating lesson container: {str(e)}")
-            error_response = create_error_response(
-                message=f"Failed to create lesson container: {str(e)}",
-                code="container_creation_error"
-            )
-            try:
-                return json.dumps(error_response.model_dump(), default=str)
-            except TypeError:
-                # If JSON serialization fails due to non-serializable objects, use str
-                return json.dumps({
-                    "error": f"Failed to create lesson container: {str(e)}",
-                    "code": "container_creation_error"
-                })
+            return json.dumps({
+                "error": f"Failed to create lesson container: {str(e)}",
+                "code": "container_creation_error"
+            })
     
-    def get_lesson_container(self, container_id: str) -> str:
+    def get_lesson_container(self) -> str:
         """
-        Retrieve a lesson container by ID or name.
-        
-        Args:
-            container_id: The ID or name of the lesson container
+        Retrieve a lesson container.
                 
         Returns:
             JSON response with lesson container data
         """
         try:
-            # Delegate to the existing get_container method
-            response = self.get_container(container_id)
+            # Call the container component directly
+            response = self.container.get_container()
             return response
             
         except Exception as e:
@@ -282,7 +124,87 @@ class LessonMemoryManager:
                     "code": "container_retrieval_error"
                 })
     
-    def list_containers(self, limit: int = 100, sort_by: str = "created") -> Dict[str, Any]:
+    def update_lesson_container(self, name: str, updates: Dict[str, Any]) -> str:
+        """
+        Update a lesson container's properties.
+        
+        Args:
+            name: Name of the container to update
+            updates: Dictionary of fields to update
+            
+        Returns:
+            JSON string with success/error status and updated container data
+        """
+        try:
+            # Create update model for validation
+            update_data = {
+                "container_name": name,
+                "updates": updates
+            }
+            update_model = LessonContainerUpdate(**update_data)
+            
+            # The container.update_container expects the updates
+            response = self.container.update_container(update_model.updates)
+            return response
+        except ValidationError as ve:
+            self.logger.error(f"Validation error updating lesson container: {str(ve)}")
+            error_response = create_error_response(
+                message=f"Invalid container update data: {str(ve)}",
+                code="container_validation_error"
+            )
+            try:
+                return json.dumps(error_response.model_dump(), default=str)
+            except TypeError:
+                # If JSON serialization fails due to non-serializable objects, use str
+                return json.dumps({
+                    "error": f"Invalid container update data: {str(ve)}",
+                    "code": "container_validation_error"
+                })
+        except Exception as e:
+            self.logger.error(f"Error updating lesson container: {str(e)}")
+            error_response = create_error_response(
+                message=f"Failed to update lesson container: {str(e)}",
+                code="container_update_error"
+            )
+            # Convert to JSON string, handling datetime objects
+            try:
+                return json.dumps(error_response.model_dump(), default=str)
+            except TypeError:
+                # If JSON serialization fails due to non-serializable objects, use str
+                return json.dumps({
+                    "error": f"Failed to update lesson container: {str(e)}",
+                    "code": "container_update_error"
+                })
+    
+    def delete_lesson_container(self, delete_contents: bool = False) -> str:
+        """
+        Delete a lesson container and optionally its contents.
+        
+        Args:
+            delete_contents: Whether to delete all contained entities
+            
+        Returns:
+            JSON string with success/error status
+        """
+        try:
+            response = self.container.delete_container(delete_contents)
+            return response
+        except Exception as e:
+            self.logger.error(f"Error deleting lesson container: {str(e)}")
+            error_response = create_error_response(
+                message=f"Failed to delete lesson container: {str(e)}",
+                code="container_deletion_error"
+            )
+            try:
+                return json.dumps(error_response.model_dump(), default=str)
+            except TypeError:
+                # If JSON serialization fails due to non-serializable objects, use str
+                return json.dumps({
+                    "error": f"Failed to delete lesson container: {str(e)}",
+                    "code": "container_deletion_error"
+                })
+    
+    def list_lesson_containers(self, limit: int = 100, sort_by: str = "created") -> Dict[str, Any]:
         """
         List all lesson containers.
         
@@ -321,7 +243,7 @@ class LessonMemoryManager:
                 code="container_list_error"
             ).model_dump()
     
-    def add_entity_to_container(self, container_name: str, entity_name: str) -> Dict[str, Any]:
+    def add_entity_to_lesson_container(self, container_name: str, entity_name: str) -> Dict[str, Any]:
         """
         Add an entity to a lesson container.
         
@@ -387,7 +309,7 @@ class LessonMemoryManager:
                 code="container_add_entity_error"
             ).model_dump()
     
-    def remove_entity_from_container(self, container_name: str, entity_name: str) -> Dict[str, Any]:
+    def remove_entity_from_lesson_container(self, container_name: str, entity_name: str) -> Dict[str, Any]:
         """
         Remove an entity from a lesson container.
         
@@ -422,9 +344,12 @@ class LessonMemoryManager:
                 code="container_remove_entity_error"
             ).model_dump()
     
-    def get_container_entities(self, container_name: str, 
-                            entity_type: Optional[str] = None,
-                            limit: int = 100) -> Dict[str, Any]:
+    def get_lesson_container_entities(
+            self,
+            container_name: str, 
+            entity_type: Optional[str] = None,
+            limit: int = 100
+        ) -> Dict[str, Any]:
         """
         Get all entities in a container.
         
@@ -472,9 +397,13 @@ class LessonMemoryManager:
             ).model_dump()
     
     # Entity Operations
-    def create_lesson_entity(self, container_name: str, entity_name: str, entity_type: str,
-                          observations: Optional[List[str]] = None,
-                          metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def create_lesson_entity(
+            self,
+            container_name: str,
+            entity_name: str, entity_type: str,
+            observations: Optional[List[str]] = None,
+            metadata: Optional[Dict[str, Any]] = None
+        ) -> Dict[str, Any]:
         """
         Create a new lesson entity.
         
@@ -489,16 +418,19 @@ class LessonMemoryManager:
             Dictionary with success/error status and entity data
         """
         try:
-            # Create entity model for validation
-            entity_data = {
+            # Create entity model for validation, only providing non-None values
+            entity_data: Dict[str, Any] = {
                 "container_name": container_name,
                 "entity_name": entity_name,
-                "entity_type": entity_type,
-                "observations": observations,
-                "metadata": metadata
+                "entity_type": entity_type
             }
             
-            entity_model = LessonEntityCreate(**{k: v for k, v in entity_data.items() if v is not None})
+            if observations is not None:
+                entity_data["observations"] = observations
+            if metadata is not None:
+                entity_data["metadata"] = metadata
+            
+            entity_model = LessonEntityCreate(**entity_data)
             
             # Create entity using the entity component
             response = self.entity.create_lesson_entity(
@@ -510,6 +442,12 @@ class LessonMemoryManager:
             )
             
             return json.loads(response)
+        except ValidationError as ve:
+            self.logger.error(f"Validation error creating lesson entity: {str(ve)}")
+            return create_error_response(
+                message=f"Invalid entity data: {str(ve)}",
+                code="entity_validation_error"
+            ).model_dump()
         except Exception as e:
             self.logger.error(f"Error creating entity: {str(e)}")
             return create_error_response(
@@ -521,13 +459,15 @@ class LessonMemoryManager:
     # Add similar patterns for relationship, observation methods, etc.
     
     # For example:
-    def create_structured_lesson_observations(self, entity_name: str,
-                                           what_was_learned: Optional[str] = None,
-                                           why_it_matters: Optional[str] = None,
-                                           how_to_apply: Optional[str] = None,
-                                           root_cause: Optional[str] = None,
-                                           evidence: Optional[str] = None,
-                                container_name: Optional[str] = None) -> Dict[str, Any]:
+    def create_structured_lesson_observations(
+            self, entity_name: str,
+            what_was_learned: Optional[str] = None,
+            why_it_matters: Optional[str] = None,
+            how_to_apply: Optional[str] = None,
+            root_cause: Optional[str] = None,
+            evidence: Optional[str] = None,
+            container_name: Optional[str] = None
+        ) -> Dict[str, Any]:
         """
         Create structured observations for an entity.
         
@@ -544,18 +484,43 @@ class LessonMemoryManager:
             Dictionary with success/error status and observation data
         """
         try:
+            # Create structured observations model for validation
+            observations_data = {
+                "entity_name": entity_name,
+                "container_name": container_name
+            }
+            
+            if what_was_learned is not None:
+                observations_data["what_was_learned"] = what_was_learned
+            if why_it_matters is not None:
+                observations_data["why_it_matters"] = why_it_matters
+            if how_to_apply is not None:
+                observations_data["how_to_apply"] = how_to_apply
+            if root_cause is not None:
+                observations_data["root_cause"] = root_cause
+            if evidence is not None:
+                observations_data["evidence"] = evidence
+                
+            observations_model = StructuredLessonObservations(**observations_data)
+            
             # Create structured observations using the observation component
             response = self.observation.create_structured_lesson_observations(
-                entity_name,
-                                                                   what_was_learned,
-                                                                   why_it_matters,
-                                                                   how_to_apply,
-                                                                   root_cause,
-                                                                   evidence,
-                container_name
+                observations_model.entity_name,
+                observations_model.what_was_learned,
+                observations_model.why_it_matters,
+                observations_model.how_to_apply,
+                observations_model.root_cause,
+                observations_model.evidence,
+                observations_model.container_name
             )
             
             return json.loads(response)
+        except ValidationError as ve:
+            self.logger.error(f"Validation error creating structured observations: {str(ve)}")
+            return create_error_response(
+                message=f"Invalid structured observations data: {str(ve)}",
+                code="observation_validation_error"
+            ).model_dump()
         except Exception as e:
             self.logger.error(f"Error creating structured observations: {str(e)}")
             return create_error_response(
@@ -586,6 +551,21 @@ class LessonMemoryManager:
             JSON string with search results
         """
         try:
+            # Create search query model for validation
+            search_data = {
+                "search_term": search_term,
+                "limit": limit,
+                "semantic": semantic
+            }
+            if container_name:
+                search_data["container_name"] = container_name
+            if entity_type:
+                search_data["entity_type"] = entity_type
+            if tags:
+                search_data["tags"] = tags
+                
+            search_model = SearchQuery(**search_data)
+            
             # Direct implementation for semantic search
             query = """
             MATCH (e:Entity)
@@ -594,23 +574,23 @@ class LessonMemoryManager:
             
             params = {}
             
-            if entity_type:
+            if search_model.entity_type:
                 query += " AND e.entityType = $entity_type"
-                params["entity_type"] = entity_type
+                params["entity_type"] = search_model.entity_type
                 
-            if container_name:
+            if search_model.container_name:
                 query += " WITH e MATCH (c:LessonContainer {name: $container_name})-[:CONTAINS]->(e)"
-                params["container_name"] = container_name
+                params["container_name"] = search_model.container_name
             
-            if search_term and not semantic:
+            if search_model.search_term and not search_model.semantic:
                 # Text-based search (fallback if semantic not available)
                 query += " WHERE (e.name CONTAINS $search_term OR e.description CONTAINS $search_term)"
-                params["search_term"] = search_term
+                params["search_term"] = search_model.search_term
             
             # Add tag filtering if provided
-            if tags and len(tags) > 0:
+            if search_model.tags and len(search_model.tags) > 0:
                 tag_conditions = []
-                for i, tag in enumerate(tags):
+                for i, tag in enumerate(search_model.tags):
                     param_name = f"tag_{i}"
                     tag_conditions.append(f"$tag_{i} IN e.tags")
                     params[param_name] = tag
@@ -620,7 +600,7 @@ class LessonMemoryManager:
             
             # Finalize query with limit
             query += " RETURN e LIMIT toInteger($limit)"
-            params["limit"] = str(limit)  # Convert int to string for compatibility
+            params["limit"] = str(search_model.limit)  # Convert int to string for compatibility
             
             # Execute the query
             records = self.base_manager.safe_execute_read_query(query, params)
@@ -634,6 +614,11 @@ class LessonMemoryManager:
             
             return json.dumps({"entities": entities})
                 
+        except ValidationError as ve:
+            self.logger.error(f"Validation error searching lesson entities: {str(ve)}")
+            return json.dumps({
+                "error": f"Invalid search parameters: {str(ve)}"
+            })
         except Exception as e:
             self.logger.error(f"Error searching lesson entities: {str(e)}")
             return json.dumps({
@@ -654,18 +639,42 @@ class LessonMemoryManager:
             JSON string with the updated entity
         """
         try:
-            # Call the entity component to update the lesson
-            return self.entity.update_lesson_entity(entity_name, updates, container_name)
+            # Create update model for validation
+            update_data: Dict[str, Any] = {
+                "entity_name": entity_name,
+                "updates": updates
+            }
             
+            if container_name is not None:
+                update_data["container_name"] = container_name
+                
+            update_model = LessonEntityUpdate(**update_data)
+            
+            # Call the entity component to update the lesson
+            return self.entity.update_lesson_entity(
+                update_model.entity_name, 
+                update_model.updates,
+                update_model.container_name
+            )
+            
+        except ValidationError as ve:
+            self.logger.error(f"Validation error updating lesson entity: {str(ve)}")
+            return json.dumps({
+                "error": f"Invalid entity update data: {str(ve)}"
+            })
         except Exception as e:
             self.logger.error(f"Error updating lesson entity: {str(e)}")
             return json.dumps({
                 "error": f"Failed to update lesson entity: {str(e)}"
             })
     
-    def track_lesson_application(self, lesson_name: str, context_entity: str,
-                              success_score: float = 0.8,
-                              application_notes: Optional[str] = None) -> str:
+    def track_lesson_application(
+            self,
+            lesson_name: str,
+            context_entity: str,
+            success_score: float = 0.8,
+            application_notes: Optional[str] = None
+        ) -> str:
         """
         Track the application of a lesson to a context entity.
         
@@ -732,9 +741,13 @@ class LessonMemoryManager:
                 "error": f"Failed to track lesson application: {str(e)}"
             })
     
-    def merge_lessons(self, source_lessons: List[Dict[str, Any]], new_name: str,
-                    merge_strategy: str = "union",
-                    container_name: Optional[str] = None) -> str:
+    def merge_lessons(
+            self,
+            source_lessons: List[Dict[str, Any]],
+            new_name: str,
+            merge_strategy: str = "union",
+            container_name: Optional[str] = None
+        ) -> str:
         """
         Merge multiple lessons into a single consolidated lesson.
         
@@ -786,11 +799,14 @@ class LessonMemoryManager:
                 "error": f"Failed to merge lessons: {str(e)}"
             })
     
-    def get_knowledge_evolution(self, entity_name: Optional[str] = None,
-                             lesson_type: Optional[str] = None,
-                             start_date: Optional[str] = None,
-                             end_date: Optional[str] = None,
-                             include_superseded: bool = True) -> str:
+    def get_lesson_knowledge_evolution(
+            self,
+            entity_name: Optional[str] = None,
+            lesson_type: Optional[str] = None,
+            start_date: Optional[str] = None,
+            end_date: Optional[str] = None,
+            include_superseded: bool = True
+        ) -> str:
         """
         Track the evolution of knowledge in the lesson graph.
         
@@ -862,4 +878,325 @@ class LessonMemoryManager:
             self.logger.error(f"Error getting knowledge evolution: {str(e)}")
             return json.dumps({
                 "error": f"Failed to get knowledge evolution: {str(e)}"
+            })
+
+    # Missing observation methods
+    def add_lesson_observation(self, observation_data: Dict[str, Any]) -> str:
+        """
+        Add an observation to a lesson entity.
+        
+        Args:
+            observation_data: Dictionary containing:
+                - entity_name: Name of the entity to add observation to
+                - content: Content of the observation
+                - observation_type: Type of observation
+                - container_name: Optional container to verify entity membership
+                
+        Returns:
+            JSON string with the created observation
+        """
+        try:
+            # Create observation model for validation
+            observation_model = LessonObservationCreate(**observation_data)
+            
+            # Delegate to the observation component
+            entity_name = observation_model.entity_name
+            content = observation_model.content
+            observation_type = observation_model.observation_type
+            
+            # Default confidence and properties since they aren't in the model
+            confidence = observation_data.get("confidence", 1.0)
+            properties = observation_data.get("metadata", {})
+            
+            return self.observation.add_lesson_observation(
+                entity_name,
+                content,
+                observation_type,
+                confidence,
+                properties
+            )
+        except ValidationError as ve:
+            self.logger.error(f"Validation error adding lesson observation: {str(ve)}")
+            return json.dumps({
+                "error": f"Invalid observation data: {str(ve)}"
+            })
+        except Exception as e:
+            self.logger.error(f"Error adding lesson observation: {str(e)}")
+            return json.dumps({
+                "error": f"Failed to add lesson observation: {str(e)}"
+            })
+    
+    def get_lesson_observations(self, entity_name: str, observation_type: Optional[str] = None) -> str:
+        """
+        Get observations for a lesson entity.
+        
+        Args:
+            entity_name: Name of the entity
+            observation_type: Optional type of observation to filter by
+            container_name: Optional container to verify entity membership
+            
+        Returns:
+            JSON string with the entity's observations
+        """
+        try:
+            # Delegate to the observation component
+            return self.observation.get_lesson_observations(
+                entity_name,
+                observation_type
+            )
+        except Exception as e:
+            self.logger.error(f"Error getting lesson observations: {str(e)}")
+            return json.dumps({
+                "error": f"Failed to get lesson observations: {str(e)}"
+            })
+    
+    def update_lesson_observation(
+            self,
+            observation_id: str,
+            content: str, observation_type: Optional[str] = None
+        ) -> str:
+        """
+        Update an observation for a lesson entity.
+        
+        Args:
+            observation_id: ID of the observation to update
+            content: New content for the observation
+            observation_type: Optional new type for the observation
+            
+        Returns:
+            JSON string with the updated observation
+        """
+        try:
+            # Delegate to the observation component
+            updates = {
+                "content": content
+            }
+            if observation_type:
+                updates["type"] = observation_type
+                
+            return self.observation.update_lesson_observation(
+                observation_id,
+                updates
+            )
+        except Exception as e:
+            self.logger.error(f"Error updating lesson observation: {str(e)}")
+            return json.dumps({
+                "error": f"Failed to update lesson observation: {str(e)}"
+            })
+    
+    def delete_lesson_observation(self, observation_id: str) -> str:
+        """
+        Delete an observation from a lesson entity.
+        
+        Args:
+            entity_name: Name of the entity
+            observation_id: ID of the observation to delete
+            
+        Returns:
+            JSON string with operation result
+        """
+        try:
+            # Delegate to the observation component
+            return self.observation.delete_lesson_observation(
+                observation_id
+            )
+        except Exception as e:
+            self.logger.error(f"Error deleting lesson observation: {str(e)}")
+            return json.dumps({
+                "error": f"Failed to delete lesson observation: {str(e)}"
+            })
+    
+    # Missing relation methods
+    def create_lesson_relationship(self, relationship_data: Dict[str, Any]) -> str:
+        """
+        Create a relationship between lesson entities.
+        
+        Args:
+            relationship_data: Dictionary containing:
+                - source_name: Name of the source entity
+                - target_name: Name of the target entity
+                - relationship_type: Type of relationship
+                - properties: Optional properties for the relationship
+                
+        Returns:
+            JSON string with the created relationship
+        """
+        try:
+            # Create relationship model for validation
+            relationship_model = LessonRelationshipCreate(**relationship_data)
+            
+            # Get container name from the data or use default
+            container_name = relationship_data.get("container_name", "Lessons")
+            
+            # Delegate to the relation component
+            return self.relation.create_lesson_relation(
+                container_name,
+                relationship_model.source_name,
+                relationship_model.target_name,
+                relationship_model.relationship_type,
+                relationship_model.properties or {}
+            )
+        except ValidationError as ve:
+            self.logger.error(f"Validation error creating relationship: {str(ve)}")
+            return json.dumps({
+                "error": f"Invalid relationship data: {str(ve)}"
+            })
+        except Exception as e:
+            self.logger.error(f"Error creating relationship: {str(e)}")
+            return json.dumps({
+                "error": f"Failed to create relationship: {str(e)}"
+            })
+    
+    def get_lesson_relationships(
+            self,
+            entity_name: str,
+            direction: str = "both",
+            relationship_type: Optional[str] = None
+        ) -> str:
+        """
+        Get relationships for a lesson entity.
+        
+        Args:
+            entity_name: Name of the entity
+            direction: Direction of relationships ('outgoing', 'incoming', or 'both')
+            relationship_type: Optional type of relationship to filter by
+            
+        Returns:
+            JSON string with the entity's relationships
+        """
+        try:
+            # Delegate to the relation component
+            return self.relation.get_lesson_relations(
+                entity_name=entity_name,
+                relation_type=relationship_type,
+                direction=direction
+            )
+        except Exception as e:
+            self.logger.error(f"Error getting relationships: {str(e)}")
+            return json.dumps({
+                "error": f"Failed to get relationships: {str(e)}"
+            })
+    
+    def delete_lesson_relationship(
+            self,
+            source_name: str,
+            target_name: str,
+            relationship_type: str,
+            container_name: str = "Lessons"
+        ) -> str:
+        """
+        Delete a relationship between lesson entities.
+        
+        Args:
+            source_name: Name of the source entity
+            target_name: Name of the target entity
+            relationship_type: Type of relationship to delete
+            container_name: Container name
+            
+        Returns:
+            JSON string with operation result
+        """
+        try:
+            # Delegate to the relation component
+            return self.relation.delete_lesson_relation(
+                container_name,
+                source_name,
+                target_name,
+                relationship_type
+            )
+        except Exception as e:
+            self.logger.error(f"Error deleting relationship: {str(e)}")
+            return json.dumps({
+                "error": f"Failed to delete relationship: {str(e)}"
+            })
+    
+    # Improved evolution methods
+    def track_lesson_supersession(
+            self,
+            old_lesson: str,
+            new_lesson: str, 
+            reason: Optional[str] = None
+        ) -> str:
+        """
+        Track when a new lesson supersedes an older one.
+        
+        Args:
+            old_lesson: Name of the lesson being superseded
+            new_lesson: Name of the new lesson
+            reason: Optional reason for the supersession
+            
+        Returns:
+            JSON string with operation result
+        """
+        try:
+            # Use the specialized supersedes method if available
+            if hasattr(self.relation, "create_supersedes_relation"):
+                return self.relation.create_supersedes_relation(
+                    new_lesson,
+                    old_lesson
+                )
+            
+            # Create relationship properties
+            rel_props = {
+                "reason": reason or "Knowledge updated",
+                "superseded_at": datetime.datetime.now().isoformat()
+            }
+            
+            # Create relationship using the relation component
+            return self.create_lesson_relationship({
+                "container_name": "Lessons",
+                "source_name": new_lesson,
+                "target_name": old_lesson,
+                "relationship_type": "SUPERSEDES",
+                "properties": rel_props
+            })
+        except Exception as e:
+            self.logger.error(f"Error tracking lesson supersession: {str(e)}")
+            return json.dumps({
+                "error": f"Failed to track lesson supersession: {str(e)}"
+            })
+    
+    # Enhanced search capabilities
+    def search_lesson_semantic(self, query: str, limit: int = 10, 
+                     container_name: Optional[str] = None) -> str:
+        """
+        Search for lessons using semantic similarity.
+        
+        Args:
+            query: The search query text
+            limit: Maximum number of results to return
+            container_name: Optional container to search within
+            
+        Returns:
+            JSON string with search results
+        """
+        try:
+            # Create search query model for validation
+            search_data = {
+                "search_term": query,
+                "limit": limit,
+                "semantic": True
+            }
+            if container_name:
+                search_data["container_name"] = container_name
+                
+            search_model = SearchQuery(**search_data)
+            
+            # Fallback to text-based search with semantic flag
+            # (the underlying implementation may use semantic search if available)
+            return self.search_lesson_entities(
+                container_name=search_model.container_name,
+                search_term=search_model.search_term,
+                limit=search_model.limit,
+                semantic=True
+            )
+        except ValidationError as ve:
+            self.logger.error(f"Validation error performing semantic lesson search: {str(ve)}")
+            return json.dumps({
+                "error": f"Invalid search parameters: {str(ve)}"
+            })
+        except Exception as e:
+            self.logger.error(f"Error performing semantic lesson search: {str(e)}")
+            return json.dumps({
+                "error": f"Failed to perform semantic lesson search: {str(e)}"
             })
