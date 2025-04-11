@@ -2569,7 +2569,141 @@ class GraphMemoryManager:
             if self.logger and hasattr(self.logger, "error") and callable(self.logger.error):
                 self.logger.error(f"Error retrieving entities: {str(e)}")
             return []
-
+    
+    # Additional methods from ProjectMemoryManager
+    
+    def search_project_entities(self, search_term: str, container_name: str, 
+                              entity_types: Optional[List[str]] = None,
+                              limit: int = 10, semantic: bool = False) -> str:
+        """
+        Search for entities within a project container.
+        
+        Args:
+            search_term: The term to search for
+            container_name: Name of the project container to search within
+            entity_types: Optional list of entity types to filter by (e.g., 'Component', 'Domain', 'Decision')
+            limit: Maximum number of results to return
+            semantic: Whether to perform semantic (embedding-based) search
+            
+        Returns:
+            JSON string with the search results
+        """
+        self._ensure_initialized()
+        return self.project_memory.search_project_entities(
+            search_term, container_name, entity_types, limit, semantic
+        )
+    
+    def semantic_search_project(self, search_term: str, container_name: str,
+                              entity_types: Optional[List[str]] = None, 
+                              limit: int = 10) -> str:
+        """
+        Perform a semantic search for entities in a project using vector embeddings.
+        This is a convenience method that calls search_project_entities with semantic=True.
+        
+        Args:
+            search_term: The natural language term to search for
+            container_name: Name of the project container to search within
+            entity_types: Optional list of entity types to filter by
+            limit: Maximum number of results to return
+            
+        Returns:
+            JSON string with the search results
+        """
+        self._ensure_initialized()
+        return self.project_memory.semantic_search_project(
+            search_term, container_name, entity_types, limit
+        )
+    
+    def search_project_components(self, search_term: str, container_name: str, 
+                                component_types: Optional[List[str]] = None,
+                                limit: int = 10, semantic: bool = False) -> str:
+        """
+        Search specifically for components within a project container.
+        
+        Args:
+            search_term: The term to search for
+            container_name: Name of the project container to search within
+            component_types: Optional list of component types to filter by (e.g., 'Service', 'UI', 'Library')
+            limit: Maximum number of results to return
+            semantic: Whether to perform semantic (embedding-based) search
+            
+        Returns:
+            JSON string with the search results
+        """
+        self._ensure_initialized()
+        return self.project_memory.search_project_components(
+            search_term, container_name, component_types, limit, semantic
+        )
+    
+    def get_project_container_stats(self, container_name: str) -> str:
+        """
+        Get detailed statistics for a project container.
+        
+        Args:
+            container_name: Name of the project container
+            
+        Returns:
+            JSON string with container statistics
+        """
+        self._ensure_initialized()
+        return self.project_memory.get_project_container_stats(container_name)
+    
+    def change_project_container_status(self, container_name: str, status: str) -> str:
+        """
+        Change the status of a project container.
+        
+        Args:
+            container_name: Name of the project container
+            status: New status ('active', 'archived', 'completed')
+            
+        Returns:
+            JSON string with the result
+        """
+        self._ensure_initialized()
+        return self.project_memory.change_project_container_status(container_name, status)
+    
+    def get_project_container_entities(self, container_name: str, entity_type: Optional[str] = None) -> str:
+        """
+        Get all entities in a project container.
+        
+        Args:
+            container_name: Name of the project container
+            entity_type: Optional entity type to filter by
+            
+        Returns:
+            JSON string with the entities
+        """
+        self._ensure_initialized()
+        return self.project_memory.get_project_container_entities(container_name, entity_type)
+    
+    def add_entity_to_project_container(self, container_name: str, entity_name: str) -> str:
+        """
+        Add an entity to a project container.
+        
+        Args:
+            container_name: Name of the project container
+            entity_name: Name of the entity to add
+            
+        Returns:
+            JSON string with the result
+        """
+        self._ensure_initialized()
+        return self.project_memory.add_entity_to_project_container(container_name, entity_name)
+    
+    def remove_entity_from_project_container(self, container_name: str, entity_name: str) -> str:
+        """
+        Remove an entity from a project container.
+        
+        Args:
+            container_name: Name of the project container
+            entity_name: Name of the entity to remove
+            
+        Returns:
+            JSON string with the result
+        """
+        self._ensure_initialized()
+        return self.project_memory.remove_entity_from_project_container(container_name, entity_name)
+        
     def add_observation(self, observation: Dict[str, Any]) -> str:
         """
         Add a single observation to an entity.
