@@ -1,0 +1,151 @@
+---
+description: Use when working with the lesson memory system to ensure comprehensive and effective knowledge capture, retrieval, and application
+globs: 
+alwaysApply: false
+---
+
+# Lesson Memory System Utilization Guidelines
+
+## Context
+
+- When using MCP lesson memory tools to store or retrieve experiential knowledge
+- When creating, updating, or searching for lessons across projects
+- When building relationships between lessons or tracking knowledge evolution
+- When applying lessons from one project to another
+
+## Critical Rules
+
+- Always search for relevant lessons before starting any new task or project
+- Create lessons with descriptive names, appropriate types, and relevant metadata
+- Structure observations with what_was_learned, why_it_matters, how_to_apply, root_cause, and evidence fields
+- Use semantic relationship types that clearly express connection meaning
+- Create explicit relationships between related lessons to build a knowledge graph
+- Track lesson application with success scores and detailed application notes
+- Update existing lessons rather than creating duplicates when knowledge evolves
+- Use container names consistently for logical organization of related lessons
+- Include confidence scores (0.1-1.0) with observations to indicate certainty
+- Follow knowledge evolution patterns by creating supersedes relationships
+- Tag lessons with relevant keywords to improve future discoverability
+- Use the lesson_memory_context tool for batch operations within the same container
+- Select appropriate lesson types based on knowledge content (BestPractice, Technique, Pattern, etc.)
+- Construct specific, descriptive search queries that include context and domain
+- Verify operation success and handle errors appropriately with retry or alternate approaches
+- Apply lessons across projects by searching the global knowledge base and tracking cross-project usage
+
+## Examples
+
+<example>
+// Search before starting work with specific, contextual query
+lesson_memory_tool({
+  "operation_type": "search",
+  "query": "authentication patterns in microservices with JWT and OAuth2",
+  "semantic": true,
+  "limit": 5
+})
+
+// Create and document a lesson with structured observations and tags
+lesson_memory_tool({
+  "operation_type": "create",
+  "name": "JWTAuthBestPractices",
+  "lesson_type": "BestPractice",
+  "container_name": "SecurityLessons",
+  "metadata": {
+    "tags": ["security", "authentication", "JWT", "tokens"],
+    "domain": "web-security",
+    "framework": "express"
+  }
+})
+
+// Use context manager for batch operations
+const context = lesson_memory_context({
+  "project_name": "AuthService",
+  "container_name": "SecurityLessons"
+})
+
+// Use context for subsequent operations
+lesson_memory_tool({
+  "operation_type": "observe",
+  "entity_name": "JWTAuthBestPractices",
+  "what_was_learned": "JWT tokens should have a short expiry time",
+  "why_it_matters": "Long-lived tokens present a security risk if compromised",
+  "how_to_apply": "Use refresh token pattern with short-lived access tokens",
+  "root_cause": "JWT tokens cannot be invalidated once issued unless using a blacklist",
+  "evidence": "Security incidents at CompanyX where tokens were leaked and used for 2 weeks",
+  "confidence": 0.9,
+  "context": context["context"]
+})
+
+// Create relationship between lessons
+lesson_memory_tool({
+  "operation_type": "relate",
+  "source_name": "JWTAuthBestPractices",
+  "target_name": "OAuthImplementation",
+  "relationship_type": "RELATED_TO",
+  "properties": {"context": "Both deal with token-based security"},
+  "context": context["context"]
+})
+
+// Error handling and verification
+const result = lesson_memory_tool({
+  "operation_type": "create",
+  "name": "TokenStorage",
+  "lesson_type": "Technique",
+  "container_name": "SecurityLessons"
+})
+
+// Parse and check result
+const resultObj = JSON.parse(result);
+if (resultObj.status === "error") {
+  // Handle error - retry with modified approach
+  console.log(`Error: ${resultObj.error}`);
+  // Maybe the lesson already exists, try getting it instead
+  lesson_memory_tool({
+    "operation_type": "search",
+    "query": "TokenStorage",
+    "exact_match": true
+  })
+}
+
+// Cross-project knowledge application
+lesson_memory_tool({
+  "operation_type": "track",
+  "lesson_name": "JWTAuthBestPractices",
+  "project_name": "UserServiceAPI", // Different from original project
+  "success_score": 0.95,
+  "application_notes": "Applied short-lived JWTs with refresh token rotation in new project"
+})
+</example>
+
+<example type="invalid">
+// Creating a duplicate lesson without searching first
+lesson_memory_tool({
+  "operation_type": "create",
+  "name": "JWTBestPractices",
+  "lesson_type": "BestPractice"
+})
+
+// Adding observation without structured fields
+lesson_memory_tool({
+  "operation_type": "observe",
+  "entity_name": "JWTBestPractices",
+  "what_was_learned": "Use short expiry times"
+  // Missing why_it_matters, how_to_apply, root_cause, and evidence
+})
+
+// Creating a lesson with improper lesson type
+lesson_memory_tool({
+  "operation_type": "create",
+  "name": "AuthPatterns",
+  "lesson_type": "Random" // Should use valid types like BestPractice, Technique, Pattern
+})
+
+// Not handling errors from operations
+lesson_memory_tool({
+  "operation_type": "create",
+  "name": "ExistingLesson" // Will fail if already exists
+  // No error handling
+})
+
+// Not tracking application of a lesson
+// Should use the track operation when applying knowledge
+</example> 

@@ -1,0 +1,170 @@
+---
+description: Use when managing knowledge evolution in the lesson memory system to ensure continuous improvement and refinement of stored knowledge
+globs: 
+alwaysApply: false
+---
+
+# Lesson Memory Knowledge Evolution
+
+## Context
+
+- When updating existing lessons with new insights or understanding
+- When superseding outdated knowledge with improved approaches
+- When consolidating fragmented knowledge into cohesive lessons
+- When tracking knowledge confidence evolution over time
+- When managing conflicting knowledge evolution paths
+- When transitioning knowledge across different domains
+
+## Critical Rules
+
+- Use the evolution operation to mark progression of knowledge understanding
+- Create explicit SUPERSEDES relationships between old and new knowledge
+- Track confidence score changes as knowledge is validated through application
+- Consolidate related lessons that address similar topics or problems
+- Version lessons rather than creating duplicates for incremental improvements
+- Maintain historical knowledge with proper deprecation rather than deletion
+- Record the reasoning behind knowledge evolution decisions
+- Follow structured knowledge evolution patterns for consistency
+- Evaluate and update lesson confidence scores after each application
+- Establish clear chains of knowledge evolution with proper linking
+- Follow formal knowledge deprecation process with status and reason metadata
+- Handle branching knowledge using VARIANT_OF relationships for parallel evolution
+- Measure and quantify the impact of evolved knowledge via application success metrics
+- Resolve conflicts between competing knowledge versions using evidence-based selection
+- Ensure backward compatibility references in evolved lessons for transition assistance
+
+## Examples
+
+<example>
+// Knowledge Evolution Pattern
+// 1. Recognize updated understanding
+const original_lesson = "AuthenticationApproach_v1";
+const new_lesson_name = "AuthenticationApproach_v2";
+
+// 2. Create the evolved lesson
+lesson_memory_tool({
+  "operation_type": "create",
+  "name": new_lesson_name,
+  "lesson_type": "BestPractice",
+  "metadata": {
+    "version": 2,
+    "supersedes": original_lesson,
+    "confidence": 0.85
+  }
+})
+
+// 3. Add observations explaining the evolution
+lesson_memory_tool({
+  "operation_type": "observe",
+  "entity_name": new_lesson_name,
+  "what_was_learned": "OAuth2 with PKCE is more secure than basic auth or simple OAuth",
+  "why_it_matters": "Prevents authorization code interception attacks",
+  "how_to_apply": "Implement PKCE extension with code_verifier and code_challenge"
+})
+
+// 4. Create explicit supersedes relationship
+lesson_memory_tool({
+  "operation_type": "relate",
+  "source_name": new_lesson_name,
+  "target_name": original_lesson,
+  "relationship_type": "SUPERSEDES",
+  "properties": {
+    "reason": "Security vulnerability mitigated",
+    "superseded_at": new Date().toISOString()
+  }
+})
+
+// Formal Knowledge Deprecation Process
+// 1. Mark lesson as deprecated with appropriate metadata
+lesson_memory_tool({
+  "operation_type": "update",
+  "name": original_lesson,
+  "properties": {
+    "status": "DEPRECATED",
+    "deprecation_reason": "Security vulnerabilities discovered",
+    "replacement": new_lesson_name,
+    "deprecated_at": new Date().toISOString()
+  }
+})
+
+// Handling Branching Knowledge Evolution
+// When knowledge evolves in different directions for different use cases
+lesson_memory_tool({
+  "operation_type": "create",
+  "name": "AuthenticationApproach_MobileVariant",
+  "lesson_type": "BestPractice",
+  "metadata": {
+    "variant_of": original_lesson,
+    "domain": "mobile-security",
+    "confidence": 0.8
+  }
+})
+
+// Create variant relationship
+lesson_memory_tool({
+  "operation_type": "relate",
+  "source_name": "AuthenticationApproach_MobileVariant",
+  "target_name": original_lesson,
+  "relationship_type": "VARIANT_OF",
+  "properties": {
+    "reason": "Mobile-specific implementation",
+    "created_at": new Date().toISOString()
+  }
+})
+
+// Measuring Evolution Impact
+// Track and quantify the impact of evolved knowledge
+const impact_data = lesson_memory_tool({
+  "operation_type": "search",
+  "query": `applications of ${new_lesson_name} vs ${original_lesson}`
+})
+
+// Update lesson with impact metrics
+if (impact_data && impact_data.length > 0) {
+  const improvement = impact_data.new_success_score - impact_data.old_success_score;
+  lesson_memory_tool({
+    "operation_type": "update",
+    "name": new_lesson_name,
+    "properties": {
+      "measured_improvement": improvement,
+      "applications_count": impact_data.applications_count,
+      "evidence_strength": impact_data.applications_count > 5 ? "strong" : "moderate"
+    }
+  })
+}
+
+// Knowledge Consolidation Pattern
+lesson_memory_tool({
+  "operation_type": "consolidate",
+  "primary_lesson": "ComprehensiveAuthStrategy",
+  "lessons_to_consolidate": [
+    "AuthenticationApproach_v2", 
+    "TokenStorage", 
+    "SessionManagement"
+  ],
+  "container_name": "SecurityLessons"
+})
+</example>
+
+<example type="invalid">
+// Creating duplicate knowledge without proper evolution
+lesson_memory_tool({
+  "operation_type": "create",
+  "name": "AuthBestPractices",
+  "lesson_type": "BestPractice"
+})
+
+// Should use evolution pattern or update existing lesson
+
+// Not establishing proper relationships for superseded knowledge
+// Should create explicit SUPERSEDES relationship
+
+// Deleting old lessons instead of properly deprecating them
+// Should maintain history with proper relationship chains
+
+// Creating incompatible knowledge versions without transition guidance
+// Should include backward compatibility references
+
+// Allowing conflicting knowledge versions without resolution strategy
+// Should have evidence-based conflict resolution approach
+</example> 
