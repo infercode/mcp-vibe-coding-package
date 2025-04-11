@@ -24,7 +24,10 @@ dependencies = [
 ]
 
 [dependency-groups]
-dev = ["flake8>=7.1.2,<8"]
+dev = [
+    "flake8>=7.1.2,<8",
+    "mypy>=1.15.0",
+]
 
 [build-system]
 requires = ["hatchling"]

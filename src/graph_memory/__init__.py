@@ -15,6 +15,7 @@ import logging
 import sys
 import uuid
 import re
+from contextlib import contextmanager
 
 from src.graph_memory.base_manager import BaseManager
 from src.graph_memory.entity_manager import EntityManager
@@ -37,6 +38,217 @@ __all__ = [
     'EmbeddingAdapter',
     'GraphMemoryManager'
 ]
+
+class LessonContext:
+    """Helper class for context-bound lesson operations."""
+    
+    def __init__(self, lesson_memory, container_name=None):
+        """
+        Initialize with lesson memory manager and container context.
+        
+        Args:
+            lesson_memory: The LessonMemoryManager instance
+            container_name: Optional container name to use as context
+        """
+        self.lesson_memory = lesson_memory
+        self.container_name = container_name or "Lessons"
+    
+    def create(self, name: str, lesson_type: str, **kwargs) -> str:
+        """
+        Create a lesson within this context.
+        
+        Args:
+            name: Name of the lesson
+            lesson_type: Type of the lesson
+            **kwargs: Additional parameters
+        
+        Returns:
+            JSON response with created lesson
+        """
+        # Merge container_name into kwargs if not explicitly provided
+        if "container_name" not in kwargs:
+            kwargs["container_name"] = self.container_name
+            
+        observations = kwargs.pop("observations", None)
+        metadata = kwargs.pop("metadata", None)
+            
+        result = self.lesson_memory.create_lesson_entity(
+            kwargs["container_name"], name, lesson_type, observations, metadata
+        )
+        
+        # Ensure string return
+        if isinstance(result, str):
+            return result
+        else:
+            return json.dumps(result)
+    
+    def observe(self, entity_name: str, **kwargs) -> str:
+        """
+        Add observations to a lesson within this context.
+        
+        Args:
+            entity_name: Name of the entity to add observations to
+            **kwargs: Observation fields (what_was_learned, why_it_matters, etc.)
+        
+        Returns:
+            JSON response with observation results
+        """
+        # Merge context information into kwargs
+        kwargs["entity_name"] = entity_name
+        if "container_name" not in kwargs:
+            kwargs["container_name"] = self.container_name
+            
+        result = self.lesson_memory.create_structured_lesson_observations(**kwargs)
+        
+        # Ensure string return
+        if isinstance(result, str):
+            return result
+        else:
+            return json.dumps(result)
+    
+    def relate(self, source_name: str, target_name: str, relationship_type: str, **kwargs) -> str:
+        """
+        Create a relationship between lessons within this context.
+        
+        Args:
+            source_name: Name of the source entity
+            target_name: Name of the target entity
+            relationship_type: Type of relationship
+            **kwargs: Additional parameters
+        
+        Returns:
+            JSON response with relationship data
+        """
+        # Build relationship data
+        relationship_data = {
+            "source_name": source_name,
+            "target_name": target_name,
+            "relationship_type": relationship_type,
+            "container_name": self.container_name
+        }
+        
+        # Add any additional properties
+        if "properties" in kwargs:
+            relationship_data["properties"] = kwargs["properties"]
+            
+        result = self.lesson_memory.create_lesson_relationship(relationship_data)
+        
+        # Ensure string return
+        if isinstance(result, str):
+            return result
+        else:
+            return json.dumps(result)
+    
+    def search(self, query: Optional[str] = None, **kwargs) -> str:
+        """
+        Search for lessons within this context.
+        
+        Args:
+            query: Search query text
+            **kwargs: Additional parameters
+        
+        Returns:
+            JSON response with search results
+        """
+        # Set container context if not explicitly provided
+        if "container_name" not in kwargs:
+            kwargs["container_name"] = self.container_name
+            
+        # Set defaults
+        kwargs.setdefault("limit", 50)
+        kwargs.setdefault("semantic", True)
+        
+        if query is not None:
+            kwargs["search_term"] = query
+            
+        # Use semantic search if enabled
+        if kwargs.get("semantic", False):
+            try:
+                search_term = kwargs.get("search_term", "")
+                if search_term is None:
+                    search_term = ""
+                    
+                result = self.lesson_memory.search_lesson_semantic(
+                    query=search_term,
+                    limit=kwargs.get("limit", 50),
+                    container_name=kwargs.get("container_name")
+                )
+                
+                # Ensure string return
+                if isinstance(result, str):
+                    return result
+                else:
+                    return json.dumps(result)
+            except Exception:
+                # Fall back to standard search
+                pass
+                
+        # Use standard search
+        result = self.lesson_memory.search_lesson_entities(
+            container_name=kwargs.get("container_name"),
+            search_term=kwargs.get("search_term"),
+            entity_type=kwargs.get("entity_type"),
+            tags=kwargs.get("tags"),
+            limit=kwargs.get("limit", 50),
+            semantic=False
+        )
+        
+        # Ensure string return
+        if isinstance(result, str):
+            return result
+        else:
+            return json.dumps(result)
+    
+    def track(self, lesson_name: str, context_entity: str, **kwargs) -> str:
+        """
+        Track application of a lesson to a context entity.
+        
+        Args:
+            lesson_name: Name of the lesson
+            context_entity: Name of the target entity
+            **kwargs: Additional parameters
+        
+        Returns:
+            JSON response with tracking results
+        """
+        success_score = kwargs.get("success_score", 0.8)
+        application_notes = kwargs.get("application_notes")
+        
+        result = self.lesson_memory.track_lesson_application(
+            lesson_name=lesson_name,
+            context_entity=context_entity,
+            success_score=success_score,
+            application_notes=application_notes
+        )
+        
+        # Ensure string return
+        if isinstance(result, str):
+            return result
+        else:
+            return json.dumps(result)
+    
+    def update(self, entity_name: str, updates: Dict[str, Any]) -> str:
+        """
+        Update a lesson entity within this context.
+        
+        Args:
+            entity_name: Name of the entity to update
+            updates: Dictionary of fields to update
+        
+        Returns:
+            JSON response with updated entity
+        """
+        result = self.lesson_memory.update_lesson_entity(
+            entity_name=entity_name,
+            updates=updates,
+            container_name=self.container_name
+        )
+        
+        # Ensure string return
+        if isinstance(result, str):
+            return result
+        else:
+            return json.dumps(result)
 
 class GraphMemoryManager:
     """
@@ -718,57 +930,6 @@ class GraphMemoryManager:
                 self.logger.error(f"Error getting all memories: {str(e)}")
             return dict_to_json({"error": f"Failed to get all memories: {str(e)}"})
 
-    def get_all_project_memories(self, project_name: Optional[str] = None) -> str:
-        """
-        Get all project entities in the knowledge graph.
-        
-        Args:
-            project_name: Optional project name to scope the query
-            
-        Returns:
-            JSON string with all project entities
-        """
-        try:
-            # Build query based on whether project_name is provided
-            if project_name:
-                query = """
-                MATCH (e:Entity)
-                WHERE e.project = $project_name
-                AND e.domain = 'project'
-                RETURN e
-                ORDER BY e.name
-                """
-                params = {"project_name": project_name}
-            else:
-                query = """
-                MATCH (e:Entity)
-                WHERE e.domain = 'project'
-                RETURN e
-                ORDER BY e.name
-                """
-                params = {}
-            
-            # Execute query with appropriate parameters
-            records = self.base_manager.safe_execute_read_query(query, params)
-            
-            # Process results
-            entities = []
-            if records:
-                for record in records:
-                    entity = record.get("e")
-                    if entity:
-                        # Convert Neo4j node to dict
-                        entity_dict = dict(entity.items())
-                        entity_dict["id"] = entity.id
-                        entities.append(entity_dict)
-            
-            return dict_to_json({"memories": entities})
-            
-        except Exception as e:
-            if self.logger:
-                self.logger.error(f"Error getting all project memories: {str(e)}")
-            return dict_to_json({"error": f"Failed to get all project memories: {str(e)}"})
-
     def delete_all_memories(self, project_name: Optional[str] = None) -> str:
         """
         Delete all memories in the knowledge graph.
@@ -981,1986 +1142,455 @@ class GraphMemoryManager:
         """Ensure the memory manager is initialized."""
         self.base_manager.ensure_initialized()
     
-    # Lesson Memory System methods for backward compatibility
+    # Lesson Memory System methods
     
-    def create_lesson_container(self, container_data: Dict[str, Any]) -> str:
+    def lesson_operation(self, operation_type: str, **kwargs) -> str:
         """
-        Create the lesson container if it doesn't exist.
-        Only one container named 'Lessons' is allowed in the system.
+        Single entry point for lesson operations.
         
         Args:
-            container_data: Dictionary containing container information
-                
+            operation_type: Type of operation to perform
+            **kwargs: Operation-specific parameters
+            
         Returns:
-            JSON string with operation result
+            JSON response string
+        """
+        self._ensure_initialized()
+        
+        operations = {
+            "create": self._handle_lesson_creation,
+            "observe": self._handle_lesson_observation,
+            "relate": self._handle_lesson_relationship,
+            "search": self._handle_lesson_search,
+            "track": self._handle_lesson_tracking,
+            "consolidate": self._handle_lesson_consolidation,
+            "evolve": self._handle_lesson_evolution,
+            "update": self._handle_lesson_update,
+        }
+        
+        if operation_type not in operations:
+            error_msg = f"Unknown operation type: {operation_type}"
+            if self.logger:
+                self.logger.error(error_msg)
+            return json.dumps({"status": "error", "error": error_msg, "code": "invalid_operation"})
+            
+        try:
+            return operations[operation_type](**kwargs)
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"Error in lesson operation '{operation_type}': {str(e)}")
+            return json.dumps({
+                "status": "error", 
+                "error": f"Operation failed: {str(e)}", 
+                "code": "operation_error"
+            })
+    
+    def _handle_lesson_creation(self, name: str, lesson_type: str, **kwargs) -> str:
+        """
+        Handle lesson creation with proper defaults and project context.
+        
+        Args:
+            name: Name of the lesson to create
+            lesson_type: Type of lesson entity
+            **kwargs: Additional parameters
+                - container_name: Optional container name (default: "Lessons")
+                - observations: Optional list of observations
+                - metadata: Optional metadata dictionary
+        
+        Returns:
+            JSON response string with created lesson data
         """
         try:
-            description = container_data.get("description")
-            metadata = container_data.get("metadata")
+            # Extract optional parameters with defaults
+            container = kwargs.pop("container_name", "Lessons")
+            observations = kwargs.pop("observations", None)
+            metadata = kwargs.pop("metadata", None)
             
-            # Delegate to the lesson container component
-            response = self.lesson_memory.create_lesson_container(
-                description=description,
-                metadata=metadata
+            # Create the lesson entity - ensure string return type
+            result = self.lesson_memory.create_lesson_entity(
+                container, name, lesson_type, observations, metadata
             )
-            return response
             
-        except Exception as e:
-            if self.logger:
-                self.logger.error(f"Error creating lesson container: {str(e)}")
-            return dict_to_json({
-                "status": "error",
-                "error": f"Failed to create lesson container: {str(e)}"
-            })
-    
-    def get_lesson_container(self) -> str:
-        """
-        Retrieve the lesson container. There should only be one container
-        named 'Lessons' in the system.
-            
-        Returns:
-            JSON string with the container information
-        """
-        try:
-            self._ensure_initialized()
-            
-            # Delegate to the lesson container component
-            response = self.lesson_memory.container.get_container()
-            
-            # Parse the response
-            result = json.loads(response)
-            
-            # Return response with "status":"success" format for consistency with tests
-            if "error" not in result:
-                return json.dumps({
-                    "status": "success",
-                    "container": result.get("container", result)
-                })
-                
-            return json.dumps({
-                "status": "error",
-                "error": result.get("error", "Lesson container 'Lessons' not found")
-            })
-            
-        except Exception as e:
-            if self.logger:
-                self.logger.error(f"Error retrieving lesson container: {str(e)}")
-            return json.dumps({
-                "status": "error",
-                "error": f"Failed to retrieve lesson container: {str(e)}"
-            })
-    
-    def get_all_lesson_memories(self, container_name: Optional[str] = None) -> str:
-        """
-        Get all lesson entities in the knowledge graph.
-        All lessons are stored in the single 'Lessons' container by default.
-        
-        Args:
-            container_name: Optional container name to scope query (defaults to "Lessons")
-            
-        Returns:
-            JSON string with all lesson entities
-        """
-        try:
-            self._ensure_initialized()
-            
-            # Use client-specific container if available, otherwise use default "Lessons"
-            effective_container = container_name or "Lessons"
-            
-            # Get all entities in the specified lesson container
-            # The client_id is already used internally via the initialized memory manager
-            response = self.lesson_memory.get_lesson_container_entities(effective_container)
-            
-            # Return response with "status":"success" format for consistency
-            if isinstance(response, dict) and "error" not in response:
-                return json.dumps({
-                    "status": "success",
-                    "entities": response.get("entities", []),
-                    "count": len(response.get("entities", [])),
-                    "container": effective_container,
-                    "client_id": self._client_id or "default-client"  # Include client_id for debugging
-                })
-            
-            return json.dumps({
-                "status": "error",
-                "error": response.get("error", "Failed to retrieve lesson entities"),
-                "container": effective_container,
-                "client_id": self._client_id or "default-client"  # Include client_id for debugging
-            })
-            
-        except Exception as e:
-            if self.logger:
-                self.logger.error(f"Error retrieving lesson memories: {str(e)}")
-            return json.dumps({
-                "status": "error",
-                "error": f"Failed to get lesson memories: {str(e)}",
-                "client_id": self._client_id or "default-client"  # Include client_id for debugging
-            })
-    
-    def create_lesson(self, name: str, problem_description: str, **kwargs) -> str:
-        """
-        Create a new lesson entity.
-        
-        Args:
-            name: The name/identifier for the lesson
-            problem_description: Description of the problem the lesson addresses
-            **kwargs: Additional parameters for lesson creation
-            
-        Returns:
-            JSON string with the created lesson information
-        """
-        try:
-            self._ensure_initialized()
-            
-            # Extract parameters from kwargs with defaults
-            container_name = kwargs.get("container_name", "LessonContainer")
-            solution = kwargs.get("solution", "")
-            context = kwargs.get("context", "")
-            tags = kwargs.get("tags", [])
-            related_entities = kwargs.get("related_entities", [])
-            source_reference = kwargs.get("source_reference", "")
-            
-            # Create metadata dictionary
-            metadata = {
-                "problem_description": problem_description,
-                "solution": solution,
-                "context": context,
-                "tags": tags,
-                "source_reference": source_reference
-            }
-            
-            # Create observations dictionary
-            observations = {}
-            if problem_description:
-                observations["problem"] = {
-                    "content": problem_description,
-                    "type": "problem_description"
-                }
-            if solution:
-                observations["solution"] = {
-                    "content": solution,
-                    "type": "solution"
-                }
-            if context:
-                observations["context"] = {
-                    "content": context,
-                    "type": "context"
-                }
-            
-            # Create the lesson entity using the LessonMemoryManager facade
-            # The correct parameter order is container_name, entity_name, entity_type, observations, metadata
-            return json.dumps(self.lesson_memory.create_lesson_entity(
-                container_name,
-                name,
-                "Lesson",
-                list(observations.values()) if observations else None,
-                metadata
-            ))
+            # Handle different return types (future-proof)
+            if isinstance(result, str):
+                return result
+            else:
+                return json.dumps(result)
             
         except Exception as e:
             if self.logger:
                 self.logger.error(f"Error creating lesson: {str(e)}")
-            return dict_to_json({"error": f"Failed to create lesson: {str(e)}"})
-    
-    def get_lessons(self, **kwargs) -> str:
+            return json.dumps({
+                "status": "error",
+                "error": f"Failed to create lesson: {str(e)}",
+                "code": "lesson_creation_error"
+            })
+            
+    def _handle_lesson_observation(self, entity_name: str, **kwargs) -> str:
         """
-        Get lessons from the knowledge graph.
+        Handle adding structured observations to a lesson.
         
         Args:
-            **kwargs: Search parameters for lessons
-            
+            entity_name: Name of the entity to add observations to
+            **kwargs: Additional parameters including observation fields:
+                - what_was_learned: Optional factual knowledge
+                - why_it_matters: Optional importance explanation
+                - how_to_apply: Optional application guidance
+                - root_cause: Optional underlying causes
+                - evidence: Optional examples and data
+                - container_name: Optional container name
+                
         Returns:
-            JSON string with matching lessons
+            JSON response string with observation results
         """
         try:
-            self._ensure_initialized()
+            # Use the entity_name and pass all other kwargs directly
+            kwargs["entity_name"] = entity_name
             
-            # Extract default container name
-            container_name = kwargs.get("container_name", "LessonContainer")
-            search_term = kwargs.get("search_term", None)
-            entity_type = kwargs.get("entity_type", "Lesson")
+            # Create the structured observations - ensure string return type
+            result = self.lesson_memory.create_structured_lesson_observations(**kwargs)
             
-            # Use the lesson entity search method
-            result = self.lesson_memory.entity.search_lesson_entities(
-                container_name=container_name,
-                search_term=search_term,
-                entity_type=entity_type,
+            # Handle different return types (future-proof)
+            if isinstance(result, str):
+                return result
+            else:
+                return json.dumps(result)
+            
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"Error adding lesson observations: {str(e)}")
+            return json.dumps({
+                "status": "error",
+                "error": f"Failed to add lesson observations: {str(e)}",
+                "code": "observation_error"
+            })
+    
+    def _handle_lesson_relationship(self, **kwargs) -> str:
+        """
+        Handle creating relationships between lessons.
+        
+        Args:
+            **kwargs: Parameters including:
+                - source_name: Name of the source entity
+                - target_name: Name of the target entity
+                - relationship_type: Type of relationship
+                - properties: Optional relationship properties
+                - container_name: Optional container name
+                
+        Returns:
+            JSON response string with relationship data
+        """
+        try:
+            # Validate required parameters
+            required_params = ["source_name", "target_name", "relationship_type"]
+            for param in required_params:
+                if param not in kwargs:
+                    raise ValueError(f"Missing required parameter: {param}")
+            
+            # Create the relationship
+            result = self.lesson_memory.create_lesson_relationship(kwargs)
+            
+            # Handle different return types (future-proof)
+            if isinstance(result, str):
+                return result
+            else:
+                return json.dumps(result)
+            
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"Error creating lesson relationship: {str(e)}")
+            return json.dumps({
+                "status": "error",
+                "error": f"Failed to create lesson relationship: {str(e)}",
+                "code": "relationship_error"
+            })
+        
+    def _handle_lesson_search(self, query: Optional[str] = None, **kwargs) -> str:
+        """
+        Handle searching for lessons.
+        
+        Args:
+            query: Optional search query text
+            **kwargs: Additional parameters including:
+                - container_name: Optional container to search within
+                - entity_type: Optional entity type to filter by
+                - tags: Optional tags to filter by
+                - limit: Maximum number of results (default: 50)
+                - semantic: Whether to use semantic search (default: True)
+                
+        Returns:
+            JSON response string with search results
+        """
+        try:
+            # Set defaults
+            kwargs.setdefault("limit", 50)
+            kwargs.setdefault("semantic", True)
+            
+            # If query is provided, add it to kwargs
+            if query is not None:
+                kwargs["search_term"] = query
+            
+            # Use semantic search if specified and available
+            if kwargs.get("semantic", False):
+                try:
+                    # Default to empty string if search_term is None
+                    search_term = kwargs.get("search_term", "")
+                    if search_term is None:
+                        search_term = ""
+                        
+                    result = self.lesson_memory.search_lesson_semantic(
+                        query=search_term,
+                        limit=kwargs.get("limit", 50),
+                        container_name=kwargs.get("container_name")
+                    )
+                    
+                    # Handle different return types (future-proof)
+                    if isinstance(result, str):
+                        return result
+                    else:
+                        return json.dumps(result)
+                        
+                except Exception as semantic_error:
+                    # Fall back to standard search if semantic search fails
+                    if self.logger:
+                        self.logger.warning(f"Semantic search failed, falling back to standard search: {str(semantic_error)}")
+            
+            # Use standard search (either as primary method or fallback)
+            result = self.lesson_memory.search_lesson_entities(
+                container_name=kwargs.get("container_name"),
+                search_term=kwargs.get("search_term"),
+                entity_type=kwargs.get("entity_type"),
                 tags=kwargs.get("tags"),
                 limit=kwargs.get("limit", 50),
-                semantic=kwargs.get("semantic", False)
+                semantic=False  # We already tried semantic search above if enabled
             )
             
-            return result
+            # Handle different return types (future-proof)
+            if isinstance(result, str):
+                return result
+            else:
+                return json.dumps(result)
             
         except Exception as e:
             if self.logger:
-                self.logger.error(f"Error getting lessons: {str(e)}")
-            return json.dumps({"error": f"Failed to get lessons: {str(e)}"})
-    
-    def update_lesson(self, lesson_name: str, **kwargs) -> str:
-        """
-        Update a lesson's properties.
-        
-        Args:
-            lesson_name: Name of the lesson to update
-            **kwargs: Properties to update
-            
-        Returns:
-            JSON string with the updated lesson
-        """
-        try:
-            self._ensure_initialized()
-            
-            # Extract optional container_name
-            container_name = kwargs.pop("container_name", "LessonContainer")
-            
-            # Update the lesson entity
-            return self.lesson_memory.entity.update_lesson_entity(
-                lesson_name, 
-                kwargs,
-                container_name
-            )
-            
-        except Exception as e:
-            if self.logger:
-                self.logger.error(f"Error updating lesson: {str(e)}")
-            return json.dumps({"error": f"Failed to update lesson: {str(e)}"})
-    
-    def apply_lesson_to_context(self, lesson_name: str, context_entity: str, **kwargs) -> str:
-        """
-        Apply a lesson to a context entity.
-        
-        Args:
-            lesson_name: Name of the lesson to apply
-            context_entity: Entity to apply the lesson to
-            **kwargs: Additional application parameters
-            
-        Returns:
-            JSON string with the result of the application
-        """
-        try:
-            self._ensure_initialized()
-            
-            # Extract parameters
-            success_score = kwargs.get("success_score", 0.8)
-            application_notes = kwargs.get("application_notes", "")
-            
-            # Create a relationship between the lesson and context entity
-            from_entity = lesson_name
-            to_entity = context_entity
-            relation_type = "APPLIED_TO"
-            
-            properties = {
-                "success_score": success_score,
-                "application_notes": application_notes,
-                "applied_at": kwargs.get("applied_at", time.strftime("%Y-%m-%dT%H:%M:%SZ"))
-            }
-            
-            # Create the relationship using the relation manager
-            result = self.relation_manager.create_relations([{
-                "from": from_entity,
-                "to": to_entity,
-                "relationType": relation_type,
-                **properties
-            }])
-            
-            return result
-            
-        except Exception as e:
-            if self.logger:
-                self.logger.error(f"Error applying lesson: {str(e)}")
-            return json.dumps({"error": f"Failed to apply lesson: {str(e)}"})
-    
-    def extract_potential_lessons(self, **kwargs) -> str:
-        """
-        Extract potential lessons from provided content.
-        
-        Args:
-            **kwargs: Content to extract lessons from
-            
-        Returns:
-            JSON string with potential lessons
-        """
-        try:
-            # Ensure we're initialized
-            self._ensure_initialized()
-            
-            # In actual implementation, this would delegate to LessonMemoryManager
-            # However, lesson_memory.py doesn't appear to have this specific method
-            # So we'd need to implement a proper delegation when it becomes available
-            
-            # For now, return empty result
-            return dict_to_json({"potential_lessons": [], "status": "success"})
-            
-        except Exception as e:
-            if self.logger:
-                self.logger.error(f"Error extracting lessons: {str(e)}")
-            return dict_to_json({"error": f"Failed to extract lessons: {str(e)}"})
-    
-    def consolidate_related_lessons(self, lesson_ids: List[str], **kwargs) -> str:
-        """
-        Consolidate related lessons into a new lesson.
-        
-        Args:
-            lesson_ids: List of lesson IDs to consolidate
-            **kwargs: Consolidation parameters
-            
-        Returns:
-            JSON string with the consolidated lesson
-        """
-        try:
-            self._ensure_initialized()
-            
-            # Extract parameters
-            new_name = kwargs.get("new_name", f"Consolidated_Lesson_{int(time.time())}")
-            merge_strategy = kwargs.get("merge_strategy", "union")
-            source_lessons = lesson_ids
-            
-            # Create a new lesson to represent the consolidated knowledge
-            new_lesson_data = {
-                "name": new_name,
-                "entityType": "Lesson",
-                "problem_description": kwargs.get("problem_description", "Consolidated from multiple related lessons"),
-                "source_lessons": source_lessons,
-                "merge_strategy": merge_strategy
-            }
-            
-            # Create the new lesson
-            result = json.loads(self.create_entities([new_lesson_data]))
-            
-            if "created" not in result or len(result["created"]) == 0:
-                return json.dumps({"error": "Failed to create consolidated lesson"})
-            
-            # Create relationships from source lessons to the new lesson
-            for lesson_id in source_lessons:
-                relation_data = {
-                    "from": lesson_id,
-                    "to": new_name,
-                    "relationType": "CONSOLIDATED_INTO"
-                }
-                
-                self.relation_manager.create_relations([relation_data])
-            
-            # Return the new consolidated lesson
+                self.logger.error(f"Error searching lessons: {str(e)}")
             return json.dumps({
-                "consolidated_lesson": new_name,
-                "source_lessons": source_lessons,
-                "strategy": merge_strategy
+                "status": "error",
+                "error": f"Failed to search lessons: {str(e)}",
+                "code": "search_error"
             })
+        
+    def _handle_lesson_tracking(self, lesson_name: str, context_entity: str, **kwargs) -> str:
+        """
+        Handle tracking lesson application to context entities.
+        
+        Args:
+            lesson_name: Name of the lesson being applied
+            context_entity: Name of the entity the lesson is being applied to
+            **kwargs: Additional parameters including:
+                - success_score: Score indicating success of application (0.0-1.0, default: 0.8)
+                - application_notes: Optional notes about the application
+                
+        Returns:
+            JSON response string with tracking results
+        """
+        try:
+            # Get optional parameters with defaults
+            success_score = kwargs.get("success_score", 0.8)
+            application_notes = kwargs.get("application_notes")
+            
+            # Track the lesson application
+            result = self.lesson_memory.track_lesson_application(
+                lesson_name=lesson_name,
+                context_entity=context_entity,
+                success_score=success_score,
+                application_notes=application_notes
+            )
+            
+            # Handle different return types (future-proof)
+            if isinstance(result, str):
+                return result
+            else:
+                return json.dumps(result)
+            
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"Error tracking lesson application: {str(e)}")
+            return json.dumps({
+                "status": "error",
+                "error": f"Failed to track lesson application: {str(e)}",
+                "code": "tracking_error"
+            })
+        
+    def _handle_lesson_consolidation(self, source_lessons: List[str], new_name: str, **kwargs) -> str:
+        """
+        Handle consolidating multiple lessons into a single consolidated lesson.
+        
+        Args:
+            source_lessons: List of lesson IDs or names to merge
+            new_name: Name for the new consolidated lesson
+            **kwargs: Additional parameters including:
+                - merge_strategy: Strategy for merging ('union', 'intersection', 'latest', default: 'union')
+                - container_name: Optional container name for the new lesson
+                
+        Returns:
+            JSON response string with the consolidated lesson
+        """
+        try:
+            # Get optional parameters with defaults
+            merge_strategy = kwargs.get("merge_strategy", "union")
+            container_name = kwargs.get("container_name")
+            
+            # Convert source_lessons to list if it's a single string
+            if isinstance(source_lessons, str):
+                source_lessons = [source_lessons]
+                
+            # Handle both list of strings and list of dicts
+            processed_sources = []
+            for lesson in source_lessons:
+                if isinstance(lesson, dict):
+                    processed_sources.append(lesson)
+                else:
+                    processed_sources.append({"id": lesson})
+            
+            # Merge the lessons
+            result = self.lesson_memory.merge_lessons(
+                source_lessons=processed_sources,
+                new_name=new_name,
+                merge_strategy=merge_strategy,
+                container_name=container_name
+            )
+            
+            # Handle different return types (future-proof)
+            if isinstance(result, str):
+                return result
+            else:
+                return json.dumps(result)
             
         except Exception as e:
             if self.logger:
                 self.logger.error(f"Error consolidating lessons: {str(e)}")
-            return json.dumps({"error": f"Failed to consolidate lessons: {str(e)}"})
-    
-    def get_knowledge_evolution(self, **kwargs) -> str:
-        """
-        Track the evolution of knowledge in the lesson graph.
-        
-        Args:
-            **kwargs: Parameters for evolution tracking
-            
-        Returns:
-            JSON string with evolution data
-        """
-        try:
-            self._ensure_initialized()
-            
-            # Extract parameters
-            entity_name = kwargs.get("entity_name")
-            lesson_type = kwargs.get("lesson_type")
-            start_date = kwargs.get("start_date")
-            end_date = kwargs.get("end_date")
-            
-            # Build a query to track knowledge evolution
-            query = """
-            MATCH (e:Entity)
-            WHERE e.domain = 'lesson'
-            """
-            
-            params = {}
-            
-            if entity_name:
-                query += " AND e.name = $entity_name"
-                params["entity_name"] = entity_name
-            
-            if lesson_type:
-                query += " AND e.entityType = $lesson_type"
-                params["lesson_type"] = lesson_type
-            
-            # Add time range if specified
-            if start_date:
-                query += " AND e.created >= datetime($start_date)"
-                params["start_date"] = start_date
-            
-            if end_date:
-                query += " AND e.created <= datetime($end_date)"
-                params["end_date"] = end_date
-            
-            query += """
-            RETURN e,
-                   e.created as created_time,
-                   e.lastUpdated as updated_time
-            ORDER BY e.created
-            """
-            
-            # Execute the query
-            results = self.base_manager.safe_execute_read_query(query, params)
-            
-            # Process results
-            evolution_data = []
-            for record in results:
-                entity = record.get("e")
-                if entity:
-                    entity_dict = dict(entity.items())
-                    entity_dict["created_time"] = record.get("created_time")
-                    entity_dict["updated_time"] = record.get("updated_time")
-                    evolution_data.append(entity_dict)
-            
-            return json.dumps({"evolution": evolution_data})
-            
-        except Exception as e:
-            if self.logger:
-                self.logger.error(f"Error getting knowledge evolution: {str(e)}")
-            return json.dumps({"error": f"Failed to get knowledge evolution: {str(e)}"})
-    
-    def query_across_contexts(self, query_text: str, **kwargs) -> str:
-        """
-        Query across multiple contexts.
-        
-        Args:
-            query_text: The text to query for
-            **kwargs: Additional parameters
-            
-        Returns:
-            JSON string with query results
-        """
-        try:
-            # Ensure we're initialized
-            self._ensure_initialized()
-            
-            # This would be implemented with cross-context searches
-            # utilizing both lesson_memory and project_memory systems
-            
-            return dict_to_json({"results": [], "status": "success"})
-            
-        except Exception as e:
-            if self.logger:
-                self.logger.error(f"Error querying across contexts: {str(e)}")
-            return dict_to_json({"error": f"Failed to query across contexts: {str(e)}"})
-    
-    # Project Memory System methods
-    
-    def create_project_container(self, project_data: Dict[str, Any]) -> str:
-        """
-        Create a project container.
-        
-        Args:
-            project_data: Dictionary with project container data
-            
-        Returns:
-            JSON string with the created container
-        """
-        try:
-            self._ensure_initialized()
-            
-            # Store client_id in project_data for isolation
-            if self._client_id:
-                if "metadata" not in project_data:
-                    project_data["metadata"] = {}
-                project_data["metadata"]["client_id"] = self._client_id
-            
-            # Delegate to the project memory manager
-            result = self.get_client_project_memory().create_project_container(project_data)
-            
-            # Ensure we return a string and add status field if not already present
-            if isinstance(result, dict):
-                if "status" not in result and "error" not in result:
-                    result["status"] = "success"
-                return json.dumps(result)
-                
-            # If already a JSON string, parse and add status field if needed
-            parsed_result = json.loads(result)
-            if "status" not in parsed_result and "error" not in parsed_result:
-                parsed_result["status"] = "success"
-            return json.dumps(parsed_result)
-            
-        except Exception as e:
-            if self.logger:
-                self.logger.error(f"Error creating project container: {str(e)}")
             return json.dumps({
                 "status": "error",
-                "error": f"Failed to create project container: {str(e)}"
+                "error": f"Failed to consolidate lessons: {str(e)}",
+                "code": "consolidation_error"
             })
-    
-    def get_project_container(self, project_id: str) -> str:
-        """
-        Get a project container.
         
-        Args:
-            project_id: The ID of the project
-            
-        Returns:
-            JSON string with the project container
+    def _handle_lesson_evolution(self, old_lesson: str, new_lesson: str, **kwargs) -> str:
         """
-        result = self.get_client_project_memory().get_project_container(project_id)
-        # Ensure we return a string
-        if isinstance(result, dict):
-            return json.dumps(result)
-        return result
-    
-    def update_project_container(self, project_id: str, updates: Dict[str, Any]) -> str:
-        """
-        Update a project container.
-        
-        Args:
-            project_id: The ID of the project
-            updates: Dictionary with updates
-            
-        Returns:
-            JSON string with the result
-        """
-        result = self.get_client_project_memory().update_project_container(project_id, updates)
-        # Ensure we return a string
-        if isinstance(result, dict):
-            return json.dumps(result)
-        return result
-    
-    def delete_project_container(self, project_id: str) -> str:
-        """
-        Delete a project container.
-        
-        Args:
-            project_id: The ID of the project
-            
-        Returns:
-            JSON string with the result
-        """
-        result = self.get_client_project_memory().delete_project_container(project_id, False)
-        # Ensure we return a string
-        if isinstance(result, dict):
-            return json.dumps(result)
-        return result
-    
-    def list_project_containers(self) -> str:
-        """
-        List project containers.
-        
-        Returns:
-            JSON string with the project containers
-        """
-        try:
-            # Get the result from the project memory manager
-            result = self.get_client_project_memory().list_project_containers("name", 100)
-            
-            # Ensure we return a string
-            if isinstance(result, dict):
-                return json.dumps(result)
-            return result
-        except Exception as e:
-            if self.logger:
-                self.logger.error(f"Error listing project containers: {str(e)}")
-            return json.dumps({"error": f"Failed to list project containers: {str(e)}"})
-    
-    def get_project_status(self, container_name: str) -> str:
-        """
-        Get a summary of the project container status.
-        
-        Args:
-            container_name: Name of the project container
-            
-        Returns:
-            JSON string with the project status
-        """
-        try:
-            self._ensure_initialized()
-            result = self.project_memory.get_project_status(container_name)
-            if isinstance(result, dict):
-                return dict_to_json(result)
-            return result
-        except Exception as e:
-            if self.logger:
-                self.logger.error(f"Error getting project status: {str(e)}")
-            return dict_to_json({"error": f"Failed to get project status: {str(e)}"})
-
-    # Domain management methods
-    def create_project_domain(self, name: str, container_name: str, 
-                    description: Optional[str] = None,
-                    properties: Optional[Dict[str, Any]] = None) -> str:
-        """
-        Create a new domain within a project container.
-        
-        Args:
-            name: Name of the domain
-            container_name: Name of the project container
-            description: Optional description of the domain
-            properties: Optional additional properties
-            
-        Returns:
-            JSON string with the created domain
-        """
-        try:
-            self._ensure_initialized()
-            result = self.project_memory.create_project_domain(name, container_name, description, properties)
-            if isinstance(result, dict):
-                return dict_to_json(result)
-            return result
-        except Exception as e:
-            if self.logger:
-                self.logger.error(f"Error creating domain: {str(e)}")
-            return dict_to_json({"error": f"Failed to create domain: {str(e)}"})
-    
-    def get_project_domain(self, name: str, container_name: str) -> str:
-        """
-        Retrieve a domain from a project container.
-        
-        Args:
-            name: Name of the domain
-            container_name: Name of the project container
-            
-        Returns:
-            JSON string with the domain details
-        """
-        try:
-            self._ensure_initialized()
-            result = self.project_memory.get_project_domain(name, container_name)
-            if isinstance(result, dict):
-                return dict_to_json(result)
-            return result
-        except Exception as e:
-            if self.logger:
-                self.logger.error(f"Error getting domain: {str(e)}")
-            return dict_to_json({"error": f"Failed to get domain: {str(e)}"})
-    
-    def update_project_domain(self, name: str, container_name: str, 
-                    updates: Dict[str, Any]) -> str:
-        """
-        Update a domain's properties.
-        
-        Args:
-            name: Name of the domain
-            container_name: Name of the project container
-            updates: Dictionary of properties to update
-            
-        Returns:
-            JSON string with the updated domain
-        """
-        try:
-            self._ensure_initialized()
-            result = self.project_memory.update_project_domain(name, container_name, updates)
-            if isinstance(result, dict):
-                return dict_to_json(result)
-            return result
-        except Exception as e:
-            if self.logger:
-                self.logger.error(f"Error updating domain: {str(e)}")
-            return dict_to_json({"error": f"Failed to update domain: {str(e)}"})
-    
-    def delete_project_domain(self, name: str, container_name: str, 
-                    delete_components: bool = False) -> str:
-        """
-        Delete a domain from a project container.
-        
-        Args:
-            name: Name of the domain
-            container_name: Name of the project container
-            delete_components: If True, delete all components belonging to the domain
-            
-        Returns:
-            JSON string with the deletion result
-        """
-        try:
-            self._ensure_initialized()
-            result = self.project_memory.delete_project_domain(name, container_name, delete_components)
-            if isinstance(result, dict):
-                return dict_to_json(result)
-            return result
-        except Exception as e:
-            if self.logger:
-                self.logger.error(f"Error deleting domain: {str(e)}")
-            return dict_to_json({"error": f"Failed to delete domain: {str(e)}"})
-    
-    def list_project_domains(self, container_name: str, sort_by: str = "name", 
-                   limit: int = 100) -> str:
-        """
-        List all domains in a project container.
-        
-        Args:
-            container_name: Name of the project container
-            sort_by: Field to sort by ('name', 'created', or 'lastUpdated')
-            limit: Maximum number of domains to return
-            
-        Returns:
-            JSON string with the list of domains
-        """
-        try:
-            self._ensure_initialized()
-            result = self.project_memory.list_project_domains(container_name, sort_by, limit)
-            if isinstance(result, dict):
-                return dict_to_json(result)
-            return result
-        except Exception as e:
-            if self.logger:
-                self.logger.error(f"Error listing domains: {str(e)}")
-            return dict_to_json({"error": f"Failed to list domains: {str(e)}"})
-    
-    # Additional dependency management methods
-    def get_project_dependencies(self, component_name: str, domain_name: str, 
-                      container_name: str, direction: str = "outgoing",
-                      dependency_type: Optional[str] = None) -> str:
-        """
-        Get dependencies for a component.
-        
-        Args:
-            component_name: Name of the component
-            domain_name: Name of the domain
-            container_name: Name of the project container
-            direction: Direction of dependencies ('outgoing', 'incoming', or 'both')
-            dependency_type: Optional dependency type to filter by
-            
-        Returns:
-            JSON string with the dependencies
-        """
-        try:
-            self._ensure_initialized()
-            result = self.project_memory.get_project_dependencies(
-                component_name, domain_name, container_name, direction, dependency_type
-            )
-            if isinstance(result, dict):
-                return dict_to_json(result)
-            return result
-        except Exception as e:
-            if self.logger:
-                self.logger.error(f"Error getting dependencies: {str(e)}")
-            return dict_to_json({"error": f"Failed to get dependencies: {str(e)}"})
-    
-    def delete_project_dependency(self, from_component: str, to_component: str,
-                       domain_name: str, container_name: str,
-                       dependency_type: str) -> str:
-        """
-        Delete a dependency relationship between components.
-        
-        Args:
-            from_component: Name of the source component
-            to_component: Name of the target component
-            domain_name: Name of the domain
-            container_name: Name of the project container
-            dependency_type: Type of dependency to delete
-            
-        Returns:
-            JSON string with the result
-        """
-        try:
-            self._ensure_initialized()
-            result = self.project_memory.delete_project_dependency(
-                from_component, to_component, domain_name, container_name, dependency_type
-            )
-            if isinstance(result, dict):
-                return dict_to_json(result)
-            return result
-        except Exception as e:
-            if self.logger:
-                self.logger.error(f"Error deleting dependency: {str(e)}")
-            return dict_to_json({"error": f"Failed to delete dependency: {str(e)}"})
-    
-    def analyze_project_dependency_graph(self, domain_name: str, container_name: str) -> str:
-        """
-        Analyze the dependency graph for a domain.
-        
-        Args:
-            domain_name: Name of the domain
-            container_name: Name of the project container
-            
-        Returns:
-            JSON string with the dependency analysis
-        """
-        try:
-            self._ensure_initialized()
-            result = self.project_memory.analyze_project_dependency_graph(domain_name, container_name)
-            if isinstance(result, dict):
-                return dict_to_json(result)
-            return result
-        except Exception as e:
-            if self.logger:
-                self.logger.error(f"Error analyzing dependency graph: {str(e)}")
-            return dict_to_json({"error": f"Failed to analyze dependency graph: {str(e)}"})
-    
-    def find_project_dependency_path(self, from_component: str, to_component: str,
-               domain_name: str, container_name: str,
-               max_depth: int = 5) -> str:
-        """
-        Find dependency paths between two components.
-        
-        Args:
-            from_component: Name of the source component
-            to_component: Name of the target component
-            domain_name: Name of the domain
-            container_name: Name of the project container
-            max_depth: Maximum path depth to search
-            
-        Returns:
-            JSON string with the dependency paths
-        """
-        try:
-            self._ensure_initialized()
-            result = self.project_memory.find_project_dependency_path(
-                from_component, to_component, domain_name, container_name, max_depth
-            )
-            if isinstance(result, dict):
-                return dict_to_json(result)
-            return result
-        except Exception as e:
-            if self.logger:
-                self.logger.error(f"Error finding path: {str(e)}")
-            return dict_to_json({"error": f"Failed to find path: {str(e)}"})
-    
-    def import_project_dependencies_from_code(self, dependencies: List[Dict[str, Any]],
-                                  domain_name: str, container_name: str) -> str:
-        """
-        Import dependencies detected from code analysis.
-        
-        Args:
-            dependencies: List of dependencies, each with from_component, to_component, and dependency_type
-            domain_name: Name of the domain
-            container_name: Name of the project container
-            
-        Returns:
-            JSON string with the import result
-        """
-        try:
-            self._ensure_initialized()
-            result = self.project_memory.import_project_dependencies_from_code(
-                dependencies, domain_name, container_name
-            )
-            if isinstance(result, dict):
-                return dict_to_json(result)
-            return result
-        except Exception as e:
-            if self.logger:
-                self.logger.error(f"Error importing dependencies: {str(e)}")
-            return dict_to_json({"error": f"Failed to import dependencies: {str(e)}"})
-    
-    # Additional version management methods
-    def get_project_version(self, component_name: str, domain_name: str,
-                 container_name: str, version_number: Optional[str] = None) -> str:
-        """
-        Get a specific version of a component.
-        
-        Args:
-            component_name: Name of the component
-            domain_name: Name of the domain
-            container_name: Name of the project container
-            version_number: Optional version number (latest if not specified)
-            
-        Returns:
-            JSON string with the version details
-        """
-        try:
-            self._ensure_initialized()
-            result = self.project_memory.get_project_version(
-                component_name, domain_name, container_name, version_number
-            )
-            if isinstance(result, dict):
-                return dict_to_json(result)
-            return result
-        except Exception as e:
-            if self.logger:
-                self.logger.error(f"Error getting version: {str(e)}")
-            return dict_to_json({"error": f"Failed to get version: {str(e)}"})
-    
-    def list_project_versions(self, component_name: str, domain_name: str,
-                   container_name: str, limit: int = 10) -> str:
-        """
-        List all versions of a component.
-        
-        Args:
-            component_name: Name of the component
-            domain_name: Name of the domain
-            container_name: Name of the project container
-            limit: Maximum number of versions to return
-            
-        Returns:
-            JSON string with the list of versions
-        """
-        try:
-            self._ensure_initialized()
-            result = self.project_memory.list_project_versions(
-                component_name, domain_name, container_name, limit
-            )
-            if isinstance(result, dict):
-                return dict_to_json(result)
-            return result
-        except Exception as e:
-            if self.logger:
-                self.logger.error(f"Error listing versions: {str(e)}")
-            return dict_to_json({"error": f"Failed to list versions: {str(e)}"})
-    
-    def get_project_version_history(self, component_name: str, domain_name: str,
-                         container_name: str, include_content: bool = False) -> str:
-        """
-        Get the version history of a component.
-        
-        Args:
-            component_name: Name of the component
-            domain_name: Name of the domain
-            container_name: Name of the project container
-            include_content: Whether to include content in the version history
-            
-        Returns:
-            JSON string with the version history
-        """
-        try:
-            self._ensure_initialized()
-            result = self.project_memory.get_project_version_history(
-                component_name, domain_name, container_name, include_content
-            )
-            if isinstance(result, dict):
-                return dict_to_json(result)
-            return result
-        except Exception as e:
-            if self.logger:
-                self.logger.error(f"Error getting version history: {str(e)}")
-            return dict_to_json({"error": f"Failed to get version history: {str(e)}"})
-    
-    def compare_project_versions(self, component_name: str, domain_name: str,
-                      container_name: str, version1: str, version2: str) -> str:
-        """
-        Compare two versions of a component.
-        
-        Args:
-            component_name: Name of the component
-            domain_name: Name of the domain
-            container_name: Name of the project container
-            version1: First version number
-            version2: Second version number
-            
-        Returns:
-            JSON string with the comparison result
-        """
-        try:
-            self._ensure_initialized()
-            result = self.project_memory.compare_project_versions(
-                component_name, domain_name, container_name, version1, version2
-            )
-            if isinstance(result, dict):
-                return dict_to_json(result)
-            return result
-        except Exception as e:
-            if self.logger:
-                self.logger.error(f"Error comparing versions: {str(e)}")
-            return dict_to_json({"error": f"Failed to compare versions: {str(e)}"})
-    
-    def tag_project_version(self, component_name: str, domain_name: str,
-                 container_name: str, version_number: str,
-                 tag_name: str, tag_description: Optional[str] = None) -> str:
-        """
-        Add a tag to a specific version of a component.
-        
-        Args:
-            component_name: Name of the component
-            domain_name: Name of the domain
-            container_name: Name of the project container
-            version_number: Version number to tag
-            tag_name: Name of the tag
-            tag_description: Optional description of the tag
-            
-        Returns:
-            JSON string with the result
-        """
-        try:
-            self._ensure_initialized()
-            result = self.project_memory.tag_project_version(
-                component_name, domain_name, container_name, 
-                version_number, tag_name, tag_description
-            )
-            if isinstance(result, dict):
-                return dict_to_json(result)
-            return result
-        except Exception as e:
-            if self.logger:
-                self.logger.error(f"Error tagging version: {str(e)}")
-            return dict_to_json({"error": f"Failed to tag version: {str(e)}"})
-    
-    def sync_project_version_control(self, component_name: str, domain_name: str,
-                               container_name: str,
-                               commit_data: List[Dict[str, Any]]) -> str:
-        """
-        Synchronize component versions with version control system data.
-        
-        Args:
-            component_name: Name of the component
-            domain_name: Name of the domain
-            container_name: Name of the project container
-            commit_data: List of commit data
-            
-        Returns:
-            JSON string with the sync result
-        """
-        try:
-            self._ensure_initialized()
-            result = self.project_memory.sync_project_version_control(
-                component_name, domain_name, container_name, commit_data
-            )
-            if isinstance(result, dict):
-                return dict_to_json(result)
-            return result
-        except Exception as e:
-            if self.logger:
-                self.logger.error(f"Error syncing with version control: {str(e)}")
-            return dict_to_json({"error": f"Failed to sync with version control: {str(e)}"})
-
-    # Component management methods
-    def create_project_component(self, name: str, component_type: str, domain_name: str,
-                       container_name: str, description: Optional[str] = None,
-                       content: Optional[str] = None,
-                       metadata: Optional[Dict[str, Any]] = None) -> str:
-        """
-        Create a component within a project.
-        
-        Args:
-            name: Name of the component
-            component_type: Type of component (e.g., "Module", "Class", "Function")
-            domain_name: Name of the domain
-            container_name: Name of the project container
-            description: Optional description
-            content: Optional content for the component
-            metadata: Optional additional metadata
-            
-        Returns:
-            JSON string with operation result
-        """
-        try:
-            self._ensure_initialized()
-            result = self.project_memory.create_project_component(
-                name, component_type, domain_name, container_name,
-                description, content, metadata
-            )
-            if isinstance(result, dict):
-                return dict_to_json(result)
-            return result
-        except Exception as e:
-            if self.logger:
-                self.logger.error(f"Error creating component: {str(e)}")
-            return dict_to_json({"error": f"Failed to create component: {str(e)}"})
-    
-    def get_project_component(self, name: str, domain_name: str, container_name: str) -> str:
-        """
-        Get a component from a project.
-        
-        Args:
-            name: Name of the component
-            domain_name: Name of the domain
-            container_name: Name of the project container
-            
-        Returns:
-            JSON string with the component
-        """
-        try:
-            self._ensure_initialized()
-            result = self.project_memory.get_project_component(name, domain_name, container_name)
-            if isinstance(result, dict):
-                return dict_to_json(result)
-            return result
-        except Exception as e:
-            if self.logger:
-                self.logger.error(f"Error getting component: {str(e)}")
-            return dict_to_json({"error": f"Failed to get component: {str(e)}"})
-    
-    def update_project_component(self, name: str, container_name: str, updates: Dict[str, Any], domain_name: Optional[str] = None) -> str:
-        """
-        Update a component's properties.
-        
-        Args:
-            name: Name of the component
-            container_name: Name of the project container
-            updates: Dictionary of properties to update
-            domain_name: Optional name of the domain
-            
-        Returns:
-            JSON string with the updated component
-        """
-        try:
-            self._ensure_initialized()
-            # The project_memory.update_component expects: name, container_name, updates, domain_name
-            result = self.project_memory.update_project_component(name, container_name, updates, domain_name)
-            if isinstance(result, dict):
-                return dict_to_json(result)
-            return result
-        except Exception as e:
-            if self.logger:
-                self.logger.error(f"Error updating component: {str(e)}")
-            return dict_to_json({"error": f"Failed to update component: {str(e)}"})
-    
-    def delete_project_component(self, component_id: str, domain_name: Optional[str] = None, container_name: Optional[str] = None) -> str:
-        """
-        Delete a component from a domain.
-        
-        Args:
-            component_id: ID or name of the component to delete
-            domain_name: Optional name of the domain
-            container_name: Optional name of the project container
-            
-        Returns:
-            JSON string with the deletion result
-        """
-        try:
-            self._ensure_initialized()
-            result = self.project_memory.delete_project_component(component_id, domain_name, container_name)
-            if isinstance(result, dict):
-                return dict_to_json(result)
-            return result
-        except Exception as e:
-            if self.logger:
-                self.logger.error(f"Error deleting component: {str(e)}")
-            return dict_to_json({"error": f"Failed to delete component: {str(e)}"})
-    
-    def list_project_components(self, domain_name: str, container_name: str, 
-                      component_type: Optional[str] = None,
-                      sort_by: str = "name", limit: int = 100) -> str:
-        """
-        List all components in a domain.
-        
-        Args:
-            domain_name: Name of the domain
-            container_name: Name of the project container
-            component_type: Optional type of components to filter by
-            sort_by: Field to sort by ('name', 'created', or 'lastUpdated')
-            limit: Maximum number of components to return
-            
-        Returns:
-            JSON string with the components
-        """
-        try:
-            self._ensure_initialized()
-            result = self.project_memory.list_project_components(
-                domain_name, container_name, component_type, sort_by, limit
-            )
-            if isinstance(result, dict):
-                return dict_to_json(result)
-            return result
-        except Exception as e:
-            if self.logger:
-                self.logger.error(f"Error listing components: {str(e)}")
-            return dict_to_json({"error": f"Failed to list components: {str(e)}"})
-    
-    def create_project_component_relationship(self, from_component: str, to_component: str,
-                                   domain_name: str, container_name: str,
-                                   relation_type: str, 
-                                   properties: Optional[Dict[str, Any]] = None) -> str:
-        """
-        Create a relationship between two components.
-        
-        Args:
-            from_component: Name of the source component
-            to_component: Name of the target component
-            domain_name: Name of the domain
-            container_name: Name of the project container
-            relation_type: Type of relationship
-            properties: Optional additional properties
-            
-        Returns:
-            JSON string with the created relationship
-        """
-        try:
-            self._ensure_initialized()
-            result = self.project_memory.create_project_component_relationship(
-                from_component, to_component, domain_name, container_name,
-                relation_type, properties
-            )
-            if isinstance(result, dict):
-                return dict_to_json(result)
-            return result
-        except Exception as e:
-            if self.logger:
-                self.logger.error(f"Error creating component relationship: {str(e)}")
-            return dict_to_json({"error": f"Failed to create component relationship: {str(e)}"})
-    
-    # Domain entity relationship methods
-    def add_entity_to_project_domain(self, entity_name: str, entity_type: str,
-                          domain_name: str, container_name: str,
-                          properties: Optional[Dict[str, Any]] = None) -> str:
-        """
-        Add an entity to a domain.
-        
-        Args:
-            entity_name: Name of the entity
-            entity_type: Type of entity
-            domain_name: Name of the domain
-            container_name: Name of the project container
-            properties: Optional additional properties
-            
-        Returns:
-            JSON string with the result
-        """
-        try:
-            self._ensure_initialized()
-            # Note: The ProjectMemoryManager expects only domain_name, container_name, entity_name
-            # But our implementation expects more parameters, so we need to adapt
-            result = self.project_memory.add_entity_to_project_domain(
-                domain_name, container_name, entity_name
-            )
-            if isinstance(result, dict):
-                return dict_to_json(result)
-            return result
-        except Exception as e:
-            if self.logger:
-                self.logger.error(f"Error adding entity to domain: {str(e)}")
-            return dict_to_json({"error": f"Failed to add entity to domain: {str(e)}"})
-    
-    def remove_entity_from_project_domain(self, entity_name: str, entity_type: str,
-                               domain_name: str, container_name: str) -> str:
-        """
-        Remove an entity from a domain.
-        
-        Args:
-            entity_name: Name of the entity
-            entity_type: Type of entity
-            domain_name: Name of the domain
-            container_name: Name of the project container
-            
-        Returns:
-            JSON string with the result
-        """
-        try:
-            self._ensure_initialized()
-            # Note: The ProjectMemoryManager expects only domain_name, container_name, entity_name
-            # But our implementation expects more parameters, so we need to adapt
-            result = self.project_memory.remove_entity_from_project_domain(
-                domain_name, container_name, entity_name
-            )
-            if isinstance(result, dict):
-                return dict_to_json(result)
-            return result
-        except Exception as e:
-            if self.logger:
-                self.logger.error(f"Error removing entity from domain: {str(e)}")
-            return dict_to_json({"error": f"Failed to remove entity from domain: {str(e)}"})
-    
-    def get_project_domain_entities(self, domain_name: str, container_name: str,
-                         entity_type: Optional[str] = None) -> str:
-        """
-        Get all entities in a domain.
-        
-        Args:
-            domain_name: Name of the domain
-            container_name: Name of the project container
-            entity_type: Optional entity type to filter by
-            
-        Returns:
-            JSON string with the entities
-        """
-        try:
-            self._ensure_initialized()
-            result = self.project_memory.get_project_domain_entities(
-                domain_name, container_name, entity_type
-            )
-            if isinstance(result, dict):
-                return dict_to_json(result)
-            return result
-        except Exception as e:
-            if self.logger:
-                self.logger.error(f"Error getting domain entities: {str(e)}")
-            return dict_to_json({"error": f"Failed to get domain entities: {str(e)}"})
-    
-    def create_project_domain_relationship(self, from_domain: str, to_domain: str,
-                                container_name: str, relation_type: str,
-                                properties: Optional[Dict[str, Any]] = None) -> str:
-        """
-        Create a relationship between two domains.
-        
-        Args:
-            from_domain: Name of the source domain
-            to_domain: Name of the target domain
-            container_name: Name of the project container
-            relation_type: Type of relationship
-            properties: Optional additional properties
-            
-        Returns:
-            JSON string with the created relationship
-        """
-        try:
-            self._ensure_initialized()
-            result = self.project_memory.create_project_domain_relationship(
-                from_domain, to_domain, container_name, relation_type, properties
-            )
-            if isinstance(result, dict):
-                return dict_to_json(result)
-            return result
-        except Exception as e:
-            if self.logger:
-                self.logger.error(f"Error creating domain relationship: {str(e)}")
-            return dict_to_json({"error": f"Failed to create domain relationship: {str(e)}"})
-    
-    # Dependency management methods
-    def create_project_dependency(self, from_component: str, to_component: str, 
-                        domain_name: str, container_name: str,
-                        dependency_type: str,
-                        properties: Optional[Dict[str, Any]] = None) -> str:
-        """
-        Create a dependency between components.
-        
-        Args:
-            from_component: Source component name
-            to_component: Target component name
-            domain_name: Name of the domain
-            container_name: Name of the project container
-            dependency_type: Type of dependency
-            properties: Optional additional properties
-            
-        Returns:
-            JSON string with operation result
-        """
-        try:
-            self._ensure_initialized()
-            result = self.project_memory.create_project_dependency(
-                from_component, to_component, domain_name, container_name,
-                dependency_type, properties
-            )
-            if isinstance(result, dict):
-                return dict_to_json(result)
-            return result
-        except Exception as e:
-            if self.logger:
-                self.logger.error(f"Error creating dependency: {str(e)}")
-            return dict_to_json({"error": f"Failed to create dependency: {str(e)}"})
-    
-    # Version management methods
-    def create_project_version(self, component_name: str, domain_name: str,
-                     container_name: str, version_number: str,
-                     commit_hash: Optional[str] = None,
-                     content: Optional[str] = None,
-                     changes: Optional[str] = None,
-                     metadata: Optional[Dict[str, Any]] = None) -> str:
-        """
-        Create a new version for a component.
-        
-        Args:
-            component_name: Name of the component
-            domain_name: Name of the domain
-            container_name: Name of the project container
-            version_number: Version number or identifier
-            commit_hash: Optional commit hash from version control
-            content: Optional content of the component at this version
-            changes: Optional description of changes from previous version
-            metadata: Optional additional metadata
-            
-        Returns:
-            JSON string with operation result
-        """
-        try:
-            self._ensure_initialized()
-            result = self.project_memory.create_project_version(
-                component_name, domain_name, container_name, version_number,
-                commit_hash, content, changes, metadata
-            )
-            if isinstance(result, dict):
-                return dict_to_json(result)
-            return result
-        except Exception as e:
-            if self.logger:
-                self.logger.error(f"Error creating version: {str(e)}")
-            return dict_to_json({"error": f"Failed to create version: {str(e)}"})
-
-    def get_client_project_memory(self):
-        """
-        Get the appropriate project memory manager for the current client.
-        
-        Returns:
-            The correct ProjectMemoryManager for this client
-        """
-        if self._client_id and self._client_id in self._client_projects:
-            return self._client_projects[self._client_id]
-        return self.project_memory
-
-    def get_project_entities(self, project_name: str) -> str:
-        """
-        Get all entities in a project.
-        
-        Args:
-            project_name: Name of the project
-            
-        Returns:
-            JSON string with the entities
-        """
-        self._ensure_initialized()
-        
-        try:
-            # Temporarily set project name for context
-            original_project = self.default_project_name
-            self.set_project_name(project_name)
-            
-            project_memory = self.get_client_project_memory()
-            entities = []
-            
-            # First try: Get entities using project_container.get_container_components
-            if hasattr(project_memory, "project_container") and hasattr(project_memory.project_container, "get_container_components"):
-                try:
-                    result_json = project_memory.project_container.get_container_components(project_name)
-                    result = json.loads(result_json)
-                    
-                    if "error" not in result and result.get("components", []):
-                        # Transform to standard format with entities array
-                        result["entities"] = result.pop("components", [])
-                        self.set_project_name(original_project)
-                        return json.dumps(result)
-                except Exception:
-                    # Silently continue to fallback methods
-                    pass
-            
-            # Method 1: Find entities with project property matching project name
-            query1 = """
-            MATCH (e:Entity)
-            WHERE e.project = $project_name
-            RETURN DISTINCT e
-            ORDER BY e.name
-            """
-            
-            records1 = self.base_manager.safe_execute_read_query(
-                query1,
-                {"project_name": project_name}
-            )
-            
-            # Process the results from query1
-            for record in records1:
-                if 'e' in record:
-                    entity = dict(record['e'].items())
-                    # Convert any DateTime objects to strings
-                    for key, value in entity.items():
-                        if hasattr(value, 'iso_format'):  # Check if it's a datetime-like object
-                            entity[key] = value.iso_format()
-                    entities.append(entity)
-            
-            # Method 2: Find entities with names starting with project name prefix
-            query2 = """
-            MATCH (e:Entity)
-            WHERE e.name STARTS WITH $name_prefix
-            RETURN DISTINCT e
-            ORDER BY e.name
-            """
-            
-            records2 = self.base_manager.safe_execute_read_query(
-                query2,
-                {"name_prefix": project_name + "_"}
-            )
-            
-            # Process the results from query2
-            for record in records2:
-                if 'e' in record:
-                    entity = dict(record['e'].items())
-                    # Convert any DateTime objects to strings
-                    for key, value in entity.items():
-                        if hasattr(value, 'iso_format'):  # Check if it's a datetime-like object
-                            entity[key] = value.iso_format()
-                    # Check if already added
-                    if not any(e.get('name') == entity.get('name') for e in entities):
-                        entities.append(entity)
-            
-            # Method 3: Find entities with container property matching project name
-            query3 = """
-            MATCH (e:Entity)
-            WHERE e.container = $project_name
-            RETURN DISTINCT e
-            ORDER BY e.name
-            """
-            
-            records3 = self.base_manager.safe_execute_read_query(
-                query3,
-                {"project_name": project_name}
-            )
-            
-            # Process the results from query3
-            for record in records3:
-                if 'e' in record:
-                    entity = dict(record['e'].items())
-                    # Convert any DateTime objects to strings
-                    for key, value in entity.items():
-                        if hasattr(value, 'iso_format'):  # Check if it's a datetime-like object
-                            entity[key] = value.iso_format()
-                    # Check if already added
-                    if not any(e.get('name') == entity.get('name') for e in entities):
-                        entities.append(entity)
-            
-            # Reset original project context
-            self.set_project_name(original_project)
-            
-            return json.dumps({
-                "entities": entities,
-                "project": project_name
-            })
-                
-        except Exception as e:
-            if self.logger:
-                self.logger.error(f"Error getting project entities: {str(e)}")
-            return json.dumps({
-                "error": f"Failed to get project entities: {str(e)}",
-                "entities": []
-            })
-
-    def get_entity_observations(self, entity_name: str, observation_type: Optional[str] = None) -> str:
-        """
-        Get observations for an entity from the knowledge graph.
-        This is an alias for get_observations to maintain backward compatibility.
-        
-        Args:
-            entity_name: The name of the entity
-            observation_type: Optional type of observation to filter by
-            
-        Returns:
-            JSON string with the observations
-        """
-        return self.get_observations(entity_name, observation_type)
-
-    def get_entities(self, query: Optional[str] = None, limit: int = 10) -> List[Dict[str, Any]]:
-        """
-        Get entities from the knowledge graph.
-        
-        Args:
-            query: Optional search query to filter entities
-            limit: Maximum number of entities to return
-            
-        Returns:
-            List of entity dictionaries
-        """
-        self._ensure_initialized()
-        
-        try:
-            # If query is provided, search for entities
-            if query:
-                search_result = json.loads(self.search_nodes(query, limit))
-                if "results" in search_result:
-                    return search_result["results"]
-                return []
-            
-            # Otherwise, get all entities
-            query = """
-            MATCH (e:Entity)
-            RETURN e
-            LIMIT $limit
-            """
-            
-            records = self.base_manager.safe_execute_read_query(
-                query,
-                {"limit": limit}
-            )
-            
-            entities = []
-            if records:
-                for record in records:
-                    # Handle different record types
-                    entity = None
-                    if isinstance(record, dict) and "e" in record:
-                        # Dictionary access for dict type records
-                        entity = record["e"]
-                    elif hasattr(record, "get") and callable(record.get):
-                        # Use get method for Neo4j Record objects
-                        entity = record.get("e")
-                    
-                    if entity:
-                        # Handle different entity types
-                        if hasattr(entity, "items") and callable(entity.items):
-                            # Convert Neo4j Node to dictionary
-                            entities.append(dict(entity.items()))
-                        elif isinstance(entity, dict):
-                            # Already a dictionary
-                            entities.append(entity)
-            
-            return entities
-        except Exception as e:
-            if self.logger and hasattr(self.logger, "error") and callable(self.logger.error):
-                self.logger.error(f"Error retrieving entities: {str(e)}")
-            return []
-    
-    # Additional methods from ProjectMemoryManager
-    
-    def search_project_entities(self, search_term: str, container_name: str, 
-                              entity_types: Optional[List[str]] = None,
-                              limit: int = 10, semantic: bool = False) -> str:
-        """
-        Search for entities within a project container.
-        
-        Args:
-            search_term: The term to search for
-            container_name: Name of the project container to search within
-            entity_types: Optional list of entity types to filter by (e.g., 'Component', 'Domain', 'Decision')
-            limit: Maximum number of results to return
-            semantic: Whether to perform semantic (embedding-based) search
-            
-        Returns:
-            JSON string with the search results
-        """
-        self._ensure_initialized()
-        return self.project_memory.search_project_entities(
-            search_term, container_name, entity_types, limit, semantic
-        )
-    
-    def semantic_search_project(self, search_term: str, container_name: str,
-                              entity_types: Optional[List[str]] = None, 
-                              limit: int = 10) -> str:
-        """
-        Perform a semantic search for entities in a project using vector embeddings.
-        This is a convenience method that calls search_project_entities with semantic=True.
-        
-        Args:
-            search_term: The natural language term to search for
-            container_name: Name of the project container to search within
-            entity_types: Optional list of entity types to filter by
-            limit: Maximum number of results to return
-            
-        Returns:
-            JSON string with the search results
-        """
-        self._ensure_initialized()
-        return self.project_memory.semantic_search_project(
-            search_term, container_name, entity_types, limit
-        )
-    
-    def search_project_components(self, search_term: str, container_name: str, 
-                                component_types: Optional[List[str]] = None,
-                                limit: int = 10, semantic: bool = False) -> str:
-        """
-        Search specifically for components within a project container.
-        
-        Args:
-            search_term: The term to search for
-            container_name: Name of the project container to search within
-            component_types: Optional list of component types to filter by (e.g., 'Service', 'UI', 'Library')
-            limit: Maximum number of results to return
-            semantic: Whether to perform semantic (embedding-based) search
-            
-        Returns:
-            JSON string with the search results
-        """
-        self._ensure_initialized()
-        return self.project_memory.search_project_components(
-            search_term, container_name, component_types, limit, semantic
-        )
-    
-    def get_project_container_stats(self, container_name: str) -> str:
-        """
-        Get detailed statistics for a project container.
-        
-        Args:
-            container_name: Name of the project container
-            
-        Returns:
-            JSON string with container statistics
-        """
-        self._ensure_initialized()
-        return self.project_memory.get_project_container_stats(container_name)
-    
-    def change_project_container_status(self, container_name: str, status: str) -> str:
-        """
-        Change the status of a project container.
-        
-        Args:
-            container_name: Name of the project container
-            status: New status ('active', 'archived', 'completed')
-            
-        Returns:
-            JSON string with the result
-        """
-        self._ensure_initialized()
-        return self.project_memory.change_project_container_status(container_name, status)
-    
-    def get_project_container_entities(self, container_name: str, entity_type: Optional[str] = None) -> str:
-        """
-        Get all entities in a project container.
-        
-        Args:
-            container_name: Name of the project container
-            entity_type: Optional entity type to filter by
-            
-        Returns:
-            JSON string with the entities
-        """
-        self._ensure_initialized()
-        return self.project_memory.get_project_container_entities(container_name, entity_type)
-    
-    def add_entity_to_project_container(self, container_name: str, entity_name: str) -> str:
-        """
-        Add an entity to a project container.
-        
-        Args:
-            container_name: Name of the project container
-            entity_name: Name of the entity to add
-            
-        Returns:
-            JSON string with the result
-        """
-        self._ensure_initialized()
-        return self.project_memory.add_entity_to_project_container(container_name, entity_name)
-    
-    def remove_entity_from_project_container(self, container_name: str, entity_name: str) -> str:
-        """
-        Remove an entity from a project container.
-        
-        Args:
-            container_name: Name of the project container
-            entity_name: Name of the entity to remove
-            
-        Returns:
-            JSON string with the result
-        """
-        self._ensure_initialized()
-        return self.project_memory.remove_entity_from_project_container(container_name, entity_name)
-        
-    def add_observation(self, observation: Dict[str, Any]) -> str:
-        """
-        Add a single observation to an entity.
-        This is a convenience method that wraps add_observations.
-        
-        Args:
-            observation: Dictionary with observation data
-            
-        Returns:
-            JSON string with the result
-        """
-        self._ensure_initialized()
-        # Call add_observations with a list containing the single observation
-        return self.observation_manager.add_observations([observation])
-        
-    # Additional methods from LessonMemoryManager
-    
-    def create_structured_lesson_observations(
-            self, entity_name: str,
-            what_was_learned: Optional[str] = None,
-            why_it_matters: Optional[str] = None,
-            how_to_apply: Optional[str] = None,
-            root_cause: Optional[str] = None,
-            evidence: Optional[str] = None,
-            container_name: Optional[str] = None
-        ) -> Dict[str, Any]:
-        """
-        Create structured observations for a lesson entity.
-        
-        Args:
-            entity_name: Name of the entity
-            what_was_learned: Optional content for WhatWasLearned observation
-            why_it_matters: Optional content for WhyItMatters observation
-            how_to_apply: Optional content for HowToApply observation
-            root_cause: Optional content for RootCause observation
-            evidence: Optional content for Evidence observation
-            container_name: Optional container to verify entity membership
-            
-        Returns:
-            JSON string with the result
-        """
-        self._ensure_initialized()
-        return self.lesson_memory.create_structured_lesson_observations(
-            entity_name,
-            what_was_learned,
-            why_it_matters,
-            how_to_apply,
-            root_cause,
-            evidence,
-            container_name
-        )
-    
-    def check_lesson_observation_completeness(self, entity_name: str) -> str:
-        """
-        Check which structured observation types are present for a lesson entity.
-        
-        Args:
-            entity_name: Name of the entity to check
-            
-        Returns:
-            JSON string with completeness assessment
-        """
-        self._ensure_initialized()
-        # The LessonMemoryManager.check_lesson_observation_completeness method returns a string
-        return self.lesson_memory.check_lesson_observation_completeness(entity_name)
-    
-    def get_lesson_confidence_evolution(self, entity_name: Optional[str] = None,
-                             lesson_type: Optional[str] = None,
-                             start_date: Optional[str] = None,
-                             end_date: Optional[str] = None) -> str:
-        """
-        Track how confidence in knowledge has changed over time.
-        
-        Args:
-            entity_name: Optional name of the entity to track
-            lesson_type: Optional lesson type to filter by
-            start_date: Optional start date for time range (ISO format)
-            end_date: Optional end date for time range (ISO format)
-            
-        Returns:
-            JSON string with confidence evolution data
-        """
-        self._ensure_initialized()
-        if entity_name is None:
-            # If no entity name is provided, return an error response
-            error_response = {"error": "Entity name is required"}
-            return json.dumps(error_response)
-        return self.lesson_memory.get_lesson_confidence_evolution(entity_name)
-    
-    def get_lesson_application_impact(self, entity_name: str) -> str:
-        """
-        Analyze the impact of lesson application over time.
-        
-        Args:
-            entity_name: Name of the entity to analyze
-            
-        Returns:
-            JSON string with application impact data
-        """
-        self._ensure_initialized()
-        return self.lesson_memory.get_lesson_application_impact(entity_name)
-    
-    def get_lesson_learning_progression(self, entity_name: str, max_depth: int = 3) -> str:
-        """
-        Analyze the learning progression by tracking superseded versions.
-        
-        Args:
-            entity_name: Name of the entity to analyze
-            max_depth: Maximum depth of superseded relationships to traverse
-            
-        Returns:
-            JSON string with learning progression data
-        """
-        self._ensure_initialized()
-        return self.lesson_memory.get_lesson_learning_progression(entity_name, max_depth)
-    
-    def identify_similar_lessons(self, min_similarity: float = 0.7, 
-                               entity_type: Optional[str] = None,
-                               max_results: int = 20) -> str:
-        """
-        Identify clusters of similar lessons based on semantic similarity.
-        
-        Args:
-            min_similarity: Minimum similarity threshold (0.0-1.0)
-            entity_type: Optional specific lesson type to filter by
-            max_results: Maximum number of similarity pairs to return
-            
-        Returns:
-            JSON string with similar lesson pairs
-        """
-        self._ensure_initialized()
-        return self.lesson_memory.identify_similar_lessons(min_similarity, entity_type, max_results)
-    
-    def suggest_lesson_consolidations(self, threshold: float = 0.8, max_suggestions: int = 10) -> str:
-        """
-        Suggest lessons that could be consolidated based on similarity.
-        
-        Args:
-            threshold: Similarity threshold for suggestions (0.0-1.0)
-            max_suggestions: Maximum number of suggestions to return
-            
-        Returns:
-            JSON string with consolidation suggestions
-        """
-        self._ensure_initialized()
-        return self.lesson_memory.suggest_lesson_consolidations(threshold, max_suggestions)
-    
-    def cleanup_superseded_lessons(self, older_than_days: int = 30, 
-                                  min_confidence: float = 0.0,
-                                  dry_run: bool = True) -> str:
-        """
-        Clean up lessons that have been superseded and are older than a given threshold.
-        
-        Args:
-            older_than_days: Only include lessons older than this many days
-            min_confidence: Only include lessons with confidence >= this value
-            dry_run: If True, only report what would be done without making changes
-            
-        Returns:
-            JSON string with cleanup details
-        """
-        self._ensure_initialized()
-        return self.lesson_memory.cleanup_superseded_lessons(older_than_days, min_confidence, dry_run)
-    
-    def tag_lesson_entity(self, entity_name: str, tags: List[str], 
-                         container_name: Optional[str] = None) -> str:
-        """
-        Add tags to a lesson entity.
-        
-        Args:
-            entity_name: Name of the entity
-            tags: List of tags to add
-            container_name: Optional container to verify membership
-            
-        Returns:
-            JSON string with the updated entity
-        """
-        self._ensure_initialized()
-        return self.lesson_memory.tag_lesson_entity(entity_name, tags, container_name)
-    
-    def update_lesson_relation(self, container_name: str, from_entity: str, to_entity: str,
-                             relation_type: str, updates: Dict[str, Any]) -> str:
-        """
-        Update properties of a relationship between lesson entities.
-        
-        Args:
-            container_name: Name of the container
-            from_entity: Name of the source entity
-            to_entity: Name of the target entity
-            relation_type: Type of the relationship
-            updates: Dictionary of property updates
-            
-        Returns:
-            JSON string with the updated relationship
-        """
-        self._ensure_initialized()
-        return self.lesson_memory.update_lesson_relation(container_name, from_entity, to_entity, relation_type, updates)
-    
-    def get_lesson_knowledge_graph(self, container_name: str, depth: int = 2) -> str:
-        """
-        Get a complete knowledge graph of all entities and relationships in a lesson container.
-        
-        Args:
-            container_name: Name of the container
-            depth: Maximum relationship depth to include (1-3)
-            
-        Returns:
-            JSON string with nodes and relationships comprising the knowledge graph
-        """
-        self._ensure_initialized()
-        return self.lesson_memory.get_lesson_knowledge_graph(container_name, depth)
-    
-    def track_lesson_supersession(self, old_lesson: str, new_lesson: str, 
-                                reason: Optional[str] = None) -> str:
-        """
-        Track when a new lesson supersedes an older one.
+        Handle tracking when a new lesson supersedes an older one.
         
         Args:
             old_lesson: Name of the lesson being superseded
             new_lesson: Name of the new lesson
-            reason: Optional reason for the supersession
-            
+            **kwargs: Additional parameters including:
+                - reason: Optional reason for the supersession
+                
         Returns:
-            JSON string with operation result
+            JSON response string with the created relationship
         """
-        self._ensure_initialized()
-        return self.lesson_memory.track_lesson_supersession(old_lesson, new_lesson, reason)
-    
-    def search_lesson_semantic(self, query: str, limit: int = 10, 
-                             container_name: Optional[str] = None) -> str:
+        try:
+            # Get optional parameters
+            reason = kwargs.get("reason")
+            
+            # Track the supersession
+            result = self.lesson_memory.track_lesson_supersession(
+                old_lesson=old_lesson,
+                new_lesson=new_lesson,
+                reason=reason
+            )
+            
+            # Handle different return types (future-proof)
+            if isinstance(result, str):
+                return result
+            else:
+                return json.dumps(result)
+            
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"Error tracking lesson evolution: {str(e)}")
+            return json.dumps({
+                "status": "error",
+                "error": f"Failed to track lesson evolution: {str(e)}",
+                "code": "evolution_error"
+            })
+        
+    def _handle_lesson_update(self, entity_name: str, updates: Dict[str, Any], **kwargs) -> str:
         """
-        Search for lessons using semantic similarity.
+        Handle updating an existing lesson entity.
         
         Args:
-            query: The search query text
-            limit: Maximum number of results to return
-            container_name: Optional container to search within
-            
+            entity_name: Name of the entity to update
+            updates: Dictionary of fields to update
+            **kwargs: Additional parameters including:
+                - container_name: Optional container name to verify entity membership
+                
         Returns:
-            JSON string with search results
+            JSON response string with the updated entity
         """
-        self._ensure_initialized()
-        return self.lesson_memory.search_lesson_semantic(query, limit, container_name)
-        
-    def merge_lessons(self, source_lessons: List[Dict[str, Any]], new_name: str,
-                    merge_strategy: str = "union", container_name: Optional[str] = None) -> str:
+        try:
+            # Get optional parameters
+            container_name = kwargs.get("container_name")
+            
+            # Update the lesson entity
+            result = self.lesson_memory.update_lesson_entity(
+                entity_name=entity_name,
+                updates=updates,
+                container_name=container_name
+            )
+            
+            # Handle different return types (future-proof)
+            if isinstance(result, str):
+                return result
+            else:
+                return json.dumps(result)
+            
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"Error updating lesson: {str(e)}")
+            return json.dumps({
+                "status": "error",
+                "error": f"Failed to update lesson: {str(e)}",
+                "code": "update_error"
+            })
+
+    @contextmanager
+    def lesson_context(self, project_name: Optional[str] = None, container_name: Optional[str] = None):
         """
-        Merge multiple lessons into a single consolidated lesson.
+        Context manager for batch lesson operations with proper context.
         
         Args:
-            source_lessons: List of lesson IDs or dictionaries containing lesson IDs
-            new_name: Name for the new consolidated lesson
-            merge_strategy: Strategy for merging ('union', 'intersection', 'latest')
-            container_name: Optional container name for the new lesson
+            project_name: Optional project name to set as context
+            container_name: Optional container name to use
             
-        Returns:
-            JSON string with the created consolidated lesson
+        Yields:
+            LessonContext object with bound methods
+        
+        Example:
+            ```python
+            with graph_manager.lesson_context("ProjectX", "EngineeringLessons") as lessons:
+                lessons.create("CachingStrategy", "BestPractice")
+                lessons.observe("CachingStrategy", 
+                               what_was_learned="Redis outperforms in-memory for distributed systems",
+                               how_to_apply="Use for session data across load-balanced servers")
+                lessons.relate("CachingStrategy", "AuthSystem", "APPLIES_TO")
+            ```
         """
         self._ensure_initialized()
-        return self.lesson_memory.merge_lessons(source_lessons, new_name, merge_strategy, container_name)
+        
+        # Save current project
+        original_project = self.default_project_name
+        
+        try:
+            # Set project context if provided
+            if project_name:
+                self.set_project_name(project_name)
+                
+            # Create and yield context helper
+            context = LessonContext(self.lesson_memory, container_name)
+            yield context
+            
+        finally:
+            # Restore original project context
+            self.set_project_name(original_project)
+
