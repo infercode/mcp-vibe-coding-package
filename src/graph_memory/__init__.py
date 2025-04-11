@@ -2584,3 +2584,249 @@ class GraphMemoryManager:
         self._ensure_initialized()
         # Call add_observations with a list containing the single observation
         return self.observation_manager.add_observations([observation])
+        
+    # Additional methods from LessonMemoryManager
+    
+    def create_structured_lesson_observations(
+            self, entity_name: str,
+            what_was_learned: Optional[str] = None,
+            why_it_matters: Optional[str] = None,
+            how_to_apply: Optional[str] = None,
+            root_cause: Optional[str] = None,
+            evidence: Optional[str] = None,
+            container_name: Optional[str] = None
+        ) -> Dict[str, Any]:
+        """
+        Create structured observations for a lesson entity.
+        
+        Args:
+            entity_name: Name of the entity
+            what_was_learned: Optional content for WhatWasLearned observation
+            why_it_matters: Optional content for WhyItMatters observation
+            how_to_apply: Optional content for HowToApply observation
+            root_cause: Optional content for RootCause observation
+            evidence: Optional content for Evidence observation
+            container_name: Optional container to verify entity membership
+            
+        Returns:
+            JSON string with the result
+        """
+        self._ensure_initialized()
+        return self.lesson_memory.create_structured_lesson_observations(
+            entity_name,
+            what_was_learned,
+            why_it_matters,
+            how_to_apply,
+            root_cause,
+            evidence,
+            container_name
+        )
+    
+    def check_lesson_observation_completeness(self, entity_name: str) -> str:
+        """
+        Check which structured observation types are present for a lesson entity.
+        
+        Args:
+            entity_name: Name of the entity to check
+            
+        Returns:
+            JSON string with completeness assessment
+        """
+        self._ensure_initialized()
+        # The LessonMemoryManager.check_lesson_observation_completeness method returns a string
+        return self.lesson_memory.check_lesson_observation_completeness(entity_name)
+    
+    def get_lesson_confidence_evolution(self, entity_name: Optional[str] = None,
+                             lesson_type: Optional[str] = None,
+                             start_date: Optional[str] = None,
+                             end_date: Optional[str] = None) -> str:
+        """
+        Track how confidence in knowledge has changed over time.
+        
+        Args:
+            entity_name: Optional name of the entity to track
+            lesson_type: Optional lesson type to filter by
+            start_date: Optional start date for time range (ISO format)
+            end_date: Optional end date for time range (ISO format)
+            
+        Returns:
+            JSON string with confidence evolution data
+        """
+        self._ensure_initialized()
+        if entity_name is None:
+            # If no entity name is provided, return an error response
+            error_response = {"error": "Entity name is required"}
+            return json.dumps(error_response)
+        return self.lesson_memory.get_lesson_confidence_evolution(entity_name)
+    
+    def get_lesson_application_impact(self, entity_name: str) -> str:
+        """
+        Analyze the impact of lesson application over time.
+        
+        Args:
+            entity_name: Name of the entity to analyze
+            
+        Returns:
+            JSON string with application impact data
+        """
+        self._ensure_initialized()
+        return self.lesson_memory.get_lesson_application_impact(entity_name)
+    
+    def get_lesson_learning_progression(self, entity_name: str, max_depth: int = 3) -> str:
+        """
+        Analyze the learning progression by tracking superseded versions.
+        
+        Args:
+            entity_name: Name of the entity to analyze
+            max_depth: Maximum depth of superseded relationships to traverse
+            
+        Returns:
+            JSON string with learning progression data
+        """
+        self._ensure_initialized()
+        return self.lesson_memory.get_lesson_learning_progression(entity_name, max_depth)
+    
+    def identify_similar_lessons(self, min_similarity: float = 0.7, 
+                               entity_type: Optional[str] = None,
+                               max_results: int = 20) -> str:
+        """
+        Identify clusters of similar lessons based on semantic similarity.
+        
+        Args:
+            min_similarity: Minimum similarity threshold (0.0-1.0)
+            entity_type: Optional specific lesson type to filter by
+            max_results: Maximum number of similarity pairs to return
+            
+        Returns:
+            JSON string with similar lesson pairs
+        """
+        self._ensure_initialized()
+        return self.lesson_memory.identify_similar_lessons(min_similarity, entity_type, max_results)
+    
+    def suggest_lesson_consolidations(self, threshold: float = 0.8, max_suggestions: int = 10) -> str:
+        """
+        Suggest lessons that could be consolidated based on similarity.
+        
+        Args:
+            threshold: Similarity threshold for suggestions (0.0-1.0)
+            max_suggestions: Maximum number of suggestions to return
+            
+        Returns:
+            JSON string with consolidation suggestions
+        """
+        self._ensure_initialized()
+        return self.lesson_memory.suggest_lesson_consolidations(threshold, max_suggestions)
+    
+    def cleanup_superseded_lessons(self, older_than_days: int = 30, 
+                                  min_confidence: float = 0.0,
+                                  dry_run: bool = True) -> str:
+        """
+        Clean up lessons that have been superseded and are older than a given threshold.
+        
+        Args:
+            older_than_days: Only include lessons older than this many days
+            min_confidence: Only include lessons with confidence >= this value
+            dry_run: If True, only report what would be done without making changes
+            
+        Returns:
+            JSON string with cleanup details
+        """
+        self._ensure_initialized()
+        return self.lesson_memory.cleanup_superseded_lessons(older_than_days, min_confidence, dry_run)
+    
+    def tag_lesson_entity(self, entity_name: str, tags: List[str], 
+                         container_name: Optional[str] = None) -> str:
+        """
+        Add tags to a lesson entity.
+        
+        Args:
+            entity_name: Name of the entity
+            tags: List of tags to add
+            container_name: Optional container to verify membership
+            
+        Returns:
+            JSON string with the updated entity
+        """
+        self._ensure_initialized()
+        return self.lesson_memory.tag_lesson_entity(entity_name, tags, container_name)
+    
+    def update_lesson_relation(self, container_name: str, from_entity: str, to_entity: str,
+                             relation_type: str, updates: Dict[str, Any]) -> str:
+        """
+        Update properties of a relationship between lesson entities.
+        
+        Args:
+            container_name: Name of the container
+            from_entity: Name of the source entity
+            to_entity: Name of the target entity
+            relation_type: Type of the relationship
+            updates: Dictionary of property updates
+            
+        Returns:
+            JSON string with the updated relationship
+        """
+        self._ensure_initialized()
+        return self.lesson_memory.update_lesson_relation(container_name, from_entity, to_entity, relation_type, updates)
+    
+    def get_lesson_knowledge_graph(self, container_name: str, depth: int = 2) -> str:
+        """
+        Get a complete knowledge graph of all entities and relationships in a lesson container.
+        
+        Args:
+            container_name: Name of the container
+            depth: Maximum relationship depth to include (1-3)
+            
+        Returns:
+            JSON string with nodes and relationships comprising the knowledge graph
+        """
+        self._ensure_initialized()
+        return self.lesson_memory.get_lesson_knowledge_graph(container_name, depth)
+    
+    def track_lesson_supersession(self, old_lesson: str, new_lesson: str, 
+                                reason: Optional[str] = None) -> str:
+        """
+        Track when a new lesson supersedes an older one.
+        
+        Args:
+            old_lesson: Name of the lesson being superseded
+            new_lesson: Name of the new lesson
+            reason: Optional reason for the supersession
+            
+        Returns:
+            JSON string with operation result
+        """
+        self._ensure_initialized()
+        return self.lesson_memory.track_lesson_supersession(old_lesson, new_lesson, reason)
+    
+    def search_lesson_semantic(self, query: str, limit: int = 10, 
+                             container_name: Optional[str] = None) -> str:
+        """
+        Search for lessons using semantic similarity.
+        
+        Args:
+            query: The search query text
+            limit: Maximum number of results to return
+            container_name: Optional container to search within
+            
+        Returns:
+            JSON string with search results
+        """
+        self._ensure_initialized()
+        return self.lesson_memory.search_lesson_semantic(query, limit, container_name)
+        
+    def merge_lessons(self, source_lessons: List[Dict[str, Any]], new_name: str,
+                    merge_strategy: str = "union", container_name: Optional[str] = None) -> str:
+        """
+        Merge multiple lessons into a single consolidated lesson.
+        
+        Args:
+            source_lessons: List of lesson IDs or dictionaries containing lesson IDs
+            new_name: Name for the new consolidated lesson
+            merge_strategy: Strategy for merging ('union', 'intersection', 'latest')
+            container_name: Optional container name for the new lesson
+            
+        Returns:
+            JSON string with the created consolidated lesson
+        """
+        self._ensure_initialized()
+        return self.lesson_memory.merge_lessons(source_lessons, new_name, merge_strategy, container_name)
