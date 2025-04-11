@@ -78,7 +78,8 @@ class LessonEntity:
             query = """
             MATCH (c:LessonContainer {name: $container_name})
             CREATE (e:Entity $entity_props)
-            CREATE (e)-[r:BELONGS_TO]->(c)
+            CREATE (e)-[r1:BELONGS_TO]->(c)
+            CREATE (c)-[r2:CONTAINS]->(e)
             SET e.created = datetime(), 
                 e.lastUpdated = datetime()
             RETURN e, c
