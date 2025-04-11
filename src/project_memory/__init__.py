@@ -22,43 +22,6 @@ from src.models.project_memory import (
 )
 from src.graph_memory.search_manager import SearchManager
 
-# DEVELOPER NOTE:
-# The ProjectMemoryManager class is being updated to provide standardized JSON string
-# responses that match the format used in LessonMemoryManager.
-#
-# To complete the transition, follow these steps for each remaining method:
-#
-# 1. Update the return type annotation from Dict[str, Any] to str
-# 2. Wrap the method content in a try-except block
-# 3. Use the _standardize_response utility method to format the response:
-#    ```
-#    return self._standardize_response(
-#        result,
-#        f"Success message specific to the operation",
-#        "error_code_for_this_operation"
-#    )
-#    ```
-# 4. Add exception handling to catch and log errors:
-#    ```
-#    except Exception as e:
-#        self.logger.error(f"Error description: {str(e)}")
-#        return json.dumps(create_error_response(
-#            message=f"User-friendly error message: {str(e)}",
-#            code="error_code_for_this_operation"
-#        ).model_dump(), default=str)
-#    ```
-# 5. Update the method's docstring to specify that it returns a JSON string
-# 6. Update any methods that call this method to parse the JSON string
-#
-# The following methods have already been updated:
-# - create_project_domain
-# - get_project_domain
-# - update_project_domain
-# - get_project_container
-# - get_project_status
-#
-# Continue updating the remaining methods one by one, testing each change.
-
 class ProjectMemoryManager:
     """
     Unified facade for the Project Memory System.
