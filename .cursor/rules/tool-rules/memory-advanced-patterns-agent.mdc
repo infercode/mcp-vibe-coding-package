@@ -1,0 +1,179 @@
+---
+description: Use when implementing advanced knowledge graph patterns in the memory system to ensure comprehensive and effective knowledge capture, retrieval, and application
+globs: 
+alwaysApply: false
+---
+
+# Memory System Advanced Patterns
+
+## Context
+
+- When connecting knowledge across different domains or projects
+- When implementing sophisticated relationship types
+- When setting up knowledge flows and dependencies
+- When integrating project and lesson memories effectively
+- When implementing complex memory retrieval patterns
+
+## Critical Rules
+
+- Verify project context exists before attempting to link lessons to projects
+- Use relationship types semantically to capture the true nature of connections:
+  - BUILDS_ON: For incremental knowledge expansion
+  - SUPERSEDES: For replacement of outdated knowledge
+  - CONTRADICTS: For conflicting viewpoints or findings
+  - RELATES_TO: For conceptual connections
+  - DEPENDS_ON: For prerequisite relationships
+  - SOLVES: For problem-solution relationships
+- Create cross-domain bridges when knowledge applies across multiple areas
+- Map knowledge dependencies to establish learning pathways
+- Construct knowledge networks rather than isolated lesson clusters
+- Use semantic search with domain-specific terminology when searching
+- Combine textual and structural patterns for advanced retrieval
+- Establish bi-directional relationships to enable navigation in both directions
+- Implement knowledge validation workflows with multi-stage confidence scoring
+- Use associative memory patterns to connect related concepts even when not directly linked
+
+## Examples
+
+<example>
+// Verifying project context before linking
+User: "Let's document what we learned about the authentication system."
+
+AI: [INTERNAL THOUGHT: I should check if we have a project context for this]
+
+// Check for existing project
+const projectCheck = search_nodes("project:AuthSystem");
+if (projectCheck.entities.length === 0) {
+  // No project exists, create a context first
+  AI: "Before I document these lessons about authentication, I should create a project context. Would you like me to create an 'AuthSystem' project to organize this knowledge?"
+  
+  User: "Yes, that makes sense."
+  
+  // Create project context
+  project_memory_tool({
+    "operation_type": "create_project",
+    "name": "AuthSystem",
+    "description": "Authentication system architecture and implementation"
+  });
+}
+
+// Creating cross-domain knowledge bridges
+// First, create a lesson in the security domain
+lesson_memory_tool({
+  "operation_type": "create",
+  "name": "JWTBestPractices",
+  "lesson_type": "BestPractice",
+  "metadata": {
+    "domain": "Security",
+    "confidence": 0.85,
+    "tags": ["authentication", "security", "jwt"]
+  }
+});
+
+// Relate it to a similar lesson in the frontend domain
+lesson_memory_tool({
+  "operation_type": "relate",
+  "source_name": "JWTBestPractices",
+  "target_name": "ReactAuthImplementation",
+  "relationship_type": "APPLIED_IN",
+  "properties": {
+    "cross_domain": true,
+    "source_domain": "Security",
+    "target_domain": "Frontend"
+  }
+});
+
+// Create a relationship to a backend implementation
+lesson_memory_tool({
+  "operation_type": "relate",
+  "source_name": "JWTBestPractices",
+  "target_name": "NodeJsAuthService",
+  "relationship_type": "APPLIED_IN",
+  "properties": {
+    "cross_domain": true,
+    "source_domain": "Security",
+    "target_domain": "Backend"
+  }
+});
+
+// Using advanced retrieval pattern combining semantics and structure
+// First semantic search for relevant topic
+const semanticResults = JSON.parse(lesson_memory_tool({
+  "operation_type": "search",
+  "query": "secure authentication patterns",
+  "limit": 5
+}));
+
+// Then explore network structure around found lessons
+for (const lesson of semanticResults.data?.lessons || []) {
+  const networkResults = search_entity_neighborhoods(lesson.name, 2);
+  // Process and analyze connected knowledge...
+}
+
+// Implementing knowledge validation workflow
+// Track a lesson application
+lesson_memory_tool({
+  "operation_type": "track",
+  "lesson_name": "APIDesignPrinciples",
+  "context_entity": "OrderProcessingService",
+  "success_score": 0.75,
+  "application_notes": "Applied REST design principles but had to adapt for performance reasons"
+});
+
+// Update the confidence based on multiple applications
+const trackingHistory = JSON.parse(search_nodes(`tracked:APIDesignPrinciples`));
+const avgScore = trackingHistory.reduce((sum, track) => sum + track.success_score, 0) / trackingHistory.length;
+
+lesson_memory_tool({
+  "operation_type": "update",
+  "entity_name": "APIDesignPrinciples",
+  "updates": {
+    "metadata": {
+      "confidence": Math.min(0.95, 0.6 + (avgScore * 0.3)),  // Confidence algorithm based on success
+      "application_count": trackingHistory.length
+    }
+  }
+});
+</example>
+
+<example type="invalid">
+// Not verifying project context before linking
+// Tries to link a lesson directly without checking project existence
+lesson_memory_tool({
+  "operation_type": "relate",
+  "source_name": "DatabaseScalingPatterns",
+  "target_name": "NonExistentProject",  // Project doesn't exist
+  "relationship_type": "APPLIED_IN"
+})
+// Should check if project exists first
+
+// Creating ambiguous relationships
+lesson_memory_tool({
+  "operation_type": "relate",
+  "source_name": "ReactStateManagement",
+  "target_name": "UserProfileComponent",
+  "relationship_type": "RELATED_TO"  // Too vague, doesn't capture the nature of the relationship
+})
+// Should use more specific relationship type like IMPLEMENTED_IN or DEPENDS_ON
+
+// Creating isolated knowledge without cross-domain connections
+// Creating security knowledge
+lesson_memory_tool({
+  "operation_type": "create",
+  "name": "OAuthSecurityBestPractices",
+  "lesson_type": "BestPractice",
+  "metadata": {
+    "domain": "Security"
+  }
+})
+// Never connecting it to actual implementations in frontend or backend domains
+// Should establish cross-domain relationships
+
+// Using simplistic retrieval that misses related knowledge
+lesson_memory_tool({
+  "operation_type": "search",
+  "query": "JWT",  // Too narrow, misses related authentication concepts
+  "limit": 3
+})
+// Should use more comprehensive search combining semantic and structural patterns
+</example> 

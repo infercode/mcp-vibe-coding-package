@@ -17,6 +17,9 @@ alwaysApply: true
 ## Critical Rules
 
 - Begin responses with "Remembering..." when retrieving relevant memories
+- Check if a Lessons container exists before using the lesson memory system
+- If no Lessons container exists, notify the user and ask permission to create it
+- Only proceed with lesson memory operations after confirming container existence
 - Search lesson memory before starting new tasks to apply past learnings
 - Link project components to relevant lessons to apply experiential knowledge
 - Document new insights as structured lesson observations during conversations
@@ -35,6 +38,29 @@ alwaysApply: true
 ## Examples
 
 <example>
+// Checking for Lessons container before using lesson memory
+User: "Can you provide some tips on optimizing React components?"
+
+AI: [INTERNAL THOUGHT: I should check if the Lessons container exists first]
+
+// Using a tool to check container existence
+const containerCheck = search_nodes("container:Lessons");
+if (containerCheck.entities.length === 0) {
+  // Container doesn't exist, ask user permission
+  AI: "I'd like to search my lesson memory for React optimization tips, but I don't have a Lessons container set up yet. Would you like me to create one so I can store and retrieve knowledge more effectively?"
+  
+  User: "Yes, please create it."
+  
+  // Create the container with user permission
+  lesson_memory_tool({
+    "operation_type": "create_container",
+    "description": "Container for storing experiential knowledge and lessons learned"
+  })
+  
+  AI: "I've created a Lessons container. Now I can properly store and retrieve knowledge about React optimization."
+}
+
+// Now proceed with normal memory operations
 // Starting a conversation by retrieving relevant memories
 User: "Can you help me optimize my database queries?"
 
@@ -52,7 +78,7 @@ lesson_memory_tool({
   "operation_type": "create",
   "name": "PreparedStatementPerformance",
   "lesson_type": "Technique",
-  "container_name": "DatabaseOptimization",
+  "container_name": "Lessons",
   "metadata": {
     "tags": ["database", "performance", "prepared-statements"],
     "confidence": 0.8
@@ -101,6 +127,17 @@ lesson_memory_tool({
 </example>
 
 <example type="invalid">
+// Not checking if Lessons container exists before using lesson memory
+User: "What have you learned about React performance?"
+
+AI: [INTERNAL THOUGHT: Let me search lesson memory]
+// Incorrect: Attempting to use lesson memory without checking container existence
+lesson_memory_tool({
+  "operation_type": "search",
+  "query": "React performance optimization"
+})
+// Should first check if container exists and create one if needed with user permission
+
 // Not starting with "Remembering..." when retrieving memories
 User: "What's the best way to handle authentication in a microservice architecture?"
 
