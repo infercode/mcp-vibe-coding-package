@@ -2110,14 +2110,14 @@ class GraphMemoryManager:
         Examples:
             ```
             # Create a new project
-            @project_memory_tool({
+            project_memory_tool({
                 "operation_type": "create_project",
                 "name": "E-commerce Platform",
                 "description": "Online store with microservices architecture"
             })
             
             # Create a component within the project
-            @project_memory_tool({
+            project_memory_tool({
                 "operation_type": "create_component",
                 "project_id": "E-commerce Platform",
                 "name": "Authentication Service",
@@ -2125,7 +2125,7 @@ class GraphMemoryManager:
             })
             
             # Create a domain entity
-            @project_memory_tool({
+            project_memory_tool({
                 "operation_type": "create_domain_entity",
                 "project_id": "E-commerce Platform",
                 "entity_type": "DECISION",
@@ -2133,7 +2133,7 @@ class GraphMemoryManager:
             })
             
             # Create a relationship
-            @project_memory_tool({
+            project_memory_tool({
                 "operation_type": "relate_entities",
                 "source_name": "Authentication Service",
                 "target_name": "User Database",
@@ -2142,7 +2142,7 @@ class GraphMemoryManager:
             })
             
             # Search for entities
-            @project_memory_tool({
+            project_memory_tool({
                 "operation_type": "search",
                 "query": "authentication patterns",
                 "project_id": "E-commerce Platform",
@@ -2150,7 +2150,7 @@ class GraphMemoryManager:
             })
             
             # Delete a component
-            @project_memory_tool({
+            project_memory_tool({
                 "operation_type": "delete_entity",
                 "entity_name": "Payment Gateway",
                 "entity_type": "component",
@@ -2159,7 +2159,7 @@ class GraphMemoryManager:
             })
             
             # Delete a relationship
-            @project_memory_tool({
+            project_memory_tool({
                 "operation_type": "delete_relationship",
                 "source_name": "Authentication Service",
                 "target_name": "User Database",
@@ -2175,7 +2175,7 @@ class GraphMemoryManager:
             })
             
             # Then use context in operations
-            @project_memory_tool({
+            project_memory_tool({
                 "operation_type": "create_component",
                 "name": "Payment Processor",
                 "component_type": "SERVICE",
@@ -3441,36 +3441,50 @@ class GraphMemoryManager:
     @contextmanager
     def project_context(self, project_name: Optional[str] = None):
         """
-        Context manager for performing multiple operations within a project context.
-    
+        Create a context for batch project memory operations.
+        
+        This tool returns a context object that can be used for multiple
+        project operations with shared project context.
+        
         Args:
-            project_name: Name of the project to use as context
+            context_data: Dictionary containing context information
+                - project_name: Project name to set as context
+            client_id: Optional client ID for identifying the connection
             
         Returns:
-            A context manager that yields a ProjectContext object
-            
+            JSON response with context information that includes:
+            - status: "success" or "error"
+            - message or error: Description of result or error
+            - context: Context object with project_name, created_at timestamp,
+                      available operations, and usage instructions
+        
+        Response structure:
+            ```json
+            {
+                "status": "success",
+                "message": "Project memory context created for project 'ProjectName'",
+                "context": {
+                    "project_name": "ProjectName",
+                    "created_at": "2023-07-15T10:30:45.123456",
+                    "operations_available": ["create_component", "create_domain_entity", "relate_entities", "search", "get_structure", "add_observation", "update"],
+                    "usage": "Use this context information with any project memory operation by including it in the operation's context parameter"
+                }
+            }
+            ```
+        
         Example:
-            ```python
-            with project_context("MyProject") as project:
-                # Create a domain
-                domain_result = project.create_domain("Authentication")
-                
-                # Create a component in that domain
-                component_result = project.create_component(
-                    "AuthService", 
-                    "Microservice", 
-                    "Authentication",
-                    description="Handles user authentication"
-                )
-                
-                # Create a relationship
-                relation_result = project.relate(
-                    "AuthService", 
-                    "UserDatabase", 
-                    "DEPENDS_ON",
-                    entity_type="component", 
-                    domain_name="Authentication"
-                )
+            ```
+            # Create a context for a specific project
+            context = @project_memory_context({
+                "project_name": "E-commerce Platform"
+            })
+            
+            # Use the context with another tool
+            result = @project_memory_tool({
+                "operation_type": "search",
+                "query": "authentication patterns",
+                "context": context["context"]  # Pass the context object from the response
+            })
             ```
         """
         self._ensure_initialized()
