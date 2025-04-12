@@ -2179,17 +2179,41 @@ class GraphMemoryManager:
     
     def _handle_project_creation(self, name: str, **kwargs) -> str:
         """
-        Handle project creation with proper defaults.
+        Create a new project container
+        
+        This method creates a top-level project container that serves as a namespace
+        for all project-related components, domains, and entities.
         
         Args:
             name: Name of the project to create
             **kwargs: Additional parameters
-                - description: Optional description of the project
-                - metadata: Optional metadata dictionary
-                - tags: Optional list of tags
-        
+                
         Returns:
-            JSON response string with created project data
+            JSON response with operation results
+            
+        Required parameters:
+            - name: Project container name
+            
+        Optional parameters:
+            - description: Description of the project
+            - metadata: Dictionary with additional project attributes
+            - tags: List of tags for categorizing the project
+            
+        Response format:
+            All operations return a JSON string with at minimum:
+            - status: "success" or "error"
+            - message or error: Description of result or error
+            - container: Project container data if successful
+
+        Example:
+            ```
+            # Create a new project
+            result = self._handle_project_creation(
+                name="E-commerce Platform",
+                description="Online store with microservices architecture",
+                tags=["e-commerce", "web", "microservices"]
+            )
+            ```
         """
         try:
             # Extract optional parameters with defaults
@@ -2401,20 +2425,54 @@ class GraphMemoryManager:
     
     def _handle_entity_relationship(self, source_name: str, target_name: str, relation_type: str, **kwargs) -> str:
         """
-        Handle creation of relationships between project entities.
+        Create a relationship between project entities
+        
+        This method establishes connections between different entities within a project,
+        such as dependencies between components or relationships between domain entities.
         
         Args:
             source_name: Name of the source entity
             target_name: Name of the target entity
             relation_type: Type of relationship to create
+              - DEPENDS_ON: Dependency relationship
+              - IMPLEMENTS: Implementation relationship
+              - CONTAINS: Containment relationship
+              - USES: Usage relationship
+              - EXTENDS: Extension relationship
             **kwargs: Additional parameters
-                - project_id: Name of the project container
-                - domain_name: Optional domain name if entities are in the same domain
-                - entity_type: Optional type of entities ('component' or 'domain')
-                - properties: Optional properties dictionary for the relationship
-        
+                
         Returns:
-            JSON response string with created relationship data
+            JSON response with operation results
+            
+        Required parameters:
+            - source_name: Source entity identifier
+            - target_name: Target entity identifier
+            - relation_type: Type of relationship
+            - project_id: Project container identifier
+            
+        Optional parameters:
+            - domain_name: Domain name if entities are in the same domain
+            - entity_type: Type of entities ('component', 'domain', 'dependency')
+            - properties: Dictionary with additional relationship attributes
+            
+        Response format:
+            All operations return a JSON string with at minimum:
+            - status: "success" or "error"
+            - message or error: Description of result or error
+            - relationship: Relationship data if successful
+
+        Example:
+            ```
+            # Create a dependency relationship between components
+            result = self._handle_entity_relationship(
+                source_name="Frontend",
+                target_name="Authentication Service",
+                relation_type="DEPENDS_ON",
+                project_id="E-commerce Platform",
+                domain_name="Architecture",
+                entity_type="component"
+            )
+            ```
         """
         try:
             # Extract required parameters
@@ -2485,19 +2543,46 @@ class GraphMemoryManager:
     
     def _handle_project_search(self, query: str, project_id: str, **kwargs) -> str:
         """
-        Handle searching for entities within a project.
+        Search for entities within a project
+        
+        This method searches for components, domains, and other entities within a project
+        using keywords, semantic matching, or entity type filtering.
         
         Args:
             query: The search term
-            project_id: Name of the project container to search within
+            project_id: ID or name of the project container
             **kwargs: Additional parameters
-                - entity_types: Optional list of entity types to filter by
-                - limit: Optional maximum number of results to return (default: 10)
-                - semantic: Optional flag to use semantic search (default: False)
-                - domain_name: Optional domain name to limit search scope
-        
+                
         Returns:
-            JSON response string with search results
+            JSON response with operation results
+            
+        Required parameters:
+            - query: Search term or phrase
+            - project_id: Project container identifier
+            
+        Optional parameters:
+            - entity_types: List of entity types to filter by (e.g., ['component', 'domain', 'decision'])
+            - limit: Maximum number of results to return (default: 10)
+            - semantic: Boolean flag to enable semantic search (default: False)
+            - domain_name: Domain name to limit search scope
+            
+        Response format:
+            All operations return a JSON string with at minimum:
+            - status: "success" or "error"
+            - message or error: Description of result or error
+            - results: List of matching entities if successful
+
+        Example:
+            ```
+            # Search for authentication-related components
+            result = self._handle_project_search(
+                query="authentication",
+                project_id="E-commerce Platform",
+                entity_types=["component"],
+                limit=5,
+                semantic=True
+            )
+            ```
         """
         try:
             # Extract optional parameters with defaults
@@ -2607,25 +2692,49 @@ class GraphMemoryManager:
     
     def _handle_structure_retrieval(self, project_id: str, **kwargs) -> str:
         """
-        Handle retrieval of project structure.
+        Retrieve the structure of a project
+        
+        This method returns the hierarchical structure of a project, including all components,
+        domains, entities, and their relationships, suitable for visualization or navigation.
         
         Args:
-            project_id: Name of the project container
+            project_id: ID or name of the project container
             **kwargs: Additional parameters
-                - include_domains: Optional flag to include domains (default: True)
-                - include_components: Optional flag to include components (default: True)
-                - include_relationships: Optional flag to include relationships (default: True)
-                - domain_name: Optional domain name to limit the scope
-        
+                
         Returns:
-            JSON response string with project structure
+            JSON response with operation results
+            
+        Required parameters:
+            - project_id: Project container identifier
+            
+        Optional parameters:
+            - include_components: Boolean flag to include components (default: True)
+            - include_domains: Boolean flag to include domains (default: True)
+            - include_relationships: Boolean flag to include relationships (default: True)
+            - max_depth: Maximum depth for relationship traversal (default: 3)
+            
+        Response format:
+            All operations return a JSON string with at minimum:
+            - status: "success" or "error"
+            - message or error: Description of result or error
+            - structure: Project structure data if successful
+
+        Example:
+            ```
+            # Get the complete structure of a project
+            result = self._handle_structure_retrieval(
+                project_id="E-commerce Platform",
+                include_relationships=True,
+                max_depth=4
+            )
+            ```
         """
         try:
             # Extract optional parameters with defaults
-            include_domains = kwargs.pop("include_domains", True)
             include_components = kwargs.pop("include_components", True)
+            include_domains = kwargs.pop("include_domains", True)
             include_relationships = kwargs.pop("include_relationships", True)
-            domain_name = kwargs.pop("domain_name", None)
+            max_depth = kwargs.pop("max_depth", 3)
             
             # Start building the structure with project container info
             result = {}
@@ -2649,18 +2758,7 @@ class GraphMemoryManager:
             
             # Get domains if requested
             if include_domains:
-                if domain_name:
-                    # Get a specific domain
-                    domain_result_json = self.project_memory.get_project_domain(domain_name, project_id)
-                    try:
-                        domain_data = json.loads(domain_result_json)
-                        if "data" in domain_data and "domain" in domain_data["data"]:
-                            result["domains"] = [domain_data["data"]["domain"]]
-                        else:
-                            result["domains"] = []
-                    except json.JSONDecodeError:
-                        result["domains"] = []
-                else:
+                if max_depth > 0:
                     # Get all domains
                     domains_result_json = self.project_memory.list_project_domains(project_id)
                     try:
@@ -2671,6 +2769,20 @@ class GraphMemoryManager:
                             result["domains"] = []
                     except json.JSONDecodeError:
                         result["domains"] = []
+                
+                # Get domains recursively
+                for domain in result["domains"]:
+                    domain_name = domain.get("name")
+                    if domain_name:
+                        domain_result_json = self.project_memory.get_project_domain(domain_name, project_id)
+                        try:
+                            domain_data = json.loads(domain_result_json)
+                            if "data" in domain_data and "domain" in domain_data["data"]:
+                                result["domains"].append(domain_data["data"]["domain"])
+                            else:
+                                result["domains"].append({"name": domain_name})
+                        except json.JSONDecodeError:
+                            result["domains"].append({"name": domain_name})
             
             # Get components if requested
             if include_components:
@@ -2678,9 +2790,7 @@ class GraphMemoryManager:
                 
                 # Domains to iterate over
                 domains_to_check = []
-                if domain_name:
-                    domains_to_check = [domain_name]
-                elif "domains" in result:
+                if "domains" in result:
                     domains_to_check = [d.get("name") for d in result["domains"] if d.get("name")]
                 
                 # Get components for each domain
@@ -2747,65 +2857,121 @@ class GraphMemoryManager:
                 "code": "structure_retrieval_error"
             })
     
-    def _handle_add_observation(self, entity_name: str, content: str, project_id: str, **kwargs) -> str:
+    def _handle_add_observation(self, entity_name: str, content: str, **kwargs) -> str:
         """
-        Handle adding an observation to a project entity.
+        Add an observation to a project entity
+        
+        This method adds structured observations or notes to project entities to
+        capture decisions, insights, or other contextual information.
         
         Args:
-            entity_name: Name of the entity to add observation to
+            entity_name: Name of the entity
             content: Content of the observation
-            project_id: Name of the project container
             **kwargs: Additional parameters
-                - observation_type: Optional type of observation (default: "general")
-                - domain_name: Optional domain name if entity is a component
-                - entity_type: Optional type of entity ('component' or 'domain')
-        
+                
         Returns:
-            JSON response string with the added observation
+            JSON response with operation results
+            
+        Required parameters:
+            - entity_name: Entity identifier to attach observation to
+            - content: Text content of the observation
+            
+        Optional parameters:
+            - project_id: Project container identifier (required if entity_name isn't unique)
+            - observation_type: Classification of the observation (e.g., 'DECISION', 'NOTE', 'ISSUE')
+            - entity_type: Type of entity ('component', 'domain', 'project')
+            - domain_name: Domain name if entity is a component
+            
+        Response format:
+            All operations return a JSON string with at minimum:
+            - status: "success" or "error"
+            - message or error: Description of result or error
+            - observation: Created observation data if successful
+
+        Example:
+            ```
+            # Add a decision observation to a component
+            result = self._handle_add_observation(
+                entity_name="Authentication Service",
+                content="Decided to use JWT tokens with 1-hour expiration for security",
+                project_id="E-commerce Platform",
+                observation_type="DECISION"
+            )
+            ```
         """
         try:
             # Extract optional parameters with defaults
+            project_id = kwargs.pop("project_id", None)
             observation_type = kwargs.pop("observation_type", "general")
-            domain_name = kwargs.pop("domain_name", None)
             entity_type = kwargs.pop("entity_type", "component").lower()
+            domain_name = kwargs.pop("domain_name", None)
             
             # Build the observation data
             observation_data = {
-                "entity_name": entity_name,
                 "content": content,
-                "observation_type": observation_type
+                "type": observation_type,
+                "timestamp": datetime.datetime.now().isoformat()
             }
             
-            # Add an observation using the appropriate method
-            # Note: ProjectMemoryManager doesn't have a direct method for adding observations
-            # We need to use the base GraphMemory observation mechanisms
-            
-            # First, ensure the entity exists
-            query = """
-            MATCH (e:Entity {name: $entity_name})
-            RETURN e
-            """
-            
-            records = self.base_manager.safe_execute_read_query(
-                query,
-                {"entity_name": entity_name}
-            )
-            
-            if not records or len(records) == 0:
-                return json.dumps({
-                    "status": "error",
-                    "error": f"Entity '{entity_name}' not found",
-                    "code": "entity_not_found"
-                })
-            
-            # Add the observation to the entity
-            result = self.observation_manager.add_observations([observation_data])
-            
-            # Handle different return types (future-proof)
-            if isinstance(result, str):
-                return result
+            # Use the appropriate method based on entity_type to add the observation
+            if entity_type == "component":
+                # Add observation to a component
+                if project_id:
+                    # Use the observation_manager to add an observation to the component
+                    result = self._add_entity_observation_generic(
+                        entity_name=entity_name,
+                        observation_data=observation_data,
+                        project_id=project_id,
+                        entity_type="Component",
+                        domain_name=domain_name
+                    )
+                else:
+                    # No project context, use entity name only (less reliable)
+                    result = self._add_entity_observation_generic(
+                        entity_name=entity_name,
+                        observation_data=observation_data
+                    )
+            elif entity_type == "domain":
+                # Add observation to a domain
+                if project_id:
+                    # Use the observation_manager to add an observation to the domain
+                    result = self._add_entity_observation_generic(
+                        entity_name=entity_name,
+                        observation_data=observation_data,
+                        project_id=project_id,
+                        entity_type="Domain"
+                    )
+                else:
+                    # No project context, use entity name only (less reliable)
+                    result = self._add_entity_observation_generic(
+                        entity_name=entity_name,
+                        observation_data=observation_data
+                    )
+            elif entity_type == "project":
+                # Add observation to a project container
+                container_name = entity_name if entity_name else project_id
+                if container_name:
+                    result = self._add_entity_observation_generic(
+                        entity_name=container_name,
+                        observation_data=observation_data,
+                        entity_type="ProjectContainer"
+                    )
+                else:
+                    return json.dumps({
+                        "status": "error",
+                        "error": "Project name is required",
+                        "code": "missing_project_name"
+                    })
             else:
-                return json.dumps(result)
+                # Fallback to generic observation for unknown entity types
+                result = self._add_entity_observation_generic(
+                    entity_name=entity_name,
+                    observation_data=observation_data,
+                    project_id=project_id
+                )
+            
+            # Return the result
+            return result
             
         except Exception as e:
             if self.logger:
@@ -2816,25 +2982,141 @@ class GraphMemoryManager:
                 "code": "observation_error"
             })
     
-    def _handle_entity_update(self, entity_name: str, updates: Dict[str, Any], project_id: str, **kwargs) -> str:
+    def _add_entity_observation_generic(self, entity_name: str, observation_data: Dict[str, Any], 
+                                       project_id: Optional[str] = None, entity_type: Optional[str] = None,
+                                       domain_name: Optional[str] = None) -> str:
+        """Helper method for adding observations to generic entities when specific entity type is unknown."""
+        try:
+            # Query to match the entity
+            match_clause = "MATCH (e) WHERE e.name = $entity_name"
+            params = {"entity_name": entity_name}
+            
+            # Add entity type filter if available
+            if entity_type:
+                match_clause += f" AND e:{entity_type}"
+            
+            # Add project filter if available
+            if project_id:
+                match_clause += " AND (e.project = $project_id OR EXISTS((e)<-[:CONTAINS]-(:ProjectContainer {name: $project_id})))"
+                params["project_id"] = project_id
+                
+            # Add domain filter if available
+            if domain_name and entity_type == "Component":
+                match_clause += " AND EXISTS((e)<-[:CONTAINS]-(:Domain {name: $domain_name}))"
+                params["domain_name"] = domain_name
+            
+            # First find the entity
+            entity_query = f"{match_clause} RETURN e"
+            entity_result = self.base_manager.safe_execute_read_query(entity_query, params)
+            
+            if not entity_result or len(entity_result) == 0:
+                return json.dumps({
+                    "status": "error",
+                    "error": f"Entity '{entity_name}' not found",
+                    "code": "entity_not_found"
+                })
+            
+            # Create the observation
+            create_query = f"""
+            {match_clause}
+            CREATE (o:Observation {{
+                content: $content,
+                type: $type,
+                created: $timestamp,
+                id: randomUUID()
+            }})
+            CREATE (e)-[:HAS_OBSERVATION]->(o)
+            RETURN o
+            """
+            
+            create_params = {
+                **params,
+                "content": observation_data["content"],
+                "type": observation_data["type"],
+                "timestamp": observation_data["timestamp"]
+            }
+            
+            # Use safe_execute_write_query to safely execute the write query
+            observation_result = self.base_manager.safe_execute_write_query(create_query, create_params)
+            
+            # Check if the observation was created
+            if observation_result and len(observation_result) > 0:
+                observation_record = observation_result[0]
+                if observation_record and 'o' in observation_record:
+                    observation = observation_record['o']
+                    return json.dumps({
+                        "status": "success",
+                        "message": f"Observation added to '{entity_name}'",
+                        "observation": {
+                            "id": observation.get('id'),
+                            "content": observation.get('content'),
+                            "type": observation.get('type'),
+                            "created": observation.get('created')
+                        }
+                    })
+            
+            # Observation could not be created
+            return json.dumps({
+                "status": "error",
+                "error": f"Observation could not be created for entity '{entity_name}'",
+                "code": "observation_creation_error"
+            })
+            
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"Error in generic observation: {str(e)}")
+            return json.dumps({
+                "status": "error",
+                "error": f"Failed to add generic observation: {str(e)}",
+                "code": "observation_error"
+            })
+    
+    def _handle_entity_update(self, entity_name: str, updates: Dict[str, Any], **kwargs) -> str:
         """
-        Handle updating a project entity.
+        Update an existing project entity
+        
+        This method applies updates to the attributes of existing project entities,
+        including components, domains, and other project-related entities.
         
         Args:
             entity_name: Name of the entity to update
             updates: Dictionary of updates to apply
-            project_id: Name of the project container
             **kwargs: Additional parameters
-                - entity_type: Optional type of entity ('component', 'domain', or 'project')
-                - domain_name: Optional domain name if entity is a component
-        
+                
         Returns:
-            JSON response string with the updated entity
+            JSON response with operation results
+            
+        Required parameters:
+            - entity_name: Entity identifier to update
+            - updates: Dictionary of field-value pairs to update
+            
+        Optional parameters:
+            - project_id: Project container identifier (required if entity_name isn't unique)
+            - entity_type: Type of entity ('component', 'domain', 'project')
+            - domain_name: Domain name if entity is a component
+            
+        Response format:
+            All operations return a JSON string with at minimum:
+            - status: "success" or "error"
+            - message or error: Description of result or error
+            - entity: Updated entity data if successful
+
+        Example:
+            ```
+            # Update a component description
+            result = self._handle_entity_update(
+                entity_name="Authentication Service",
+                updates={"description": "Updated service using OAuth2 protocol"},
+                project_id="E-commerce Platform",
+                entity_type="component"
+            )
+            ```
         """
         try:
             # Extract optional parameters with defaults
             entity_type = kwargs.pop("entity_type", "component").lower()
             domain_name = kwargs.pop("domain_name", None)
+            project_id = kwargs.pop("project_id", None)
             
             # Determine which update method to use based on entity_type
             if entity_type == "project":
