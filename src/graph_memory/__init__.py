@@ -3466,7 +3466,7 @@ class GraphMemoryManager:
                 "context": {
                     "project_name": "ProjectName",
                     "created_at": "2023-07-15T10:30:45.123456",
-                    "operations_available": ["create_component", "create_domain_entity", "relate_entities", "search", "get_structure", "add_observation", "update"],
+                    "operations_available": ["create_component", "create_domain_entity", "relate_entities", "search", "get_structure", "add_observation", "update", "delete_entity", "delete_relationship"],
                     "usage": "Use this context information with any project memory operation by including it in the operation's context parameter"
                 }
             }
@@ -3475,17 +3475,16 @@ class GraphMemoryManager:
         Example:
             ```
             # Create a context for a specific project
-            context = @project_memory_context({
+            context = project_memory_context({
                 "project_name": "E-commerce Platform"
             })
             
             # Use the context with another tool
-            result = @project_memory_tool({
+            result = project_memory_tool({
                 "operation_type": "search",
                 "query": "authentication patterns",
                 "context": context["context"]  # Pass the context object from the response
             })
-            ```
         """
         self._ensure_initialized()
         

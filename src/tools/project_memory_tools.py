@@ -59,7 +59,7 @@ def register_project_tools(server, get_client_manager):
             - create_project: name (str)
             - create_component: name (str), component_type (str), project_id (str)
             - create_domain_entity: name (str), entity_type (str), project_id (str)
-            - relate_entities: source_name (str), target_name (str), relation_type (str), project_id (str)
+            - relate_entities: source_name (str), target_name (str), relationship_type (str), project_id (str)
             - search: query (str), project_id (str)
             - get_structure: project_id (str)
             - add_observation: entity_name (str), content (str)
@@ -76,8 +76,8 @@ def register_project_tools(server, get_client_manager):
             - get_structure: include_components (bool), include_domains (bool), include_relationships (bool), max_depth (int)
             - add_observation: project_id (str), observation_type (str), entity_type (str), domain_name (str)
             - update: project_id (str), entity_type (str), domain_name (str)
-            - delete_entity: container_name (str), domain_name (str), delete_contents (bool), observation_id (str)
-            - delete_relationship: container_name (str), domain_name (str), relationship_type (str)
+            - delete_entity: project_id (str), domain_name (str), delete_contents (bool), observation_id (str)
+            - delete_relationship: project_id (str), domain_name (str)
             
         Response format:
             All operations return a JSON string with at minimum:
@@ -131,7 +131,7 @@ def register_project_tools(server, get_client_manager):
                 "operation_type": "delete_entity",
                 "entity_name": "Payment Gateway",
                 "entity_type": "component",
-                "container_name": "E-commerce Platform",
+                "project_id": "E-commerce Platform",
                 "domain_name": "Payment"
             })
             
@@ -141,7 +141,7 @@ def register_project_tools(server, get_client_manager):
                 "source_name": "Authentication Service",
                 "target_name": "User Database",
                 "relationship_type": "DEPENDS_ON",
-                "container_name": "E-commerce Platform",
+                "project_id": "E-commerce Platform",
                 "domain_name": "Backend"
             })
             
@@ -169,7 +169,7 @@ def register_project_tools(server, get_client_manager):
             valid_operations = [
                 "create_project", "create_component", "create_domain_entity", 
                 "relate_entities", "search", "get_structure", 
-                "add_observation", "update"
+                "add_observation", "update", "delete_entity", "delete_relationship"
             ]
             
             if operation_type not in valid_operations:
@@ -219,7 +219,7 @@ def register_project_tools(server, get_client_manager):
                 "context": {
                     "project_name": "ProjectName",
                     "created_at": "2023-07-15T10:30:45.123456",
-                    "operations_available": ["create_component", "create_domain_entity", "relate_entities", "search", "get_structure", "add_observation", "update"],
+                    "operations_available": ["create_component", "create_domain_entity", "relate_entities", "search", "get_structure", "add_observation", "update", "delete_entity", "delete_relationship"],
                     "usage": "Use this context information with any project memory operation by including it in the operation's context parameter"
                 }
             }
@@ -258,7 +258,8 @@ def register_project_tools(server, get_client_manager):
                 "created_at": datetime.now().isoformat(),
                 "operations_available": [
                     "create_component", "create_domain_entity", "relate_entities", 
-                    "search", "get_structure", "add_observation", "update"
+                    "search", "get_structure", "add_observation", "update",
+                    "delete_entity", "delete_relationship"
                 ],
                 "usage": "Use this context information with any project memory operation by including it in the operation's context parameter"
             }

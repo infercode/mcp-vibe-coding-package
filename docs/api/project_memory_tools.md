@@ -1,5 +1,7 @@
 # Project Memory Tools API Documentation
 
+*Version: 1.2.0 - Last Updated: August 2023*
+
 ## Overview
 
 The Project Memory Tools provide a simplified interface for AI agents to interact with the Project Memory System. These tools allow agents to manage hierarchical project knowledge in a structured way, including creating projects, components, and domain entities, establishing relationships between them, and searching for relevant information.
@@ -25,6 +27,8 @@ Manage project memory with a unified interface.
   - `get_structure`: Retrieve project hierarchy
   - `add_observation`: Add observations to entities
   - `update`: Update existing entities
+  - `delete_entity`: Delete a project entity (project, domain, component, or observation)
+  - `delete_relationship`: Delete a relationship between entities
 - `**kwargs`: Operation-specific parameters (see below)
   
 #### Operation-Specific Parameters
@@ -38,6 +42,7 @@ Manage project memory with a unified interface.
 - `project_id` (str, required): ID or name of the project
 - `name` (str, required): Name of the component
 - `component_type` (str, required): Type of component (e.g., "MICROSERVICE", "LIBRARY")
+- `domain_name` (str, optional): Name of the domain to place component in
 
 ##### create_domain_entity
 - `project_id` (str, required): ID or name of the project
@@ -45,27 +50,49 @@ Manage project memory with a unified interface.
 - `name` (str, required): Name of the entity
 
 ##### relate_entities
-- `source_id` (str, required): ID or name of the source entity
-- `target_id` (str, required): ID or name of the target entity
-- `relationship_type` (str, required): Type of relationship (e.g., "DEPENDS_ON", "IMPLEMENTS")
+- `source_name` (str, required): Name of the source entity
+- `target_name` (str, required): Name of the target entity
+- `relation_type` (str, required): Type of relationship (e.g., "DEPENDS_ON", "IMPLEMENTS")
+- `project_id` (str, required): ID or name of the project
+- `domain_name` (str, optional): Domain name if entities are components in a domain
 
 ##### search
 - `query` (str, required): Search query
-- `project_id` (str, optional): ID or name of the project to search within
+- `project_id` (str, required): ID or name of the project to search within
 - `entity_types` (list, optional): List of entity types to filter by
 - `limit` (int, optional): Maximum number of results to return
+- `semantic` (bool, optional): Whether to use semantic search (default: true)
 
 ##### get_structure
 - `project_id` (str, required): ID or name of the project
 
 ##### add_observation
-- `entity_id` (str, required): ID or name of the entity
+- `entity_name` (str, required): Name of the entity
 - `content` (str, required): Content of the observation
 - `observation_type` (str, optional): Type of observation
 
 ##### update
-- `entity_id` (str, required): ID or name of the entity to update
+- `entity_name` (str, required): Name of the entity to update
 - `updates` (dict, required): Dictionary of fields to update
+- `project_id` (str, optional): ID or name of the project
+- `entity_type` (str, optional): Type of entity being updated
+- `domain_name` (str, optional): Domain name if updating a component
+
+##### delete_entity
+- `entity_name` (str, required): Name of the entity to delete
+- `entity_type` (str, required): Type of entity to delete ("project", "domain", "component", or "observation")
+- `project_id` (str, optional): ID or name of the project (required for domains and components)
+- `domain_name` (str, optional): Domain name (required for components)
+- `delete_contents` (bool, optional): Whether to delete contained entities (default: false)
+- `observation_content` (str, optional): Content of observation to delete (alternative to observation_id)
+- `observation_id` (str, optional): ID of the observation (alternative to content)
+
+##### delete_relationship
+- `source_name` (str, required): Name of the source entity
+- `target_name` (str, required): Name of the target entity
+- `relationship_type` (str, required): Type of relationship to delete
+- `project_id` (str, optional): ID or name of the project
+- `domain_name` (str, optional): Domain name if entities are components in a domain
 
 #### Return Value
 
@@ -78,6 +105,17 @@ A JSON string with the following structure:
   "data" | "container" | "component" | "entity" | "results": {...}  // Operation-specific data
 }
 ```
+
+#### Error Handling
+
+Common error codes that may be returned:
+
+- `invalid_operation`: The operation type is not supported
+- `missing_parameter`: A required parameter is missing
+- `entity_not_found`: The specified entity could not be found
+- `container_not_found`: The specified project container could not be found
+- `validation_error`: The provided data does not pass validation
+- `operation_error`: A general error occurred during the operation
 
 #### Examples
 
@@ -98,7 +136,20 @@ result = @project_memory_tool({
     "operation_type": "create_component",
     "project_id": "E-commerce Platform",
     "name": "Authentication Service",
-    "component_type": "MICROSERVICE"
+    "component_type": "MICROSERVICE",
+    "domain_name": "Backend"
+})
+```
+
+Create a relationship between entities:
+
+```python
+result = @project_memory_tool({
+    "operation_type": "relate_entities",
+    "source_name": "Authentication Service",
+    "target_name": "User Database",
+    "relation_type": "DEPENDS_ON",
+    "project_id": "E-commerce Platform"
 })
 ```
 
@@ -109,7 +160,58 @@ result = @project_memory_tool({
     "operation_type": "search",
     "query": "authentication patterns",
     "project_id": "E-commerce Platform",
-    "limit": 5
+    "limit": 5,
+    "semantic": true
+})
+```
+
+Add an observation to an entity:
+
+```python
+result = @project_memory_tool({
+    "operation_type": "add_observation",
+    "entity_name": "Authentication Service",
+    "content": "Implemented JWT-based authentication with 24-hour token expiry",
+    "observation_type": "IMPLEMENTATION_DETAIL"
+})
+```
+
+Update an entity:
+
+```python
+result = @project_memory_tool({
+    "operation_type": "update",
+    "entity_name": "Authentication Service",
+    "updates": {
+        "description": "Service handling user authentication and authorization"
+    },
+    "project_id": "E-commerce Platform",
+    "entity_type": "component"
+})
+```
+
+Delete a component:
+
+```python
+result = @project_memory_tool({
+    "operation_type": "delete_entity",
+    "entity_name": "Payment Gateway",
+    "entity_type": "component",
+    "project_id": "E-commerce Platform",
+    "domain_name": "Payment"
+})
+```
+
+Delete a relationship:
+
+```python
+result = @project_memory_tool({
+    "operation_type": "delete_relationship",
+    "source_name": "Authentication Service",
+    "target_name": "User Database",
+    "relationship_type": "DEPENDS_ON",
+    "project_id": "E-commerce Platform",
+    "domain_name": "Backend"
 })
 ```
 
@@ -138,7 +240,7 @@ A JSON string with the following structure:
   "context": {  // Only present on success
     "project_name": "ProjectName",
     "created_at": "2023-07-15T10:30:45.123456",
-    "operations_available": ["create_component", "create_domain_entity", "relate_entities", "search", "get_structure", "add_observation", "update"],
+    "operations_available": ["create_component", "create_domain_entity", "relate_entities", "search", "get_structure", "add_observation", "update", "delete_entity", "delete_relationship"],
     "usage": "Use this context information with any project memory operation by including it in the operation's context parameter"
   }
 }
@@ -183,6 +285,7 @@ The Project Memory System uses a hierarchical structure:
 - Establish relationships between related components to document dependencies
 - Add observations to entities to track decisions and progress
 - Use context management for batch operations within the same project
+- Clean up mistakenly created entities or incorrect relationships promptly using delete operations
 
 ### Usage Patterns
 
@@ -226,7 +329,7 @@ decision = @project_memory_tool({
 # Add an observation explaining the decision
 observation = @project_memory_tool({
     "operation_type": "add_observation",
-    "entity_id": "Use GraphQL for API",
+    "entity_name": "Use GraphQL for API",
     "content": "Decided to use GraphQL instead of REST to allow flexible queries and reduce over-fetching of data.",
     "observation_type": "RATIONALE"
 })
@@ -238,17 +341,41 @@ observation = @project_memory_tool({
 # Create relationships between components
 dependency = @project_memory_tool({
     "operation_type": "relate_entities",
-    "source_id": "Frontend",
-    "target_id": "API Gateway",
-    "relationship_type": "DEPENDS_ON"
+    "source_name": "Frontend",
+    "target_name": "API Gateway",
+    "relation_type": "DEPENDS_ON",
+    "project_id": "Customer Portal"
 })
 
 # Create another dependency
 dependency = @project_memory_tool({
     "operation_type": "relate_entities",
-    "source_id": "API Gateway",
-    "target_id": "User Service",
-    "relationship_type": "ROUTES_TO"
+    "source_name": "API Gateway",
+    "target_name": "User Service",
+    "relation_type": "ROUTES_TO",
+    "project_id": "Customer Portal"
+})
+```
+
+#### Cleaning Up Mistakenly Created Entities
+
+```python
+# Delete a component that was created by mistake
+result = @project_memory_tool({
+    "operation_type": "delete_entity",
+    "entity_name": "Shopping Cart Service",
+    "entity_type": "component",
+    "project_id": "Customer Portal",
+    "domain_name": "Backend"
+})
+
+# Remove an incorrect relationship
+result = @project_memory_tool({
+    "operation_type": "delete_relationship",
+    "source_name": "Frontend",
+    "target_name": "Order Service",
+    "relationship_type": "DEPENDS_ON",
+    "project_id": "Customer Portal"
 })
 ```
 
