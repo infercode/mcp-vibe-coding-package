@@ -1498,14 +1498,90 @@ class GraphMemoryManager:
     
     def lesson_operation(self, operation_type: str, **kwargs) -> str:
         """
-        Single entry point for lesson operations.
+        Manage lesson memory with a unified interface
+        
+        This tool provides a simplified interface to the Lesson Memory System,
+        allowing AI agents to store and retrieve experiential knowledge in a
+        structured way.
         
         Args:
-            operation_type: Type of operation to perform
+            operation_type: The type of operation to perform
+              - create: Create a new lesson
+              - observe: Add structured observations to a lesson
+              - relate: Create relationships between lessons
+              - search: Find relevant lessons
+              - track: Track lesson application
+              - consolidate: Combine related lessons
+              - evolve: Track lesson knowledge evolution
+              - update: Update existing lessons
             **kwargs: Operation-specific parameters
-            
+                
         Returns:
-            JSON response string
+            JSON response with operation results
+            
+        Required parameters by operation_type:
+            - create: name (str), lesson_type (str), container_name (str, optional)
+            - observe: entity_name (str), what_was_learned (str), why_it_matters (str), how_to_apply (str), container_name (str, optional), confidence (float, optional)
+            - relate: source_name (str), target_name (str), relationship_type (str), container_name (str, optional)
+            - search: query (str), limit (int, optional), container_name (str, optional)
+            - track: lesson_name (str), project_name (str), success_score (float), application_notes (str)
+            - update: name (str), properties (dict), container_name (str, optional)
+            - consolidate: primary_lesson (str), lessons_to_consolidate (list), container_name (str, optional)
+            - evolve: original_lesson (str), new_understanding (str), container_name (str, optional)
+            
+        Response format:
+            All operations return a JSON string with at minimum:
+            - status: "success" or "error"
+            - message or error: Description of result or error
+
+        Examples:
+            ```
+            # Create a new lesson
+            @lesson_memory_tool({
+                "operation_type": "create",
+                "name": "ReactHookRules",
+                "lesson_type": "BestPractice"
+            })
+            
+            # Add observations to the lesson
+            @lesson_memory_tool({
+                "operation_type": "observe",
+                "entity_name": "ReactHookRules",
+                "what_was_learned": "React hooks must be called at the top level of components",
+                "why_it_matters": "Hook call order must be consistent between renders",
+                "how_to_apply": "Extract conditional logic into the hook implementation instead"
+            })
+            
+            # Create a relationship
+            @lesson_memory_tool({
+                "operation_type": "relate",
+                "source_name": "ReactHookRules",
+                "target_name": "ReactPerformance",
+                "relationship_type": "RELATED_TO"
+            })
+            
+            # Search for lessons
+            @lesson_memory_tool({
+                "operation_type": "search",
+                "query": "best practices for state management in React",
+                "limit": 3
+            })
+            
+            # Using with context
+            # First get a context
+            context = @lesson_memory_context({
+                "project_name": "WebApp",
+                "container_name": "ReactLessons"
+            })
+            
+            # Then use context in operations
+            @lesson_memory_tool({
+                "operation_type": "create",
+                "name": "StateManagementPatterns",
+                "lesson_type": "Pattern",
+                "context": context["context"]
+            })
+            ```
         """
         self._ensure_initialized()
         
@@ -1909,23 +1985,53 @@ class GraphMemoryManager:
     @contextmanager
     def lesson_context(self, project_name: Optional[str] = None, container_name: Optional[str] = None):
         """
-        Context manager for batch lesson operations with proper context.
+        Create a context for batch lesson memory operations.
+        
+        This tool returns a context object that can be used for multiple
+        lesson operations with shared project and container context.
         
         Args:
-            project_name: Optional project name to set as context
-            container_name: Optional container name to use
+            context_data: Dictionary containing context information
+                - project_name: Optional. Project name to set as context
+                - container_name: Optional. Container name to use for operations (defaults to "Lessons")
+            client_id: Optional client ID for identifying the connection
             
-        Yields:
-            LessonContext object with bound methods
+        Returns:
+            JSON response with context information that includes:
+            - status: "success" or "error"
+            - message or error: Description of result or error
+            - context: Context object with project_name, container_name, created_at timestamp,
+                      available operations, and usage instructions
+        
+        Response structure:
+            ```json
+            {
+                "status": "success",
+                "message": "Lesson memory context created for project 'ProjectName' and container 'ContainerName'",
+                "context": {
+                    "project_name": "ProjectName",
+                    "container_name": "ContainerName",
+                    "created_at": "2023-07-15T10:30:45.123456",
+                    "operations_available": ["create", "observe", "relate", "search", "track", "update", "consolidate", "evolve"],
+                    "usage": "Use this context information with any lesson memory operation by including it in the operation's context parameter"
+                }
+            }
+            ```
         
         Example:
-            ```python
-            with graph_manager.lesson_context("ProjectX", "EngineeringLessons") as lessons:
-                lessons.create("CachingStrategy", "BestPractice")
-                lessons.observe("CachingStrategy", 
-                               what_was_learned="Redis outperforms in-memory for distributed systems",
-                               how_to_apply="Use for session data across load-balanced servers")
-                lessons.relate("CachingStrategy", "AuthSystem", "APPLIES_TO")
+            ```
+            # Create a context for a specific project and container
+            context = @lesson_memory_context({
+                "project_name": "E-commerce Refactoring",
+                "container_name": "PerformanceLessons"
+            })
+            
+            # Use the context with another tool
+            result = @lesson_memory_tool({
+                "operation_type": "search",
+                "query": "database optimization patterns",
+                "context": context["context"]  # Pass the context object from the response
+            })
             ```
         """
         self._ensure_initialized()
@@ -1950,14 +2056,96 @@ class GraphMemoryManager:
     
     def project_operation(self, operation_type: str, **kwargs) -> str:
         """
-        Single entry point for project memory operations.
+        Manage project memory with a unified interface
+        
+        This tool provides a simplified interface to the Project Memory System,
+        allowing AI agents to store and retrieve structured project knowledge.
         
         Args:
-            operation_type: Type of operation to perform
+            operation_type: The type of operation to perform
+              - create_project: Create a new project container
+              - create_component: Create a component within a project
+              - create_domain_entity: Create a domain entity
+              - relate_entities: Create relationships between entities
+              - search: Find relevant project entities
+              - get_structure: Retrieve project hierarchy
+              - add_observation: Add observations to entities
+              - update: Update existing entities
             **kwargs: Operation-specific parameters
-            
+                
         Returns:
-            JSON response string
+            JSON response with operation results
+            
+        Required parameters by operation_type:
+            - create_project: name (str), description (str, optional), tags (list, optional)
+            - create_component: project_id (str), name (str), component_type (str)
+            - create_domain_entity: project_id (str), entity_type (str), name (str)
+            - relate_entities: source_id (str), target_id (str), relationship_type (str)
+            - search: query (str), project_id (str, optional), entity_types (list, optional), limit (int, optional)
+            - get_structure: project_id (str)
+            - add_observation: entity_id (str), content (str), observation_type (str, optional)
+            - update: entity_id (str), updates (dict)
+            
+        Response format:
+            All operations return a JSON string with at minimum:
+            - status: "success" or "error"
+            - message or error: Description of result or error
+
+        Examples:
+            ```
+            # Create a new project
+            @project_memory_tool({
+                "operation_type": "create_project",
+                "name": "E-commerce Platform",
+                "description": "Online store with microservices architecture"
+            })
+            
+            # Create a component within the project
+            @project_memory_tool({
+                "operation_type": "create_component",
+                "project_id": "E-commerce Platform",
+                "name": "Authentication Service",
+                "component_type": "MICROSERVICE"
+            })
+            
+            # Create a domain entity
+            @project_memory_tool({
+                "operation_type": "create_domain_entity",
+                "project_id": "E-commerce Platform",
+                "entity_type": "DECISION",
+                "name": "Use JWT for Auth"
+            })
+            
+            # Create a relationship
+            @project_memory_tool({
+                "operation_type": "relate_entities",
+                "source_id": "Authentication Service",
+                "target_id": "User Database",
+                "relationship_type": "DEPENDS_ON"
+            })
+            
+            # Search for entities
+            @project_memory_tool({
+                "operation_type": "search",
+                "query": "authentication patterns",
+                "project_id": "E-commerce Platform",
+                "limit": 5
+            })
+            
+            # Using with context
+            # First get a context
+            context = @project_memory_context({
+                "project_name": "E-commerce Platform"
+            })
+            
+            # Then use context in operations
+            @project_memory_tool({
+                "operation_type": "create_component",
+                "name": "Payment Processor",
+                "component_type": "SERVICE",
+                "context": context["context"]
+            })
+            ```
         """
         self._ensure_initialized()
         
@@ -2039,25 +2227,59 @@ class GraphMemoryManager:
                 "code": "project_creation_error"
             })
     
-    def _handle_component_creation(self, name: str, component_type: str, project_id: str, domain_name: str, **kwargs) -> str:
+    def _handle_component_creation(self, name: str, component_type: str, project_id: str, **kwargs) -> str:
         """
-        Handle component creation within a project domain.
+        Create a component within a project
+        
+        This method creates a functional component (service, library, or module) that represents 
+        an architectural building block of the project's system.
         
         Args:
             name: Name of the component to create
-            component_type: Type of component (e.g., 'Service', 'Module', 'Feature')
-            project_id: Name of the project container
-            domain_name: Name of the domain within the project
+            component_type: Type of component to create
+              - MICROSERVICE: Independent service with its own deployment
+              - LIBRARY: Reusable code package
+              - MODULE: Component within a larger system
+              - API: Interface for other components
+              - UI: User interface component
+            project_id: ID or name of the project container
             **kwargs: Additional parameters
-                - description: Optional description of the component
-                - content: Optional content of the component
-                - metadata: Optional metadata dictionary
-        
+                
         Returns:
-            JSON response string with created component data
+            JSON response with operation results
+            
+        Required parameters:
+            - name: Component name
+            - component_type: Component classification/category
+            - project_id: Project container identifier
+            
+        Optional parameters:
+            - domain_name: Name of the domain within the project
+            - description: Description of the component
+            - content: Content or notes about the component
+            - metadata: Dictionary with additional attributes
+            
+        Response format:
+            All operations return a JSON string with at minimum:
+            - status: "success" or "error"
+            - message or error: Description of result or error
+            - component: Component data if successful
+
+        Example:
+            ```
+            # Create a microservice component
+            result = self._handle_component_creation(
+                name="Authentication Service",
+                component_type="MICROSERVICE",
+                project_id="E-commerce Platform",
+                domain_name="Backend",
+                description="Handles user authentication and authorization"
+            )
+            ```
         """
         try:
             # Extract optional parameters with defaults
+            domain_name = kwargs.pop("domain_name", None)
             description = kwargs.pop("description", None)
             content = kwargs.pop("content", None)
             metadata = kwargs.pop("metadata", None)
@@ -2090,18 +2312,50 @@ class GraphMemoryManager:
     
     def _handle_domain_entity_creation(self, name: str, entity_type: str, project_id: str, **kwargs) -> str:
         """
-        Handle domain entity creation within a project.
+        Create a domain entity within a project
+        
+        This method creates a knowledge entity (decision, requirement, or constraint) that 
+        represents project-specific knowledge rather than functional components.
         
         Args:
             name: Name of the domain entity to create
-            entity_type: Type of domain entity (e.g., 'Domain', 'Decision', 'Requirement')
-            project_id: Name of the project container
+            entity_type: Type of domain entity to create
+              - DECISION: Architectural or design decision
+              - REQUIREMENT: System requirement or specification
+              - CONSTRAINT: Limitation or boundary condition
+              - PROCESS: Business or development process
+              - DOMAIN: Knowledge domain within the project
+            project_id: ID or name of the project container
             **kwargs: Additional parameters
-                - description: Optional description
-                - properties: Optional properties dictionary
-        
+                
         Returns:
-            JSON response string with created domain entity data
+            JSON response with operation results
+            
+        Required parameters:
+            - name: Domain entity name
+            - entity_type: Entity classification/category
+            - project_id: Project container identifier
+            
+        Optional parameters:
+            - description: Description of the entity
+            - properties: Dictionary with additional attributes
+            
+        Response format:
+            All operations return a JSON string with at minimum:
+            - status: "success" or "error"
+            - message or error: Description of result or error
+            - entity: Domain entity data if successful
+
+        Example:
+            ```
+            # Create a decision entity
+            result = self._handle_domain_entity_creation(
+                name="Use JWT for Auth",
+                entity_type="DECISION",
+                project_id="E-commerce Platform",
+                description="Decision to use JWT for authentication"
+            )
+            ```
         """
         try:
             # Extract optional parameters with defaults
@@ -2630,22 +2884,36 @@ class GraphMemoryManager:
     @contextmanager
     def project_context(self, project_name: Optional[str] = None):
         """
-        Context manager for batch project operations with proper context.
-        
+        Context manager for performing multiple operations within a project context.
+    
         Args:
-            project_name: Optional project name to set as context
+            project_name: Name of the project to use as context
             
-        Yields:
-            ProjectContext object with bound methods
-        
+        Returns:
+            A context manager that yields a ProjectContext object
+            
         Example:
             ```python
-            with graph_manager.project_context("MyProject") as project:
-                project.create_domain("Authentication")
-                project.create_component("AuthService", "Microservice", "Authentication",
-                                      description="Handles user authentication")
-                project.relate("AuthService", "UserDatabase", "DEPENDS_ON", 
-                             entity_type="component", domain_name="Authentication")
+            with project_context("MyProject") as project:
+                # Create a domain
+                domain_result = project.create_domain("Authentication")
+                
+                # Create a component in that domain
+                component_result = project.create_component(
+                    "AuthService", 
+                    "Microservice", 
+                    "Authentication",
+                    description="Handles user authentication"
+                )
+                
+                # Create a relationship
+                relation_result = project.relate(
+                    "AuthService", 
+                    "UserDatabase", 
+                    "DEPENDS_ON",
+                    entity_type="component", 
+                    domain_name="Authentication"
+                )
             ```
         """
         self._ensure_initialized()
