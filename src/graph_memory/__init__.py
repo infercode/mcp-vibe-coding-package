@@ -2071,6 +2071,7 @@ class GraphMemoryManager:
               - get_structure: Retrieve project hierarchy
               - add_observation: Add observations to entities
               - update: Update existing entities
+              - delete_entity: Delete a project entity (project, domain, component, or observation)
             **kwargs: Operation-specific parameters
                 
         Returns:
@@ -2085,6 +2086,7 @@ class GraphMemoryManager:
             - get_structure: project_id (str)
             - add_observation: entity_name (str), content (str)
             - update: entity_name (str), updates (dict)
+            - delete_entity: entity_name (str), entity_type (str)
             
         Optional parameters by operation_type:
             - create_project: description (str), metadata (dict), tags (list)
@@ -2095,6 +2097,7 @@ class GraphMemoryManager:
             - get_structure: include_components (bool), include_domains (bool), include_relationships (bool), max_depth (int)
             - add_observation: project_id (str), observation_type (str), entity_type (str), domain_name (str)
             - update: project_id (str), entity_type (str), domain_name (str)
+            - delete_entity: container_name (str), domain_name (str), force (bool), observation_id (str)
             
         Response format:
             All operations return a JSON string with at minimum:
@@ -2143,6 +2146,15 @@ class GraphMemoryManager:
                 "limit": 5
             })
             
+            # Delete a component
+            @project_memory_tool({
+                "operation_type": "delete_entity",
+                "entity_name": "Payment Gateway",
+                "entity_type": "component",
+                "container_name": "E-commerce Platform",
+                "domain_name": "Payment"
+            })
+            
             # Using with context
             # First get a context
             context = @project_memory_context({
@@ -2169,6 +2181,7 @@ class GraphMemoryManager:
             "get_structure": self._handle_structure_retrieval,
             "add_observation": self._handle_add_observation,
             "update": self._handle_entity_update,
+            "delete_entity": self._handle_entity_deletion,
         }
         
         if operation_type not in operations:
@@ -3226,4 +3239,161 @@ class GraphMemoryManager:
         finally:
             # Restore original project context
             self.set_project_name(original_project)
+
+    def _handle_entity_deletion(self, entity_name: str, entity_type: str, **kwargs) -> str:
+        """
+        Delete a project entity (project, domain, component, or observation)
+        
+        Args:
+            entity_name: Name of the entity to delete
+            entity_type: Type of entity to delete ('project', 'domain', 'component', or 'observation')
+            **kwargs: Additional parameters
+                
+        Returns:
+            JSON response with operation results
+            
+        Required parameters:
+            - entity_name: Name of the entity to delete
+            - entity_type: Type of entity to delete
+            
+        Optional parameters:
+            - container_name: Project container name (required for domain and component)
+            - domain_name: Domain name (required for component)
+            - delete_contents: Boolean flag to delete contents when deleting projects or domains
+            - observation_content: Content of observation to delete (alternative to observation_id)
+            - observation_id: ID of the observation (alternative to content)
+            
+        Response format:
+            All operations return a JSON string with at minimum:
+            - status: "success" or "error"
+            - message or error: Description of result or error
+
+        Example:
+            ```
+            # Delete a project
+            result = self._handle_entity_deletion(
+                entity_name="E-commerce Platform",
+                entity_type="project",
+                delete_contents=True
+            )
+            
+            # Delete a domain
+            result = self._handle_entity_deletion(
+                entity_name="Backend",
+                entity_type="domain",
+                container_name="E-commerce Platform",
+                delete_contents=True
+            )
+            
+            # Delete a component
+            result = self._handle_entity_deletion(
+                entity_name="Authentication Service",
+                entity_type="component",
+                container_name="E-commerce Platform",
+                domain_name="Backend"
+            )
+            
+            # Delete an observation
+            result = self._handle_entity_deletion(
+                entity_name="Security Policy",
+                entity_type="observation",
+                observation_content="Security policy needs updating"
+            )
+            ```
+        """
+        try:
+            # Extract optional parameters with defaults
+            container_name = kwargs.pop("container_name", None)
+            domain_name = kwargs.pop("domain_name", None)
+            delete_contents = kwargs.pop("delete_contents", False)
+            observation_content = kwargs.pop("observation_content", None)
+            observation_id = kwargs.pop("observation_id", None)
+            
+            # Determine which deletion method to use based on entity_type
+            if entity_type.lower() == "project":
+                # Delete project container
+                if not self.project_memory:
+                    error_msg = "Project memory manager not initialized"
+                    if self.logger:
+                        self.logger.error(error_msg)
+                    return json.dumps({
+                        "status": "error",
+                        "error": error_msg,
+                        "code": "memory_not_initialized"
+                    })
+                
+                result = self.project_memory.delete_project_container(
+                    name=entity_name,
+                    delete_contents=delete_contents
+                )
+                
+            elif entity_type.lower() == "domain":
+                # Delete domain
+                if not container_name:
+                    error_msg = "Container name is required for domain deletion"
+                    if self.logger:
+                        self.logger.error(error_msg)
+                    return json.dumps({
+                        "status": "error",
+                        "error": error_msg,
+                        "code": "missing_container_name"
+                    })
+                
+                result = self.project_memory.delete_project_domain(
+                    name=entity_name,
+                    container_name=container_name,
+                    delete_components=delete_contents
+                )
+                
+            elif entity_type.lower() == "component":
+                # Delete component
+                if not container_name and not domain_name:
+                    error_msg = "Container name or domain name is required for component deletion"
+                    if self.logger:
+                        self.logger.error(error_msg)
+                    return json.dumps({
+                        "status": "error",
+                        "error": error_msg,
+                        "code": "missing_container_or_domain"
+                    })
+                
+                result = self.project_memory.delete_project_component(
+                    component_id=entity_name,
+                    domain_name=domain_name,
+                    container_name=container_name
+                )
+                
+            elif entity_type.lower() == "observation":
+                # Delete observation
+                result = self.delete_observation(
+                    entity_name=entity_name,
+                    observation_content=observation_content,
+                    observation_id=observation_id
+                )
+                
+            else:
+                # Handle unsupported entity type
+                error_msg = f"Unsupported entity type: {entity_type}"
+                if self.logger:
+                    self.logger.error(error_msg)
+                return json.dumps({
+                    "status": "error",
+                    "error": error_msg,
+                    "code": "invalid_entity_type"
+                })
+            
+            # Handle different return types (future-proof)
+            if isinstance(result, str):
+                return result
+            else:
+                return json.dumps(result)
+            
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"Error deleting entity: {str(e)}")
+            return json.dumps({
+                "status": "error",
+                "error": f"Failed to delete entity: {str(e)}",
+                "code": "entity_deletion_error"
+            })
 
