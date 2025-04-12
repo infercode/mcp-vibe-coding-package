@@ -41,6 +41,7 @@ def register_lesson_tools(server, get_client_manager):
         
         Args:
             operation_type: The type of operation to perform
+              - create_container: Create a lesson container
               - create: Create a new lesson
               - observe: Add structured observations to a lesson
               - relate: Create relationships between lessons
@@ -55,6 +56,7 @@ def register_lesson_tools(server, get_client_manager):
             JSON response with operation results
             
         Required parameters by operation_type:
+            - create_container: description (str, optional), metadata (dict, optional)
             - create: name (str), lesson_type (str), container_name (str, optional)
             - observe: entity_name (str), what_was_learned (str), why_it_matters (str), how_to_apply (str), container_name (str, optional), confidence (float, optional)
             - relate: source_name (str), target_name (str), relationship_type (str), container_name (str, optional)
@@ -71,6 +73,13 @@ def register_lesson_tools(server, get_client_manager):
 
         Examples:
             ```
+            # Create a new lesson container
+            @lesson_memory_tool({
+                "operation_type": "create_container",
+                "description": "Container for React-related lessons",
+                "metadata": {"category": "frontend", "framework": "react"}
+            })
+            
             # Create a new lesson
             @lesson_memory_tool({
                 "operation_type": "create",
@@ -125,7 +134,7 @@ def register_lesson_tools(server, get_client_manager):
             
             # Validate operation type
             valid_operations = [
-                "create", "observe", "relate", "search", "track", 
+                "create_container", "create", "observe", "relate", "search", "track", 
                 "consolidate", "evolve", "update"
             ]
             
@@ -215,7 +224,7 @@ def register_lesson_tools(server, get_client_manager):
                 "container_name": container_name,
                 "created_at": datetime.now().isoformat(),
                 "operations_available": [
-                    "create", "observe", "relate", "search", 
+                    "create_container", "create", "observe", "relate", "search", 
                     "track", "update", "consolidate", "evolve"
                 ],
                 "usage": "Use this context information with any lesson memory operation by including it in the operation's context parameter"
