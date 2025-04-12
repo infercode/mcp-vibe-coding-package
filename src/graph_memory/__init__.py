@@ -3201,59 +3201,6 @@ class GraphMemoryManager:
                 "code": "entity_update_error"
             })
     
-    @contextmanager
-    def project_context(self, project_name: Optional[str] = None):
-        """
-        Context manager for performing multiple operations within a project context.
-    
-        Args:
-            project_name: Name of the project to use as context
-            
-        Returns:
-            A context manager that yields a ProjectContext object
-            
-        Example:
-            ```python
-            with project_context("MyProject") as project:
-                # Create a domain
-                domain_result = project.create_domain("Authentication")
-                
-                # Create a component in that domain
-                component_result = project.create_component(
-                    "AuthService", 
-                    "Microservice", 
-                    "Authentication",
-                    description="Handles user authentication"
-                )
-                
-                # Create a relationship
-                relation_result = project.relate(
-                    "AuthService", 
-                    "UserDatabase", 
-                    "DEPENDS_ON",
-                    entity_type="component", 
-                    domain_name="Authentication"
-                )
-            ```
-        """
-        self._ensure_initialized()
-        
-        # Save current project
-        original_project = self.default_project_name
-        
-        try:
-            # Set project context if provided
-            if project_name:
-                self.set_project_name(project_name)
-                
-            # Create and yield context helper
-            context = ProjectContext(self.project_memory, project_name)
-            yield context
-            
-        finally:
-            # Restore original project context
-            self.set_project_name(original_project)
-
     def _handle_entity_deletion(self, entity_name: str, entity_type: str, **kwargs) -> str:
         """
         Delete a project entity (project, domain, component, or observation)
@@ -3491,3 +3438,55 @@ class GraphMemoryManager:
                 "code": "relationship_deletion_error"
             })
 
+    @contextmanager
+    def project_context(self, project_name: Optional[str] = None):
+        """
+        Context manager for performing multiple operations within a project context.
+    
+        Args:
+            project_name: Name of the project to use as context
+            
+        Returns:
+            A context manager that yields a ProjectContext object
+            
+        Example:
+            ```python
+            with project_context("MyProject") as project:
+                # Create a domain
+                domain_result = project.create_domain("Authentication")
+                
+                # Create a component in that domain
+                component_result = project.create_component(
+                    "AuthService", 
+                    "Microservice", 
+                    "Authentication",
+                    description="Handles user authentication"
+                )
+                
+                # Create a relationship
+                relation_result = project.relate(
+                    "AuthService", 
+                    "UserDatabase", 
+                    "DEPENDS_ON",
+                    entity_type="component", 
+                    domain_name="Authentication"
+                )
+            ```
+        """
+        self._ensure_initialized()
+        
+        # Save current project
+        original_project = self.default_project_name
+        
+        try:
+            # Set project context if provided
+            if project_name:
+                self.set_project_name(project_name)
+                
+            # Create and yield context helper
+            context = ProjectContext(self.project_memory, project_name)
+            yield context
+            
+        finally:
+            # Restore original project context
+            self.set_project_name(original_project)
