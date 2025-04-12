@@ -11,6 +11,7 @@ A FastAPI-based REST API for interacting with the graph-based memory system. Thi
 - Lesson Memory System with Section Management
 - Advanced Search Capabilities (semantic, neighborhood, path finding)
 - Custom Cypher Query Support
+- Direct Access to Memory Manager Operations
 
 ## Setup
 
@@ -132,6 +133,13 @@ Once the server is running, you can access:
 - `PUT /projects/{project_id}/components/{component_id}` - Update component
 - `DELETE /projects/{project_id}/components/{component_id}` - Delete component
 
+#### Direct Project Operations
+- `POST /projects/operation` - Direct access to project_operation method
+- `POST /projects/context/start` - Start a project context session
+- `POST /projects/context/operation` - Execute an operation within a project context
+- `POST /projects/context/end` - End a project context session
+- `POST /projects/bulk` - Execute multiple operations in a project context
+
 ### Lesson Memory
 
 - `POST /lessons/` - Create a new lesson
@@ -146,6 +154,13 @@ Once the server is running, you can access:
 - `GET /lessons/{lesson_id}/sections` - Get lesson sections
 - `PUT /lessons/{lesson_id}/sections/{section_id}` - Update section
 - `DELETE /lessons/{lesson_id}/sections/{section_id}` - Delete section
+
+#### Direct Lesson Operations
+- `POST /lessons/operation` - Direct access to lesson_operation method
+- `POST /lessons/context/start` - Start a lesson context session
+- `POST /lessons/context/operation` - Execute an operation within a lesson context
+- `POST /lessons/context/end` - End a lesson context session
+- `POST /lessons/bulk` - Execute multiple operations in a lesson context
 
 ### Search
 
@@ -188,6 +203,44 @@ curl -X POST "http://localhost:8000/relations/lessons/lesson1" \
            "to_lesson_id": "lesson2",
            "relation_type": "BUILDS_ON",
            "properties": {"confidence": 0.9}
+         }'
+```
+
+### Direct Operation Access
+
+```bash
+# Direct project operation
+curl -X POST "http://localhost:8000/projects/operation" \
+     -H "Content-Type: application/json" \
+     -d '{
+           "operation_type": "create_component",
+           "parameters": {
+             "project_id": "ExampleProject",
+             "name": "FrontendComponent",
+             "component_type": "UI",
+             "description": "Web frontend interface"
+           }
+         }'
+
+# Bulk lesson operations
+curl -X POST "http://localhost:8000/lessons/bulk" \
+     -H "Content-Type: application/json" \
+     -d '{
+           "container_name": "ErrorHandling",
+           "operations": [
+             {
+               "operation_type": "create_lesson_section",
+               "title": "Exception Handling",
+               "content": "Always catch specific exceptions",
+               "confidence": 0.9
+             },
+             {
+               "operation_type": "create_lesson_observation",
+               "what_was_learned": "Try-except blocks improve robustness",
+               "why_it_matters": "Prevents unexpected crashes",
+               "how_to_apply": "Wrap critical operations in try-except"
+             }
+           ]
          }'
 ```
 

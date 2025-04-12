@@ -1125,4 +1125,189 @@ async def get_all_project_memories(
             
         return parse_response(result)
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Direct access to project_operation and project_context methods
+class ProjectOperation(BaseModel):
+    """Model for direct access to project_operation method."""
+    operation_type: str = Field(..., description="Type of operation to perform")
+    parameters: Dict[str, Any] = Field(default_factory=dict, description="Parameters for the operation")
+
+@router.post("/operation", response_model=Dict[str, Any])
+async def direct_project_operation(
+    operation: ProjectOperation,
+    memory: GraphMemoryManager = Depends(get_memory_manager)
+):
+    """
+    Direct access to project_operation method.
+    
+    Args:
+        operation: Operation type and parameters
+        memory: GraphMemoryManager instance
+    """
+    try:
+        # Ensure manager is initialized
+        if not memory.check_connection():
+            raise HTTPException(status_code=503, detail="Memory system not initialized")
+            
+        # Execute the project operation with provided parameters
+        result = memory.project_operation(
+            operation_type=operation.operation_type,
+            **operation.parameters
+        )
+        return parse_response(result)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+class ProjectContextStart(BaseModel):
+    """Model for starting a project context."""
+    project_name: str = Field(..., description="Name of the project")
+
+@router.post("/context/start", response_model=Dict[str, Any])
+async def start_project_context(
+    context: ProjectContextStart,
+    memory: GraphMemoryManager = Depends(get_memory_manager)
+):
+    """
+    Start a project context for sequential operations.
+    
+    This simulates entering a project_context context manager.
+    """
+    try:
+        # Ensure manager is initialized
+        if not memory.check_connection():
+            raise HTTPException(status_code=503, detail="Memory system not initialized")
+            
+        # Use a custom session ID for the context
+        session_id = f"context-{context.project_name}"
+        
+        # Set the project name for the context
+        memory.set_project_name(context.project_name)
+        
+        return {
+            "status": "success",
+            "message": f"Project context started for {context.project_name}",
+            "session_id": session_id,
+            "project_name": context.project_name
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+class ProjectContextOperation(BaseModel):
+    """Model for operations within a project context."""
+    session_id: str = Field(..., description="Session ID from start_project_context")
+    operation_type: str = Field(..., description="Type of operation to perform")
+    parameters: Dict[str, Any] = Field(default_factory=dict, description="Parameters for the operation")
+
+@router.post("/context/operation", response_model=Dict[str, Any])
+async def project_context_operation(
+    operation: ProjectContextOperation,
+    memory: GraphMemoryManager = Depends(get_memory_manager)
+):
+    """
+    Execute an operation within a project context.
+    
+    This simulates operations performed inside a project_context context manager.
+    """
+    try:
+        # Ensure manager is initialized
+        if not memory.check_connection():
+            raise HTTPException(status_code=503, detail="Memory system not initialized")
+        
+        # Check if the session ID is valid
+        if not operation.session_id.startswith("context-"):
+            raise HTTPException(status_code=400, detail="Invalid session ID")
+            
+        # Extract project name from session ID
+        project_name = operation.session_id.replace("context-", "", 1)
+        
+        # Set the project name for the context
+        memory.set_project_name(project_name)
+        
+        # Execute the project operation with provided parameters
+        result = memory.project_operation(
+            operation_type=operation.operation_type,
+            **operation.parameters
+        )
+        return parse_response(result)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/context/end", response_model=Dict[str, Any])
+async def end_project_context(
+    context: ProjectContextOperation,
+    memory: GraphMemoryManager = Depends(get_memory_manager)
+):
+    """
+    End a project context.
+    
+    This simulates exiting a project_context context manager.
+    """
+    try:
+        # Ensure manager is initialized
+        if not memory.check_connection():
+            raise HTTPException(status_code=503, detail="Memory system not initialized")
+            
+        # Check if the session ID is valid
+        if not context.session_id.startswith("context-"):
+            raise HTTPException(status_code=400, detail="Invalid session ID")
+            
+        # Reset project name to default (empty string instead of None)
+        memory.set_project_name("")
+        
+        return {
+            "status": "success",
+            "message": f"Project context ended for session {context.session_id}"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Advanced API for bulk operations in project context
+class BulkProjectOperations(BaseModel):
+    """Model for executing multiple operations in a project context."""
+    project_name: str = Field(..., description="Name of the project")
+    operations: List[Dict[str, Any]] = Field(..., description="List of operations to perform")
+
+@router.post("/bulk", response_model=Dict[str, Any])
+async def bulk_project_operations(
+    bulk: BulkProjectOperations,
+    memory: GraphMemoryManager = Depends(get_memory_manager)
+):
+    """
+    Execute multiple operations in a project context.
+    
+    This simulates using a project_context context manager for multiple operations.
+    """
+    try:
+        # Ensure manager is initialized
+        if not memory.check_connection():
+            raise HTTPException(status_code=503, detail="Memory system not initialized")
+            
+        # Set the project name
+        memory.set_project_name(bulk.project_name)
+        
+        # Execute all operations
+        results = []
+        for operation in bulk.operations:
+            operation_type = operation.pop("operation_type", None)
+            if not operation_type:
+                raise HTTPException(status_code=400, detail="Missing operation_type in operation")
+                
+            result = memory.project_operation(
+                operation_type=operation_type,
+                **operation
+            )
+            results.append(parse_response(result))
+            
+        # Reset project name to empty string instead of None
+        memory.set_project_name("")
+        
+        return {
+            "status": "success",
+            "message": f"Executed {len(results)} operations in project context for {bulk.project_name}",
+            "results": results
+        }
+    except Exception as e:
+        # Make sure to reset project name even if there's an error
+        memory.set_project_name("")
         raise HTTPException(status_code=500, detail=str(e)) 

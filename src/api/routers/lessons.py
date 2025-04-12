@@ -388,4 +388,189 @@ async def query_across_contexts(
         result = memory.search_nodes(query_text, limit=10, entity_types=["Lesson"], semantic=True)
         return parse_response(result)
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e)) 
+        raise HTTPException(status_code=400, detail=str(e))
+
+# Direct access to lesson_operation and lesson_context methods
+class LessonOperation(BaseModel):
+    """Model for direct access to lesson_operation method."""
+    operation_type: str = Field(..., description="Type of operation to perform")
+    parameters: Dict[str, Any] = Field(default_factory=dict, description="Parameters for the operation")
+
+@router.post("/operation", response_model=Dict[str, Any])
+async def direct_lesson_operation(
+    operation: LessonOperation,
+    memory: GraphMemoryManager = Depends(get_memory_manager)
+):
+    """
+    Direct access to lesson_operation method.
+    
+    Args:
+        operation: Operation type and parameters
+        memory: GraphMemoryManager instance
+    """
+    try:
+        # Ensure manager is initialized
+        if not memory.check_connection():
+            raise HTTPException(status_code=503, detail="Memory system not initialized")
+            
+        # Execute the lesson operation with provided parameters
+        result = memory.lesson_operation(
+            operation_type=operation.operation_type,
+            **operation.parameters
+        )
+        return parse_response(result)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+class LessonContextStart(BaseModel):
+    """Model for starting a lesson context."""
+    container_name: Optional[str] = Field(None, description="Name of the container")
+
+@router.post("/context/start", response_model=Dict[str, Any])
+async def start_lesson_context(
+    context: LessonContextStart,
+    memory: GraphMemoryManager = Depends(get_memory_manager)
+):
+    """
+    Start a lesson context for sequential operations.
+    
+    This simulates entering a lesson_context context manager.
+    """
+    try:
+        # Ensure manager is initialized
+        if not memory.check_connection():
+            raise HTTPException(status_code=503, detail="Memory system not initialized")
+            
+        # Create a session ID for the context
+        session_id = f"lesson-context-{context.container_name or 'default'}"
+        
+        # Set up the context
+        # In a real implementation, we would need to store context state,
+        # but for demonstration we'll just return the session ID
+        
+        return {
+            "status": "success",
+            "message": f"Lesson context started for container {context.container_name or 'default'}",
+            "session_id": session_id,
+            "container_name": context.container_name
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+class LessonContextOperation(BaseModel):
+    """Model for operations within a lesson context."""
+    session_id: str = Field(..., description="Session ID from start_lesson_context")
+    operation_type: str = Field(..., description="Type of operation to perform")
+    parameters: Dict[str, Any] = Field(default_factory=dict, description="Parameters for the operation")
+
+@router.post("/context/operation", response_model=Dict[str, Any])
+async def lesson_context_operation(
+    operation: LessonContextOperation,
+    memory: GraphMemoryManager = Depends(get_memory_manager)
+):
+    """
+    Execute an operation within a lesson context.
+    
+    This simulates operations performed inside a lesson_context context manager.
+    """
+    try:
+        # Ensure manager is initialized
+        if not memory.check_connection():
+            raise HTTPException(status_code=503, detail="Memory system not initialized")
+        
+        # Check if the session ID is valid
+        if not operation.session_id.startswith("lesson-context-"):
+            raise HTTPException(status_code=400, detail="Invalid session ID")
+            
+        # Extract container name from session ID
+        container_name = operation.session_id.replace("lesson-context-", "", 1)
+        if container_name == "default":
+            container_name = None
+            
+        # Execute the lesson operation with provided parameters
+        # Add container_name to parameters if it's not None
+        parameters = dict(operation.parameters)
+        if container_name:
+            parameters["container_name"] = container_name
+            
+        result = memory.lesson_operation(
+            operation_type=operation.operation_type,
+            **parameters
+        )
+        return parse_response(result)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/context/end", response_model=Dict[str, Any])
+async def end_lesson_context(
+    context: LessonContextOperation,
+    memory: GraphMemoryManager = Depends(get_memory_manager)
+):
+    """
+    End a lesson context.
+    
+    This simulates exiting a lesson_context context manager.
+    """
+    try:
+        # Ensure manager is initialized
+        if not memory.check_connection():
+            raise HTTPException(status_code=503, detail="Memory system not initialized")
+            
+        # Check if the session ID is valid
+        if not context.session_id.startswith("lesson-context-"):
+            raise HTTPException(status_code=400, detail="Invalid session ID")
+            
+        # In a real implementation, we would clean up the context
+        
+        return {
+            "status": "success",
+            "message": f"Lesson context ended for session {context.session_id}"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Advanced API for bulk operations in lesson context
+class BulkLessonOperations(BaseModel):
+    """Model for executing multiple operations in a lesson context."""
+    container_name: Optional[str] = Field(None, description="Name of the container")
+    operations: List[Dict[str, Any]] = Field(..., description="List of operations to perform")
+
+@router.post("/bulk", response_model=Dict[str, Any])
+async def bulk_lesson_operations(
+    bulk: BulkLessonOperations,
+    memory: GraphMemoryManager = Depends(get_memory_manager)
+):
+    """
+    Execute multiple operations in a lesson context.
+    
+    This simulates using a lesson_context context manager for multiple operations.
+    """
+    try:
+        # Ensure manager is initialized
+        if not memory.check_connection():
+            raise HTTPException(status_code=503, detail="Memory system not initialized")
+            
+        # Execute all operations
+        results = []
+        for operation in bulk.operations:
+            operation_type = operation.pop("operation_type", None)
+            if not operation_type:
+                raise HTTPException(status_code=400, detail="Missing operation_type in operation")
+                
+            # Add container_name to parameters if it's provided
+            if bulk.container_name:
+                operation["container_name"] = bulk.container_name
+                
+            result = memory.lesson_operation(
+                operation_type=operation_type,
+                **operation
+            )
+            results.append(parse_response(result))
+            
+        return {
+            "status": "success",
+            "message": f"Executed {len(results)} operations in lesson context for container {bulk.container_name or 'default'}",
+            "results": results
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) 
