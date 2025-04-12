@@ -2072,6 +2072,7 @@ class GraphMemoryManager:
               - add_observation: Add observations to entities
               - update: Update existing entities
               - delete_entity: Delete a project entity (project, domain, component, or observation)
+              - delete_relationship: Delete a relationship between entities
             **kwargs: Operation-specific parameters
                 
         Returns:
@@ -2087,6 +2088,7 @@ class GraphMemoryManager:
             - add_observation: entity_name (str), content (str)
             - update: entity_name (str), updates (dict)
             - delete_entity: entity_name (str), entity_type (str)
+            - delete_relationship: source_name (str), target_name (str), relationship_type (str)
             
         Optional parameters by operation_type:
             - create_project: description (str), metadata (dict), tags (list)
@@ -2097,7 +2099,8 @@ class GraphMemoryManager:
             - get_structure: include_components (bool), include_domains (bool), include_relationships (bool), max_depth (int)
             - add_observation: project_id (str), observation_type (str), entity_type (str), domain_name (str)
             - update: project_id (str), entity_type (str), domain_name (str)
-            - delete_entity: container_name (str), domain_name (str), force (bool), observation_id (str)
+            - delete_entity: container_name (str), domain_name (str), delete_contents (bool), observation_id (str)
+            - delete_relationship: container_name (str), domain_name (str), relationship_type (str)
             
         Response format:
             All operations return a JSON string with at minimum:
@@ -2155,6 +2158,16 @@ class GraphMemoryManager:
                 "domain_name": "Payment"
             })
             
+            # Delete a relationship
+            @project_memory_tool({
+                "operation_type": "delete_relationship",
+                "source_name": "Authentication Service",
+                "target_name": "User Database",
+                "relationship_type": "DEPENDS_ON",
+                "container_name": "E-commerce Platform",
+                "domain_name": "Backend"
+            })
+            
             # Using with context
             # First get a context
             context = @project_memory_context({
@@ -2182,6 +2195,7 @@ class GraphMemoryManager:
             "add_observation": self._handle_add_observation,
             "update": self._handle_entity_update,
             "delete_entity": self._handle_entity_deletion,
+            "delete_relationship": self._handle_relationship_deletion,
         }
         
         if operation_type not in operations:
@@ -3395,5 +3409,85 @@ class GraphMemoryManager:
                 "status": "error",
                 "error": f"Failed to delete entity: {str(e)}",
                 "code": "entity_deletion_error"
+            })
+
+    def _handle_relationship_deletion(self, source_name: str, target_name: str, relationship_type: str, **kwargs) -> str:
+        """
+        Delete a relationship between entities within a project
+        
+        Args:
+            source_name: Name of the source entity
+            target_name: Name of the target entity
+            relationship_type: Type of relationship to delete
+            **kwargs: Additional parameters
+                
+        Returns:
+            JSON response with operation results
+            
+        Required parameters:
+            - source_name: Source entity identifier
+            - target_name: Target entity identifier
+            - relationship_type: Type of relationship to delete
+            
+        Optional parameters:
+            - domain_name: Domain name if entities are components in a domain
+            - container_name: Project container name (required for domain components)
+            - project_id: Alternative name for container_name
+            
+        Response format:
+            All operations return a JSON string with at minimum:
+            - status: "success" or "error"
+            - message or error: Description of result or error
+
+        Example:
+            ```
+            # Delete a dependency relationship
+            result = self._handle_relationship_deletion(
+                source_name="Authentication Service",
+                target_name="User Database",
+                relationship_type="DEPENDS_ON",
+                container_name="E-commerce Platform",
+                domain_name="Backend"
+            )
+            ```
+        """
+        try:
+            # Extract parameters with fallbacks
+            container_name = kwargs.pop("container_name", kwargs.pop("project_id", None))
+            domain_name = kwargs.pop("domain_name", None)
+            
+            if not container_name:
+                error_msg = "container_name or project_id is required for relationship deletion"
+                if self.logger:
+                    self.logger.error(error_msg)
+                return json.dumps({
+                    "status": "error",
+                    "error": error_msg,
+                    "code": "missing_container_name"
+                })
+            
+            # Delete relationship using the project dependency manager
+            # This handles component relationships, domain relationships are handled separately
+            result = self.project_memory.delete_project_dependency(
+                from_component=source_name,
+                to_component=target_name,
+                domain_name=domain_name,
+                container_name=container_name,
+                dependency_type=relationship_type
+            )
+            
+            # Handle different return types (future-proof)
+            if isinstance(result, str):
+                return result
+            else:
+                return json.dumps(result)
+            
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"Error deleting relationship: {str(e)}")
+            return json.dumps({
+                "status": "error",
+                "error": f"Failed to delete relationship: {str(e)}",
+                "code": "relationship_deletion_error"
             })
 

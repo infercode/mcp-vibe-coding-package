@@ -48,6 +48,8 @@ def register_project_tools(server, get_client_manager):
               - get_structure: Retrieve project hierarchy
               - add_observation: Add observations to entities
               - update: Update existing entities
+              - delete_entity: Delete a project entity (project, domain, component, or observation)
+              - delete_relationship: Delete a relationship between entities
             **kwargs: Operation-specific parameters
                 
         Returns:
@@ -62,6 +64,8 @@ def register_project_tools(server, get_client_manager):
             - get_structure: project_id (str)
             - add_observation: entity_name (str), content (str)
             - update: entity_name (str), updates (dict)
+            - delete_entity: entity_name (str), entity_type (str)
+            - delete_relationship: source_name (str), target_name (str), relationship_type (str)
             
         Optional parameters by operation_type:
             - create_project: description (str), metadata (dict), tags (list)
@@ -72,6 +76,8 @@ def register_project_tools(server, get_client_manager):
             - get_structure: include_components (bool), include_domains (bool), include_relationships (bool), max_depth (int)
             - add_observation: project_id (str), observation_type (str), entity_type (str), domain_name (str)
             - update: project_id (str), entity_type (str), domain_name (str)
+            - delete_entity: container_name (str), domain_name (str), delete_contents (bool), observation_id (str)
+            - delete_relationship: container_name (str), domain_name (str), relationship_type (str)
             
         Response format:
             All operations return a JSON string with at minimum:
@@ -118,6 +124,25 @@ def register_project_tools(server, get_client_manager):
                 "query": "authentication patterns",
                 "project_id": "E-commerce Platform",
                 "limit": 5
+            })
+            
+            # Delete a component
+            @project_memory_tool({
+                "operation_type": "delete_entity",
+                "entity_name": "Payment Gateway",
+                "entity_type": "component",
+                "container_name": "E-commerce Platform",
+                "domain_name": "Payment"
+            })
+            
+            # Delete a relationship
+            @project_memory_tool({
+                "operation_type": "delete_relationship",
+                "source_name": "Authentication Service",
+                "target_name": "User Database",
+                "relationship_type": "DEPENDS_ON",
+                "container_name": "E-commerce Platform",
+                "domain_name": "Backend"
             })
             
             # Using with context
