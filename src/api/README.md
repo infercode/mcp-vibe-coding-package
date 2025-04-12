@@ -208,6 +208,8 @@ curl -X POST "http://localhost:8000/relations/lessons/lesson1" \
 
 ### Direct Operation Access
 
+#### Project Operations
+
 ```bash
 # Direct project operation
 curl -X POST "http://localhost:8000/projects/operation" \
@@ -221,8 +223,116 @@ curl -X POST "http://localhost:8000/projects/operation" \
              "description": "Web frontend interface"
            }
          }'
+```
 
-# Bulk lesson operations
+#### Project Context Operations
+
+```bash
+# 1. Start a project context
+curl -X POST "http://localhost:8000/projects/context/start" \
+     -H "Content-Type: application/json" \
+     -d '{
+           "project_name": "ExampleProject"
+         }'
+# Response includes a session_id like "project-context-ExampleProject"
+
+# 2. Execute operations within the context
+curl -X POST "http://localhost:8000/projects/context/operation" \
+     -H "Content-Type: application/json" \
+     -d '{
+           "session_id": "project-context-ExampleProject",
+           "operation_type": "create_component",
+           "parameters": {
+             "name": "AuthComponent",
+             "component_type": "SERVICE",
+             "description": "Authentication component"
+           }
+         }'
+
+# 3. End the project context
+curl -X POST "http://localhost:8000/projects/context/end" \
+     -H "Content-Type: application/json" \
+     -d '{
+           "session_id": "project-context-ExampleProject"
+         }'
+```
+
+#### Project Bulk Operations
+
+```bash
+# Execute multiple operations in one request
+curl -X POST "http://localhost:8000/projects/bulk" \
+     -H "Content-Type: application/json" \
+     -d '{
+           "project_name": "ExampleProject",
+           "operations": [
+             {
+               "operation_type": "create_component",
+               "name": "ApiComponent",
+               "component_type": "SERVICE",
+               "description": "API component"
+             },
+             {
+               "operation_type": "create_domain_entity",
+               "type": "DECISION",
+               "name": "UseJWT",
+               "description": "Use JWT for authentication"
+             }
+           ]
+         }'
+```
+
+#### Lesson Operations
+
+```bash
+# Direct lesson operation
+curl -X POST "http://localhost:8000/lessons/operation" \
+     -H "Content-Type: application/json" \
+     -d '{
+           "operation_type": "create_lesson_section",
+           "container_name": "ErrorHandling",
+           "title": "Exception Handling",
+           "content": "Always catch specific exceptions",
+           "confidence": 0.9
+         }'
+```
+
+#### Lesson Context Operations
+
+```bash
+# 1. Start a lesson context
+curl -X POST "http://localhost:8000/lessons/context/start" \
+     -H "Content-Type: application/json" \
+     -d '{
+           "container_name": "ErrorHandling"
+         }'
+# Response includes a session_id like "lesson-context-ErrorHandling"
+
+# 2. Execute operations within the context
+curl -X POST "http://localhost:8000/lessons/context/operation" \
+     -H "Content-Type: application/json" \
+     -d '{
+           "session_id": "lesson-context-ErrorHandling",
+           "operation_type": "create_lesson_section",
+           "parameters": {
+             "title": "Try-Except Patterns",
+             "content": "Best practices for try-except blocks",
+             "confidence": 0.85
+           }
+         }'
+
+# 3. End the lesson context
+curl -X POST "http://localhost:8000/lessons/context/end" \
+     -H "Content-Type: application/json" \
+     -d '{
+           "session_id": "lesson-context-ErrorHandling"
+         }'
+```
+
+#### Lesson Bulk Operations
+
+```bash
+# Execute multiple operations in one request
 curl -X POST "http://localhost:8000/lessons/bulk" \
      -H "Content-Type: application/json" \
      -d '{
