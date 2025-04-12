@@ -40,42 +40,120 @@ __all__ = [
 ]
 
 class LessonContext:
-    """Helper class for context-bound lesson operations."""
+    """
+    Context manager for batch lesson memory operations.
+    
+    Provides a simplified interface for creating and manipulating
+    lesson memory entities with a shared context.
+    """
     
     def __init__(self, lesson_memory, container_name=None):
         """
-        Initialize with lesson memory manager and container context.
+        Initialize a lesson context.
         
         Args:
-            lesson_memory: The LessonMemoryManager instance
-            container_name: Optional container name to use as context
+            lesson_memory: LessonMemory manager instance
+            container_name: Optional container name to use for operations
         """
         self.lesson_memory = lesson_memory
-        self.container_name = container_name or "Lessons"
+        self.container_name = container_name
+        self.logger = lesson_memory.logger if hasattr(lesson_memory, "logger") else None
     
     def create_container(self, **kwargs) -> str:
         """
-        Create a lesson container.
+        Create a new lesson container.
         
         Args:
-            **kwargs: Optional parameters
-                - description: Description of the container
-                - metadata: Additional metadata for the container
-        
+            **kwargs: Arguments for container creation:
+                - description: Optional description
+                - metadata: Optional metadata dictionary
+                
         Returns:
             JSON response with created container
         """
-        # Create the lesson container
-        result = self.lesson_memory.create_lesson_container(
-            description=kwargs.get("description"),
-            metadata=kwargs.get("metadata")
-        )
+        try:
+            return self.lesson_memory.lesson_operation(
+                operation_type="create_container",
+                **kwargs
+            )
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"Error creating container in lesson context: {str(e)}")
+            return json.dumps({
+                "status": "error",
+                "error": f"Failed to create container: {str(e)}",
+                "code": "context_container_creation_error"
+            })
+    
+    def get_container(self) -> str:
+        """
+        Get the lesson container.
         
-        # Ensure string return
-        if isinstance(result, str):
-            return result
-        else:
-            return json.dumps(result)
+        Returns:
+            JSON response with container data
+        """
+        try:
+            return self.lesson_memory.lesson_operation(
+                operation_type="get_container"
+            )
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"Error getting container in lesson context: {str(e)}")
+            return json.dumps({
+                "status": "error",
+                "error": f"Failed to get container: {str(e)}",
+                "code": "context_container_get_error"
+            })
+    
+    def list_containers(self, limit: int = 100, sort_by: str = "created") -> str:
+        """
+        List all lesson containers.
+        
+        Args:
+            limit: Maximum number of containers to return
+            sort_by: Field to sort results by
+            
+        Returns:
+            JSON response with list of containers
+        """
+        try:
+            return self.lesson_memory.lesson_operation(
+                operation_type="list_containers",
+                limit=limit,
+                sort_by=sort_by
+            )
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"Error listing containers in lesson context: {str(e)}")
+            return json.dumps({
+                "status": "error",
+                "error": f"Failed to list containers: {str(e)}",
+                "code": "context_container_list_error"
+            })
+    
+    def container_exists(self, container_name: str = "Lessons") -> str:
+        """
+        Check if a lesson container exists.
+        
+        Args:
+            container_name: Name of the container to check
+            
+        Returns:
+            JSON response with existence status
+        """
+        try:
+            return self.lesson_memory.lesson_operation(
+                operation_type="container_exists",
+                container_name=container_name
+            )
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"Error checking container existence in lesson context: {str(e)}")
+            return json.dumps({
+                "status": "error",
+                "error": f"Failed to check container existence: {str(e)}",
+                "code": "context_container_check_error"
+            })
     
     def create(self, name: str, lesson_type: str, **kwargs) -> str:
         """
@@ -1763,6 +1841,9 @@ class GraphMemoryManager:
             operation_type: The type of operation to perform
               - create: Create a new lesson
               - create_container: Create a lesson container
+              - get_container: Get the lesson container
+              - list_containers: List all lesson containers
+              - container_exists: Check if a container exists
               - observe: Add structured observations to a lesson
               - relate: Create relationships between lessons
               - search: Find relevant lessons
@@ -1778,6 +1859,9 @@ class GraphMemoryManager:
         Required parameters by operation_type:
             - create: name (str), lesson_type (str), container_name (str, optional)
             - create_container: description (str, optional), metadata (dict, optional)
+            - get_container: (no parameters required)
+            - list_containers: limit (int, optional), sort_by (str, optional)
+            - container_exists: container_name (str, optional, defaults to "Lessons")
             - observe: entity_name (str), what_was_learned (str), why_it_matters (str), how_to_apply (str), container_name (str, optional), confidence (float, optional)
             - relate: source_name (str), target_name (str), relationship_type (str), container_name (str, optional)
             - search: query (str), limit (int, optional), container_name (str, optional)
@@ -1798,6 +1882,17 @@ class GraphMemoryManager:
                 "operation_type": "create_container",
                 "description": "Container for React-related lessons",
                 "metadata": {"category": "frontend", "framework": "react"}
+            })
+            
+            # Get the lesson container
+            @lesson_memory_tool({
+                "operation_type": "get_container"
+            })
+            
+            # Check if a container exists
+            @lesson_memory_tool({
+                "operation_type": "container_exists",
+                "container_name": "Lessons"
             })
             
             # Create a new lesson
@@ -1849,9 +1944,16 @@ class GraphMemoryManager:
         """
         self._ensure_initialized()
         
-        operations = {
-            "create": self._handle_lesson_creation,
+        # Map operation types to handler methods
+        operation_handlers = {
+            # Container operations
             "create_container": self._handle_lesson_container_creation,
+            "get_container": self._handle_get_lesson_container,
+            "list_containers": self._handle_list_lesson_containers,
+            "container_exists": self._handle_container_exists,
+            
+            # Lesson operations
+            "create": self._handle_lesson_creation,
             "observe": self._handle_lesson_observation,
             "relate": self._handle_lesson_relationship,
             "search": self._handle_lesson_search,
@@ -1859,23 +1961,32 @@ class GraphMemoryManager:
             "consolidate": self._handle_lesson_consolidation,
             "evolve": self._handle_lesson_evolution,
             "update": self._handle_lesson_update,
+            # ... add any other operations here
         }
         
-        if operation_type not in operations:
-            error_msg = f"Unknown operation type: {operation_type}"
-            if self.logger:
-                self.logger.error(error_msg)
-            return json.dumps({"status": "error", "error": error_msg, "code": "invalid_operation"})
-            
+        # Check if operation type is valid
+        if operation_type not in operation_handlers:
+            return json.dumps({
+                "status": "error",
+                "error": f"Unknown operation type: {operation_type}",
+                "code": "unknown_operation"
+            })
+        
         try:
-            return operations[operation_type](**kwargs)
+            # Get the appropriate handler
+            handler = operation_handlers[operation_type]
+            
+            # Call the handler with the provided arguments
+            return handler(**kwargs)
         except Exception as e:
+            # Log and report the error
             if self.logger:
                 self.logger.error(f"Error in lesson operation '{operation_type}': {str(e)}")
+            
             return json.dumps({
-                "status": "error", 
-                "error": f"Operation failed: {str(e)}", 
-                "code": "operation_error"
+                "status": "error",
+                "error": f"Error in lesson operation '{operation_type}': {str(e)}",
+                "code": "lesson_operation_error"
             })
     
     def _handle_lesson_container_creation(self, **kwargs) -> str:
@@ -2284,6 +2395,131 @@ class GraphMemoryManager:
                 "error": f"Failed to update lesson: {str(e)}",
                 "code": "update_error"
             })
+    
+    def _handle_get_lesson_container(self, **kwargs) -> str:
+        """
+        Get the lesson container.
+        
+        Args:
+            **kwargs: Not used
+            
+        Returns:
+            JSON string with container data
+        """
+        try:
+            # Ensure lesson memory manager is available
+            if not hasattr(self, "lesson_memory") or not self.lesson_memory:
+                return json.dumps({
+                    "status": "error",
+                    "error": "Lesson memory manager not initialized",
+                    "code": "lesson_memory_not_initialized"
+                })
+                
+            # Call the get_lesson_container method
+            result = self.lesson_memory.get_lesson_container()
+            
+            # Handle different return types (future-proof)
+            if isinstance(result, str):
+                return result
+            else:
+                return json.dumps(result)
+                
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"Error getting lesson container: {str(e)}")
+            return json.dumps({
+                "status": "error",
+                "error": f"Failed to get lesson container: {str(e)}",
+                "code": "container_get_error"
+            })
+    
+    def _handle_list_lesson_containers(self, limit: int = 100, sort_by: str = "created", **kwargs) -> str:
+        """
+        List all lesson containers.
+        
+        Args:
+            limit: Maximum number of containers to return
+            sort_by: Field to sort results by
+            **kwargs: Additional arguments (not used)
+            
+        Returns:
+            JSON string with list of containers
+        """
+        try:
+            # Ensure lesson memory manager is available
+            if not hasattr(self, "lesson_memory") or not self.lesson_memory:
+                return json.dumps({
+                    "status": "error",
+                    "error": "Lesson memory manager not initialized",
+                    "code": "lesson_memory_not_initialized"
+                })
+                
+            # Call the list_lesson_containers method
+            result = self.lesson_memory.list_lesson_containers(limit, sort_by)
+            
+            # Handle different return types (future-proof)
+            if isinstance(result, str):
+                return result
+            else:
+                return json.dumps(result, default=str)
+                
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"Error listing lesson containers: {str(e)}")
+            return json.dumps({
+                "status": "error",
+                "error": f"Failed to list lesson containers: {str(e)}",
+                "code": "container_list_error"
+            })
+    
+    def _handle_container_exists(self, container_name: str = "Lessons", **kwargs) -> str:
+        """
+        Check if a lesson container exists.
+        
+        Args:
+            container_name: Name of the container to check
+            **kwargs: Additional arguments (not used)
+            
+        Returns:
+            JSON string with existence status
+        """
+        try:
+            # Ensure lesson memory manager is available
+            if not hasattr(self, "lesson_memory") or not self.lesson_memory:
+                return json.dumps({
+                    "status": "error",
+                    "error": "Lesson memory manager not initialized",
+                    "code": "lesson_memory_not_initialized"
+                })
+                
+            # Use get_lesson_container to check existence
+            # We need to parse the result to determine if the container exists
+            result = self.lesson_memory.get_lesson_container()
+            
+            # Parse the result
+            if isinstance(result, str):
+                result_data = json.loads(result)
+            else:
+                result_data = result
+                
+            # Check if the result indicates an error or success
+            exists = "error" not in result_data
+            
+            # Return a standardized response
+            return json.dumps({
+                "status": "success",
+                "exists": exists,
+                "container_name": container_name
+            })
+                
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"Error checking container existence: {str(e)}")
+            return json.dumps({
+                "status": "error",
+                "error": f"Failed to check container existence: {str(e)}",
+                "code": "container_check_error"
+            })
 
     @contextmanager
     def lesson_context(self, project_name: Optional[str] = None, container_name: Optional[str] = None):
@@ -2298,7 +2534,7 @@ class GraphMemoryManager:
                 - project_name: Optional. Project name to set as context
                 - container_name: Optional. Container name to use for operations (defaults to "Lessons")
             client_id: Optional client ID for identifying the connection
-            
+                
         Returns:
             JSON response with context information that includes:
             - status: "success" or "error"
@@ -2315,12 +2551,25 @@ class GraphMemoryManager:
                     "project_name": "ProjectName",
                     "container_name": "ContainerName",
                     "created_at": "2023-07-15T10:30:45.123456",
-                    "operations_available": ["create_container", "create", "observe", "relate", "search", "track", "update", "consolidate", "evolve"],
+                    "operations_available": ["create_container", "get_container", "list_containers", "container_exists", "create", "observe", "relate", "search", "track", "update", "consolidate", "evolve"],
                     "usage": "Use this context information with any lesson memory operation by including it in the operation's context parameter"
                 }
             }
             ```
-        
+             
+        The returned context object has these methods:
+            - create_container(): Create a new lesson container
+            - get_container(): Get the lesson container
+            - list_containers(): List all lesson containers
+            - container_exists(): Check if a container exists
+            - create(): Create a new lesson
+            - observe(): Add structured observations to lessons
+            - relate(): Create relationships between lessons
+            - search(): Find relevant lessons
+            - track(): Track lesson application
+            - consolidate(): Combine related lessons
+            - update(): Update existing lessons
+            
         Example:
             ```
             # Create a context for a specific project and container
@@ -2335,6 +2584,15 @@ class GraphMemoryManager:
                 "query": "database optimization patterns",
                 "context": context["context"]  # Pass the context object from the response
             })
+            
+            # Using container operations
+            with memory.lesson_context(project_name="Project1", container_name="LessonContainer") as context:
+                # Check if container exists
+                container_exists = context.container_exists("LessonContainer")
+                # Get container details
+                container_details = context.get_container()
+                # Create a new lesson
+                context.create(name="Lesson1", lesson_type="BestPractice")
             ```
         """
         self._ensure_initialized()
@@ -2344,16 +2602,18 @@ class GraphMemoryManager:
         
         try:
             # Set project context if provided
-            if project_name:
+            if project_name is not None:
                 self.set_project_name(project_name)
-                
+            
             # Create and yield context helper
-            context = LessonContext(self.lesson_memory, container_name)
+            context = LessonContext(self, container_name)
             yield context
             
         finally:
             # Restore original project context
-            self.set_project_name(original_project)
+            if project_name is not None and original_project != project_name:
+                # Make sure we don't pass None
+                self.set_project_name(original_project or "")
     
     # Project Memory System methods
     
@@ -3806,3 +4066,4 @@ class GraphMemoryManager:
         finally:
             # Restore original project context
             self.set_project_name(original_project)
+    

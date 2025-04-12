@@ -155,6 +155,12 @@ Once the server is running, you can access:
 - `PUT /lessons/{lesson_id}/sections/{section_id}` - Update section
 - `DELETE /lessons/{lesson_id}/sections/{section_id}` - Delete section
 
+#### Lesson Containers
+- `POST /lessons/container` - Create a lesson container
+- `GET /lessons/container` - Get the lesson container
+- `GET /lessons/containers` - List all lesson containers
+- `GET /lessons/container/exists` - Check if a container exists
+
 #### Direct Lesson Operations
 - `POST /lessons/operation` - Direct access to lesson_operation method
 - `POST /lessons/context/start` - Start a lesson context session

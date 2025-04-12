@@ -78,16 +78,69 @@ async def get_lesson_container(
     memory: GraphMemoryManager = Depends(get_memory_manager)
 ):
     """
-    Get the lesson container. There is only one container named 'Lessons'.
+    Get the lesson container details.
+    
+    This endpoint returns information about the primary lesson container.
     """
     try:
         # Ensure manager is initialized
         if not memory.check_connection():
             raise HTTPException(status_code=503, detail="Memory system not initialized")
             
-        # Use lesson_operation for unified interface
+        # Execute the get_container operation
+        result = memory.lesson_operation(operation_type="get_container")
+        return parse_response(result)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/containers", response_model=Dict[str, Any])
+async def list_lesson_containers(
+    limit: int = 100,
+    sort_by: str = "created",
+    memory: GraphMemoryManager = Depends(get_memory_manager)
+):
+    """
+    List all lesson containers.
+    
+    Args:
+        limit: Maximum number of containers to return
+        sort_by: Field to sort results by
+    """
+    try:
+        # Ensure manager is initialized
+        if not memory.check_connection():
+            raise HTTPException(status_code=503, detail="Memory system not initialized")
+            
+        # Execute the list_containers operation
         result = memory.lesson_operation(
-            operation_type="get_container"
+            operation_type="list_containers",
+            limit=limit,
+            sort_by=sort_by
+        )
+        return parse_response(result)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/container/exists", response_model=Dict[str, Any])
+async def check_lesson_container_exists(
+    container_name: str = "Lessons",
+    memory: GraphMemoryManager = Depends(get_memory_manager)
+):
+    """
+    Check if a lesson container exists.
+    
+    Args:
+        container_name: Name of the container to check
+    """
+    try:
+        # Ensure manager is initialized
+        if not memory.check_connection():
+            raise HTTPException(status_code=503, detail="Memory system not initialized")
+            
+        # Execute the container_exists operation
+        result = memory.lesson_operation(
+            operation_type="container_exists",
+            container_name=container_name
         )
         return parse_response(result)
     except Exception as e:
