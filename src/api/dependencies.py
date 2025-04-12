@@ -44,10 +44,14 @@ def get_memory_manager(client_id: str = Depends(get_client_id), settings: Settin
         embedding_model=settings.embedding_model
     )
     
-    # Initialize with client ID
-    manager.initialize(client_id=client_id)
+    # Initialize with client ID - this sets up specialized managers and connections
+    initialized = manager.initialize(client_id=client_id)
+    
+    if not initialized:
+        logger.error(f"Failed to initialize GraphMemoryManager for client: {client_id}")
     
     try:
         yield manager
     finally:
+        # Ensure resources are properly closed
         manager.close() 

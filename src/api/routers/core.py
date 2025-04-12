@@ -24,8 +24,12 @@ class CoreUpdate(BaseModel):
 async def get_all_memories(memory: GraphMemoryManager = Depends(get_memory_manager)):
     """Get all entities in the knowledge graph."""
     try:
+        # Ensure manager is initialized
+        if not memory.check_connection():
+            raise HTTPException(status_code=503, detail="Memory system not initialized")
+            
         result = memory.get_all_memories()
-        return json.loads(result)
+        return parse_response(result)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -33,8 +37,12 @@ async def get_all_memories(memory: GraphMemoryManager = Depends(get_memory_manag
 async def create_node(node: CoreNode, memory: GraphMemoryManager = Depends(get_memory_manager)):
     """Create a new node in the core memory graph."""
     try:
+        # Ensure manager is initialized
+        if not memory.check_connection():
+            raise HTTPException(status_code=503, detail="Memory system not initialized")
+            
         result = memory.create_entity(node.dict(exclude_none=True))
-        return json.loads(result)
+        return parse_response(result)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -42,9 +50,13 @@ async def create_node(node: CoreNode, memory: GraphMemoryManager = Depends(get_m
 async def create_nodes(nodes: List[CoreNode], memory: GraphMemoryManager = Depends(get_memory_manager)):
     """Create multiple nodes in the core memory graph."""
     try:
+        # Ensure manager is initialized
+        if not memory.check_connection():
+            raise HTTPException(status_code=503, detail="Memory system not initialized")
+            
         node_dicts = [n.dict(exclude_none=True) for n in nodes]
         result = memory.create_entities(node_dicts)
-        return json.loads(result)
+        return parse_response(result)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -52,8 +64,12 @@ async def create_nodes(nodes: List[CoreNode], memory: GraphMemoryManager = Depen
 async def get_node(node_name: str, memory: GraphMemoryManager = Depends(get_memory_manager)):
     """Get a node from the core memory graph."""
     try:
+        # Ensure manager is initialized
+        if not memory.check_connection():
+            raise HTTPException(status_code=503, detail="Memory system not initialized")
+            
         result = memory.get_entity(node_name)
-        return json.loads(result)
+        return parse_response(result)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -61,8 +77,12 @@ async def get_node(node_name: str, memory: GraphMemoryManager = Depends(get_memo
 async def update_node(node_name: str, update: CoreUpdate, memory: GraphMemoryManager = Depends(get_memory_manager)):
     """Update a node in the core memory graph."""
     try:
+        # Ensure manager is initialized
+        if not memory.check_connection():
+            raise HTTPException(status_code=503, detail="Memory system not initialized")
+            
         result = memory.update_entity(node_name, update.updates)
-        return json.loads(result)
+        return parse_response(result)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -70,8 +90,12 @@ async def update_node(node_name: str, update: CoreUpdate, memory: GraphMemoryMan
 async def delete_node(node_name: str, memory: GraphMemoryManager = Depends(get_memory_manager)):
     """Delete a node from the core memory graph."""
     try:
+        # Ensure manager is initialized
+        if not memory.check_connection():
+            raise HTTPException(status_code=503, detail="Memory system not initialized")
+            
         result = memory.delete_entity(node_name)
-        return json.loads(result)
+        return parse_response(result)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -79,8 +103,12 @@ async def delete_node(node_name: str, memory: GraphMemoryManager = Depends(get_m
 async def search_nodes(query: str, limit: int = 10, memory: GraphMemoryManager = Depends(get_memory_manager)):
     """Search for nodes in the core memory graph."""
     try:
-        result = memory.search_entities(query or "", limit)
-        return json.loads(result)
+        # Ensure manager is initialized
+        if not memory.check_connection():
+            raise HTTPException(status_code=503, detail="Memory system not initialized")
+            
+        result = memory.search_nodes(query or "", limit)
+        return parse_response(result)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -93,8 +121,12 @@ async def get_node_neighborhood(
 ):
     """Get the neighborhood of a node in the core memory graph."""
     try:
+        # Ensure manager is initialized
+        if not memory.check_connection():
+            raise HTTPException(status_code=503, detail="Memory system not initialized")
+            
         result = memory.search_entity_neighborhoods(node_name, max_depth, max_nodes)
-        return json.loads(result)
+        return parse_response(result)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -102,7 +134,25 @@ async def get_node_neighborhood(
 async def get_nodes(query: Optional[str] = None, limit: int = 10, memory: GraphMemoryManager = Depends(get_memory_manager)):
     """Get nodes from the core memory graph."""
     try:
-        result = memory.get_entities(query, limit)
-        return {"nodes": result}
+        # Ensure manager is initialized
+        if not memory.check_connection():
+            raise HTTPException(status_code=503, detail="Memory system not initialized")
+            
+        # Use search_nodes instead of get_entities
+        result = memory.search_nodes(query or "", limit)
+        return parse_response(result)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e)) 
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Helper function to parse JSON response
+def parse_response(response):
+    """Parse JSON response from GraphMemoryManager."""
+    if isinstance(response, str):
+        try:
+            return json.loads(response)
+        except json.JSONDecodeError:
+            return {"result": response}
+    elif isinstance(response, dict):
+        return response
+    else:
+        return {"result": response} 

@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 from src.graph_memory import GraphMemoryManager
 from src.logger import get_logger, LogLevel
 from src.api.config import Settings, get_settings
-import json
+from .utils import parse_response
 from .routers import core, relations, observations, search, projects, lessons
 
 # Initialize settings
@@ -54,17 +54,17 @@ def get_memory_manager(settings: Settings = Depends(get_settings)):
         embedding_api_key=settings.embedding_api_key,
         embedding_model=settings.embedding_model
     )
+    
+    # Initialize with default client ID
+    initialized = manager.initialize(client_id=settings.client_id)
+    
+    if not initialized:
+        logger.error(f"Failed to initialize GraphMemoryManager for default client")
+    
     try:
         yield manager
     finally:
         manager.close()
-
-# Helper function to parse JSON string to dict
-def parse_response(response: str) -> Dict[str, Any]:
-    try:
-        return json.loads(response)
-    except json.JSONDecodeError:
-        return {"result": response}
 
 # Include routers
 app.include_router(core.router)

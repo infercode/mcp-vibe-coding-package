@@ -52,25 +52,23 @@ async def create_lesson_container(
     Only one container named 'Lessons' is allowed in the system.
     """
     try:
+        # Ensure manager is initialized
+        if not memory.check_connection():
+            raise HTTPException(status_code=503, detail="Memory system not initialized")
+            
         # Prepare container data
-        description = container.description if container else None
+        container_data = {}
+        if container:
+            container_data = {
+                "description": container.description,
+                "metadata": container.metadata
+            }
         
-        # Sanitize metadata to ensure only primitive types are included
-        metadata = None
-        if container and container.metadata:
-            metadata = {}
-            for key, value in container.metadata.items():
-                # Only include primitive types (strings, numbers, booleans) or lists of primitives
-                if isinstance(value, (str, int, float, bool)) or (
-                    isinstance(value, list) and all(isinstance(item, (str, int, float, bool)) for item in value)
-                ):
-                    metadata[key] = value
-        
-        container_data = {
-            "description": description,
-            "metadata": metadata
-        }
-        result = memory.create_lesson_container(container_data)
+        # Use lesson_operation for unified interface
+        result = memory.lesson_operation(
+            operation_type="create_container",
+            **container_data
+        )
         return parse_response(result)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -83,8 +81,15 @@ async def get_lesson_container(
     Get the lesson container. There is only one container named 'Lessons'.
     """
     try:
-        result = memory.get_lesson_container()
-        return json.loads(result)
+        # Ensure manager is initialized
+        if not memory.check_connection():
+            raise HTTPException(status_code=503, detail="Memory system not initialized")
+            
+        # Use lesson_operation for unified interface
+        result = memory.lesson_operation(
+            operation_type="get_container"
+        )
+        return parse_response(result)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -100,8 +105,22 @@ async def get_all_lesson_memories(
         container_name: Optional container name to scope query (defaults to "Lessons")
     """
     try:
-        result = memory.get_all_lesson_memories(container_name=container_name)
-        return json.loads(result)
+        # Ensure manager is initialized
+        if not memory.check_connection():
+            raise HTTPException(status_code=503, detail="Memory system not initialized")
+            
+        # Use get_all_memories with entity_types filter
+        result = memory.get_all_memories()
+        result_data = parse_response(result)
+        
+        # Filter for lesson entities
+        if "entities" in result_data:
+            result_data["entities"] = [
+                entity for entity in result_data["entities"] 
+                if entity.get("entity_type", "").lower() in ["lesson", "lessoncontainer"]
+            ]
+        
+        return result_data
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -112,9 +131,16 @@ async def create_lesson(
 ):
     """Create a new lesson entity."""
     try:
-        result = memory.create_lesson(
+        # Ensure manager is initialized
+        if not memory.check_connection():
+            raise HTTPException(status_code=503, detail="Memory system not initialized")
+            
+        # Use lesson_operation for unified interface
+        result = memory.lesson_operation(
+            operation_type="create",
             name=lesson.title,
-            problem_description=lesson.description or "",
+            lesson_type="Lesson",
+            description=lesson.description or "",
             tags=lesson.tags
         )
         return parse_response(result)
@@ -130,8 +156,14 @@ async def get_lessons(
 ):
     """Get lessons from the knowledge graph."""
     try:
-        result = memory.get_lessons(
-            search_term=search_term,
+        # Ensure manager is initialized
+        if not memory.check_connection():
+            raise HTTPException(status_code=503, detail="Memory system not initialized")
+            
+        # Use lesson_operation for unified interface
+        result = memory.lesson_operation(
+            operation_type="search",
+            query=search_term or "",
             entity_type=entity_type,
             limit=limit
         )
@@ -147,12 +179,22 @@ async def update_lesson(
 ):
     """Update a lesson's properties."""
     try:
+        # Ensure manager is initialized
+        if not memory.check_connection():
+            raise HTTPException(status_code=503, detail="Memory system not initialized")
+            
+        # Use lesson_operation for unified interface
         updates = {
             "title": lesson.title,
             "description": lesson.description,
             "tags": lesson.tags
         }
-        result = memory.update_lesson(lesson_name, **updates)
+        
+        result = memory.lesson_operation(
+            operation_type="update",
+            entity_name=lesson_name,
+            updates=updates
+        )
         return parse_response(result)
     except Exception as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -167,9 +209,15 @@ async def apply_lesson_to_context(
 ):
     """Apply a lesson to a context entity."""
     try:
-        result = memory.apply_lesson_to_context(
-            lesson_name,
-            context_entity,
+        # Ensure manager is initialized
+        if not memory.check_connection():
+            raise HTTPException(status_code=503, detail="Memory system not initialized")
+            
+        # Use lesson_operation for unified interface
+        result = memory.lesson_operation(
+            operation_type="track",
+            lesson_name=lesson_name,
+            context_entity=context_entity,
             success_score=success_score,
             application_notes=application_notes
         )
@@ -185,25 +233,32 @@ async def add_lesson_section(
 ):
     """Add a section as a relationship/observation to a lesson node."""
     try:
-        # Create the section as an observation on the lesson node
-        result = memory.add_observation({
-            "entity_name": lesson_id,
-            "content": section.content,
-            "observation_type": "section",
-            "metadata": {
-                "title": section.title,
-                "confidence": section.confidence,
-                "tags": section.tags
-            }
-        })
+        # Ensure manager is initialized
+        if not memory.check_connection():
+            raise HTTPException(status_code=503, detail="Memory system not initialized")
+            
+        # Use lesson_operation for unified interface
+        result = memory.lesson_operation(
+            operation_type="observe",
+            entity_name=lesson_id,
+            what_was_learned=section.content,
+            observation_type="section",
+            title=section.title,
+            confidence=section.confidence,
+            tags=section.tags
+        )
         return parse_response(result)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.get("/{lesson_id}", response_model=Dict[str, Any])
 async def get_lesson(lesson_id: str, memory: GraphMemoryManager = Depends(get_memory_manager)):
-    """Get a lesson node by ID."""
+    """Get a lesson by ID."""
     try:
+        # Ensure manager is initialized
+        if not memory.check_connection():
+            raise HTTPException(status_code=503, detail="Memory system not initialized")
+            
         result = memory.get_entity(lesson_id)
         return parse_response(result)
     except Exception as e:
@@ -211,8 +266,12 @@ async def get_lesson(lesson_id: str, memory: GraphMemoryManager = Depends(get_me
 
 @router.get("/{lesson_id}/sections", response_model=Dict[str, Any])
 async def get_lesson_sections(lesson_id: str, memory: GraphMemoryManager = Depends(get_memory_manager)):
-    """Get all section observations connected to a lesson node."""
+    """Get all sections for a lesson."""
     try:
+        # Ensure manager is initialized
+        if not memory.check_connection():
+            raise HTTPException(status_code=503, detail="Memory system not initialized")
+            
         result = memory.get_observations(lesson_id, observation_type="section")
         return parse_response(result)
     except Exception as e:
@@ -224,8 +283,12 @@ async def delete_lesson_section(
     section_id: str,
     memory: GraphMemoryManager = Depends(get_memory_manager)
 ):
-    """Delete a section observation from a lesson node."""
+    """Delete a section from a lesson."""
     try:
+        # Ensure manager is initialized
+        if not memory.check_connection():
+            raise HTTPException(status_code=503, detail="Memory system not initialized")
+            
         result = memory.delete_observation(lesson_id, observation_id=section_id)
         return parse_response(result)
     except Exception as e:
@@ -236,10 +299,14 @@ async def extract_potential_lessons(
     content: Dict[str, Any],
     memory: GraphMemoryManager = Depends(get_memory_manager)
 ):
-    """Extract potential lessons from provided content."""
+    """Extract potential lessons from content."""
     try:
-        result = memory.extract_potential_lessons(**content)
-        return parse_response(result)
+        # Ensure manager is initialized
+        if not memory.check_connection():
+            raise HTTPException(status_code=503, detail="Memory system not initialized")
+            
+        # This would require an AI-based extraction service
+        raise HTTPException(status_code=501, detail="Lesson extraction not implemented in this version")
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -251,10 +318,16 @@ async def consolidate_related_lessons(
     problem_description: Optional[str] = None,
     memory: GraphMemoryManager = Depends(get_memory_manager)
 ):
-    """Consolidate related lessons into a new lesson."""
+    """Consolidate multiple related lessons into a single lesson."""
     try:
-        result = memory.consolidate_related_lessons(
-            lesson_ids,
+        # Ensure manager is initialized
+        if not memory.check_connection():
+            raise HTTPException(status_code=503, detail="Memory system not initialized")
+            
+        # Use lesson_operation for unified interface
+        result = memory.lesson_operation(
+            operation_type="consolidate",
+            source_lessons=lesson_ids,
             new_name=new_name,
             merge_strategy=merge_strategy,
             problem_description=problem_description
@@ -271,14 +344,31 @@ async def get_knowledge_evolution(
     end_date: Optional[str] = None,
     memory: GraphMemoryManager = Depends(get_memory_manager)
 ):
-    """Track the evolution of knowledge in the lesson graph."""
+    """Get knowledge evolution over time."""
     try:
-        result = memory.get_knowledge_evolution(
-            entity_name=entity_name,
-            lesson_type=lesson_type,
-            start_date=start_date,
-            end_date=end_date
-        )
+        # Ensure manager is initialized
+        if not memory.check_connection():
+            raise HTTPException(status_code=503, detail="Memory system not initialized")
+            
+        # Use custom Cypher to get evolution data
+        cypher_query = """
+        MATCH (l:Lesson)
+        WHERE l.created_at IS NOT NULL
+        """
+        
+        if entity_name:
+            cypher_query += f" AND l.name = '{entity_name}'"
+        
+        if lesson_type:
+            cypher_query += f" AND l.lesson_type = '{lesson_type}'"
+            
+        cypher_query += """
+        RETURN l.name as name, l.lesson_type as type, l.created_at as created, 
+               l.confidence as confidence, l.tags as tags
+        ORDER BY l.created_at
+        """
+        
+        result = memory.query_knowledge_graph(cypher_query)
         return parse_response(result)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -288,9 +378,14 @@ async def query_across_contexts(
     query_text: str,
     memory: GraphMemoryManager = Depends(get_memory_manager)
 ):
-    """Query across multiple contexts."""
+    """Query lessons across different contexts."""
     try:
-        result = memory.query_across_contexts(query_text)
+        # Ensure manager is initialized
+        if not memory.check_connection():
+            raise HTTPException(status_code=503, detail="Memory system not initialized")
+            
+        # Use semantic search for cross-context queries
+        result = memory.search_nodes(query_text, limit=10, entity_types=["Lesson"], semantic=True)
         return parse_response(result)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e)) 

@@ -45,6 +45,10 @@ async def search_nodes(
         JSON string with search results
     """
     try:
+        # Ensure manager is initialized
+        if not memory.check_connection():
+            raise HTTPException(status_code=503, detail="Memory system not initialized")
+            
         result = memory.search_nodes(query, limit, entity_types, semantic)
         return parse_response(result)
     except Exception as e:
@@ -66,6 +70,10 @@ async def query_knowledge_graph(
         JSON string with the query results
     """
     try:
+        # Ensure manager is initialized
+        if not memory.check_connection():
+            raise HTTPException(status_code=503, detail="Memory system not initialized")
+            
         result = memory.query_knowledge_graph(query.query, query.params)
         return parse_response(result)
     except Exception as e:
@@ -91,6 +99,10 @@ async def search_entity_neighborhoods(
         JSON string with the neighborhood graph
     """
     try:
+        # Ensure manager is initialized
+        if not memory.check_connection():
+            raise HTTPException(status_code=503, detail="Memory system not initialized")
+            
         result = memory.search_entity_neighborhoods(entity_name, max_depth, max_nodes)
         return parse_response(result)
     except Exception as e:
@@ -112,11 +124,25 @@ async def find_paths_between_entities(
         JSON string with all paths found
     """
     try:
-        result = memory.find_paths_between_entities(
-            path_query.from_entity,
-            path_query.to_entity,
-            path_query.max_depth
-        )
+        # Ensure manager is initialized
+        if not memory.check_connection():
+            raise HTTPException(status_code=503, detail="Memory system not initialized")
+            
+        # Use a custom cypher query for finding paths
+        cypher_query = """
+        MATCH p = shortestPath((source {name: $from_entity})-[*1..$max_depth]->(target {name: $to_entity}))
+        WHERE source.name IS NOT NULL AND target.name IS NOT NULL
+        RETURN [n in nodes(p) | n.name] as path,
+               [r in relationships(p) | type(r)] as relationship_types,
+               length(p) as path_length
+        """
+        params = {
+            "from_entity": path_query.from_entity,
+            "to_entity": path_query.to_entity,
+            "max_depth": path_query.max_depth
+        }
+        
+        result = memory.query_knowledge_graph(cypher_query, params)
         return parse_response(result)
     except Exception as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -142,6 +168,10 @@ async def search_lessons(
         JSON string with search results
     """
     try:
+        # Ensure manager is initialized
+        if not memory.check_connection():
+            raise HTTPException(status_code=503, detail="Memory system not initialized")
+            
         result = memory.search_nodes(query, limit, entity_types=["lesson"], semantic=semantic)
         return parse_response(result)
     except Exception as e:
@@ -167,6 +197,10 @@ async def search_projects(
         JSON string with search results
     """
     try:
+        # Ensure manager is initialized
+        if not memory.check_connection():
+            raise HTTPException(status_code=503, detail="Memory system not initialized")
+            
         result = memory.search_nodes(query, limit, entity_types=["project"], semantic=semantic)
         return parse_response(result)
     except Exception as e:
