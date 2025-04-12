@@ -138,60 +138,41 @@ async def list_lesson_containers(
         if not memory.check_connection():
             raise HTTPException(status_code=503, detail="Memory system not initialized")
         
-        # Execute the regular list_containers operation
-        result = memory.lesson_operation(
+        # Try multiple approaches to find containers (for reliability)
+        containers = []
+        
+        # 1. First try the regular list_containers operation
+        list_result = memory.lesson_operation(
             operation_type="list_containers",
             limit=limit,
             sort_by=sort_by
         )
-        result_data = parse_response(result)
+        list_data = parse_response(list_result)
         
-        # If we didn't get any containers, try to get the main container directly
-        found_containers = []
-        get_container_result = None
+        if "containers" in list_data and list_data["containers"]:
+            containers = list_data["containers"]
         
-        if "containers" not in result_data or not result_data.get("containers"):
-            # Try to get the container directly
+        # 2. If no containers found, try to get the main container directly
+        if not containers:
             get_result = memory.lesson_operation(operation_type="get_container")
-            get_container_result = parse_response(get_result)
+            get_data = parse_response(get_result)
             
-            # Check if we found a container
-            if (get_container_result.get("status") == "success" and 
-                "container" in str(get_container_result).lower()):
-                
-                # Extract the container data
-                container_data = None
-                
-                if "container" in get_container_result:
-                    container_data = get_container_result["container"]
-                elif "data" in get_container_result and "container" in get_container_result["data"]:
-                    container_data = get_container_result["data"]["container"]
-                
-                if container_data:
-                    found_containers = [container_data]
+            # Extract the container data if found
+            container_data = None
+            if "container" in get_data:
+                container_data = get_data["container"]
+            elif "data" in get_data and "container" in get_data["data"]:
+                container_data = get_data["data"]["container"]
+            
+            if container_data:
+                containers = [container_data]
         
-        # Also check the container exists endpoint
-        exists_result = memory.lesson_operation(
-            operation_type="container_exists",
-            container_name="Lessons"
-        )
-        exists_data = parse_response(exists_result)
-        
-        # Build a comprehensive response with all the information
-        containers = result_data.get("containers", []) or found_containers
-        
+        # Return a clean, consistent response
         return {
             "status": "success",
             "containers": containers,
             "count": len(containers),
-            "message": f"Found {len(containers)} containers",
-            "debug": {
-                "list_result": result_data,
-                "get_container_result": get_container_result,
-                "exists_result": exists_data,
-                "api_version": "1.0.0",
-                "timestamp": str(datetime.datetime.now())
-            }
+            "message": f"Found {len(containers)} lesson container{'s' if len(containers) != 1 else ''}"
         }
     except HTTPException:
         raise
