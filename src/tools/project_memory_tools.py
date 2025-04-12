@@ -54,14 +54,24 @@ def register_project_tools(server, get_client_manager):
             JSON response with operation results
             
         Required parameters by operation_type:
-            - create_project: name (str), description (str, optional), tags (list, optional)
-            - create_component: project_id (str), name (str), component_type (str)
-            - create_domain_entity: project_id (str), entity_type (str), name (str)
-            - relate_entities: source_id (str), target_id (str), relationship_type (str)
-            - search: query (str), project_id (str, optional), entity_types (list, optional), limit (int, optional)
+            - create_project: name (str)
+            - create_component: name (str), component_type (str), project_id (str)
+            - create_domain_entity: name (str), entity_type (str), project_id (str)
+            - relate_entities: source_name (str), target_name (str), relation_type (str), project_id (str)
+            - search: query (str), project_id (str)
             - get_structure: project_id (str)
-            - add_observation: entity_id (str), content (str), observation_type (str, optional)
-            - update: entity_id (str), updates (dict)
+            - add_observation: entity_name (str), content (str)
+            - update: entity_name (str), updates (dict)
+            
+        Optional parameters by operation_type:
+            - create_project: description (str), metadata (dict), tags (list)
+            - create_component: domain_name (str), description (str), content (str), metadata (dict)
+            - create_domain_entity: description (str), properties (dict)
+            - relate_entities: domain_name (str), entity_type (str), properties (dict)
+            - search: entity_types (list), limit (int), semantic (bool), domain_name (str)
+            - get_structure: include_components (bool), include_domains (bool), include_relationships (bool), max_depth (int)
+            - add_observation: project_id (str), observation_type (str), entity_type (str), domain_name (str)
+            - update: project_id (str), entity_type (str), domain_name (str)
             
         Response format:
             All operations return a JSON string with at minimum:
@@ -96,9 +106,10 @@ def register_project_tools(server, get_client_manager):
             # Create a relationship
             @project_memory_tool({
                 "operation_type": "relate_entities",
-                "source_id": "Authentication Service",
-                "target_id": "User Database",
-                "relationship_type": "DEPENDS_ON"
+                "source_name": "Authentication Service",
+                "target_name": "User Database",
+                "relationship_type": "DEPENDS_ON",
+                "project_id": "E-commerce Platform"
             })
             
             # Search for entities
