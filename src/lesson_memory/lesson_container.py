@@ -130,6 +130,7 @@ class LessonContainer:
             JSON string with the container data
         """
         try:
+            self.logger.info("Starting get_container method")
             self.base_manager.ensure_initialized()
             
             # First check if there are multiple containers
@@ -138,14 +139,26 @@ class LessonContainer:
             RETURN count(c) as container_count
             """
             
+            self.logger.info("Executing container count query")
             count_records = self.base_manager.safe_execute_read_query(check_query, {})
+            
+            self.logger.info(f"Container count query results: {count_records}")
             
             if count_records and len(count_records) > 0:
                 container_count = count_records[0].get("container_count", 0)
+                self.logger.info(f"Found {container_count} lesson containers")
+                
                 if container_count > 1:
                     error_msg = "Multiple lesson containers found. There should only be one lesson container in the system."
                     self.logger.error(error_msg)
                     return dict_to_json({"error": error_msg})
+                elif container_count == 0:
+                    self.logger.info("No lesson containers found in the database")
+                    return dict_to_json({
+                        "status": "error",
+                        "error": f"Lesson container '{self.CONTAINER_NAME}' not found",
+                        "code": "container_not_found"
+                    })
             
             # Query to get container
             query = """
@@ -153,15 +166,19 @@ class LessonContainer:
             RETURN c
             """
             
+            self.logger.info(f"Executing container retrieval query for '{self.CONTAINER_NAME}'")
             # Execute query
             records = self.base_manager.safe_execute_read_query(
                 query, 
                 {"name": self.CONTAINER_NAME}
             )
             
+            self.logger.info(f"Container retrieval results: {records}")
+            
             if records and len(records) > 0:
                 container_node = records[0].get("c")
                 if container_node:
+                    self.logger.info(f"Found container node: {container_node}")
                     # Convert node to dictionary
                     container_dict = dict(container_node.items())
                     
@@ -170,13 +187,26 @@ class LessonContainer:
                         if hasattr(value, 'iso_format'):
                             container_dict[key] = value.iso_format()
                     
-                    return dict_to_json({
+                    self.logger.info(f"Processed container data: {container_dict}")
+                    
+                    # Create a success response with container data
+                    response = {
+                        "status": "success",
+                        "message": f"Found container '{self.CONTAINER_NAME}'",
                         "container": container_dict
-                    })
+                    }
+                    return dict_to_json(response)
+                else:
+                    self.logger.warning(f"Record returned but no 'c' field: {records}")
+            else:
+                self.logger.warning(f"No records returned for container query")
             
             # Container not found
+            self.logger.warning(f"Container '{self.CONTAINER_NAME}' not found")
             return dict_to_json({
-                "error": f"Lesson container '{self.CONTAINER_NAME}' not found"
+                "status": "error",
+                "error": f"Lesson container '{self.CONTAINER_NAME}' not found",
+                "code": "container_not_found"
             })
             
         except Exception as e:

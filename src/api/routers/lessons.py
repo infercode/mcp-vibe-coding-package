@@ -2,6 +2,7 @@ from typing import Dict, Any, Optional, List, Union
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, Field, validator, model_validator
 import json
+import datetime
 
 from src.graph_memory import GraphMemoryManager
 from ..dependencies import get_memory_manager
@@ -81,6 +82,7 @@ async def get_lesson_container(
     Get the lesson container details.
     
     This endpoint returns information about the primary lesson container.
+    If the container does not exist, it will return a 404 error.
     """
     try:
         # Ensure manager is initialized
@@ -89,7 +91,29 @@ async def get_lesson_container(
             
         # Execute the get_container operation
         result = memory.lesson_operation(operation_type="get_container")
-        return parse_response(result)
+        result_data = parse_response(result)
+        
+        # Check if the result indicates no container exists
+        if result_data.get("status") == "error" and result_data.get("code") == "container_not_found":
+            raise HTTPException(
+                status_code=404, 
+                detail={"message": "No lesson container found", "exists": False}
+            )
+        
+        # If we get here with a success status and container data, return it
+        if result_data.get("status") == "success" and result_data.get("exists") == True:
+            # Extract the container data from the nested structure if needed
+            if "data" in result_data and "container" in result_data["data"]:
+                return {
+                    "status": "success",
+                    "data": result_data["data"],
+                    "exists": True
+                }
+        
+        # Return the parsed response data
+        return result_data
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -105,19 +129,72 @@ async def list_lesson_containers(
     Args:
         limit: Maximum number of containers to return
         sort_by: Field to sort results by
+    
+    Returns:
+        JSON response with list of containers
     """
     try:
         # Ensure manager is initialized
         if not memory.check_connection():
             raise HTTPException(status_code=503, detail="Memory system not initialized")
-            
-        # Execute the list_containers operation
+        
+        # Execute the regular list_containers operation
         result = memory.lesson_operation(
             operation_type="list_containers",
             limit=limit,
             sort_by=sort_by
         )
-        return parse_response(result)
+        result_data = parse_response(result)
+        
+        # If we didn't get any containers, try to get the main container directly
+        found_containers = []
+        get_container_result = None
+        
+        if "containers" not in result_data or not result_data.get("containers"):
+            # Try to get the container directly
+            get_result = memory.lesson_operation(operation_type="get_container")
+            get_container_result = parse_response(get_result)
+            
+            # Check if we found a container
+            if (get_container_result.get("status") == "success" and 
+                "container" in str(get_container_result).lower()):
+                
+                # Extract the container data
+                container_data = None
+                
+                if "container" in get_container_result:
+                    container_data = get_container_result["container"]
+                elif "data" in get_container_result and "container" in get_container_result["data"]:
+                    container_data = get_container_result["data"]["container"]
+                
+                if container_data:
+                    found_containers = [container_data]
+        
+        # Also check the container exists endpoint
+        exists_result = memory.lesson_operation(
+            operation_type="container_exists",
+            container_name="Lessons"
+        )
+        exists_data = parse_response(exists_result)
+        
+        # Build a comprehensive response with all the information
+        containers = result_data.get("containers", []) or found_containers
+        
+        return {
+            "status": "success",
+            "containers": containers,
+            "count": len(containers),
+            "message": f"Found {len(containers)} containers",
+            "debug": {
+                "list_result": result_data,
+                "get_container_result": get_container_result,
+                "exists_result": exists_data,
+                "api_version": "1.0.0",
+                "timestamp": str(datetime.datetime.now())
+            }
+        }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -131,6 +208,9 @@ async def check_lesson_container_exists(
     
     Args:
         container_name: Name of the container to check
+    
+    Returns:
+        JSON response with existence status (exists: true/false)
     """
     try:
         # Ensure manager is initialized
@@ -142,7 +222,17 @@ async def check_lesson_container_exists(
             operation_type="container_exists",
             container_name=container_name
         )
-        return parse_response(result)
+        result_data = parse_response(result)
+        
+        # Always return a 200 OK for this endpoint, with exists: true/false in the body
+        return {
+            "status": "success",
+            "exists": result_data.get("exists", False),
+            "container_name": container_name,
+            "message": result_data.get("message", f"Container '{container_name}' existence check completed")
+        }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -624,6 +714,181 @@ async def bulk_lesson_operations(
             "status": "success",
             "message": f"Executed {len(results)} operations in lesson context for container {bulk.container_name or 'default'}",
             "results": results
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/debug/container_check", response_model=Dict[str, Any])
+async def debug_container_check(
+    memory: GraphMemoryManager = Depends(get_memory_manager)
+):
+    """
+    Directly check Neo4j for lesson containers - for debugging only.
+    """
+    try:
+        # Ensure manager is initialized
+        if not memory.check_connection():
+            raise HTTPException(status_code=503, detail="Memory system not initialized")
+            
+        # Direct Cypher query to check for containers
+        query = """
+        MATCH (c:LessonContainer)
+        RETURN c
+        """
+        
+        # Use query_knowledge_graph for direct database access
+        result = memory.query_knowledge_graph(query)
+        
+        # Parse the response
+        result_data = parse_response(result)
+        
+        # Add debug information
+        debug_info = {
+            "raw_query_result": json.dumps(result_data),
+            "check_time": str(datetime.datetime.now())
+        }
+        
+        # Check if we found any containers
+        records = result_data.get("records", [])
+        if records:
+            containers = []
+            for record in records:
+                if "c" in record:
+                    container_props = record["c"]
+                    containers.append(container_props)
+            
+            return {
+                "status": "success",
+                "containers_found": len(containers),
+                "containers": containers,
+                "debug": debug_info
+            }
+        else:
+            return {
+                "status": "success",
+                "containers_found": 0,
+                "message": "No containers found in Neo4j",
+                "debug": debug_info
+            }
+            
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/debug/create_container", response_model=Dict[str, Any])
+async def debug_create_container(
+    memory: GraphMemoryManager = Depends(get_memory_manager)
+):
+    """
+    Directly create a lesson container in Neo4j - for debugging only.
+    """
+    try:
+        # Ensure manager is initialized
+        if not memory.check_connection():
+            raise HTTPException(status_code=503, detail="Memory system not initialized")
+            
+        # Direct Cypher query to create a container
+        query = """
+        CREATE (c:LessonContainer {name: 'Lessons', description: 'Default lesson container', created: datetime()})
+        RETURN c
+        """
+        
+        # Use query_knowledge_graph for direct database access
+        result = memory.query_knowledge_graph(query)
+        
+        # Parse the response
+        result_data = parse_response(result)
+        
+        # Check if we created the container
+        records = result_data.get("records", [])
+        if records and len(records) > 0 and "c" in records[0]:
+            container = records[0]["c"]
+            return {
+                "status": "success",
+                "message": "Container created successfully",
+                "container": container
+            }
+        else:
+            return {
+                "status": "error",
+                "message": "Failed to create container",
+                "raw_result": result_data
+            }
+            
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/debug/direct_container_list", response_model=Dict[str, Any])
+async def debug_direct_container_list(
+    memory: GraphMemoryManager = Depends(get_memory_manager)
+):
+    """
+    Directly query Neo4j for lesson containers - for debugging.
+    """
+    try:
+        # Ensure manager is initialized
+        if not memory.check_connection():
+            raise HTTPException(status_code=503, detail="Memory system not initialized")
+            
+        # Direct Cypher query to list containers
+        query = """
+        MATCH (c:LessonContainer)
+        RETURN c
+        """
+        
+        # Use query_knowledge_graph for direct database access
+        result = memory.query_knowledge_graph(query)
+        result_data = parse_response(result)
+        
+        containers = []
+        
+        # Extract container data from records
+        if "records" in result_data and result_data["records"]:
+            for record in result_data["records"]:
+                if "c" in record:
+                    container_data = record["c"]
+                    containers.append(container_data)
+        
+        return {
+            "status": "success",
+            "message": f"Found {len(containers)} containers via direct query",
+            "containers": containers
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/debug/node_count", response_model=Dict[str, Any])
+async def debug_node_count(
+    memory: GraphMemoryManager = Depends(get_memory_manager)
+):
+    """
+    Get a count of all nodes in the database - for debugging.
+    """
+    try:
+        # Ensure manager is initialized
+        if not memory.check_connection():
+            raise HTTPException(status_code=503, detail="Memory system not initialized")
+            
+        # Direct Cypher query to count all nodes
+        query = """
+        MATCH (n)
+        RETURN count(n) as node_count, 
+               count(n:LessonContainer) as lesson_container_count,
+               count(n:Entity) as entity_count
+        """
+        
+        # Use query_knowledge_graph for direct database access
+        result = memory.query_knowledge_graph(query)
+        result_data = parse_response(result)
+        
+        # Extract the counts
+        counts = {}
+        if "records" in result_data and result_data["records"]:
+            counts = result_data["records"][0]
+            
+        return {
+            "status": "success", 
+            "message": "Database node counts",
+            "counts": counts
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) 

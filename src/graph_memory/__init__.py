@@ -2409,6 +2409,8 @@ class GraphMemoryManager:
         try:
             # Ensure lesson memory manager is available
             if not hasattr(self, "lesson_memory") or not self.lesson_memory:
+                if self.logger:
+                    self.logger.error("Lesson memory manager not initialized")
                 return json.dumps({
                     "status": "error",
                     "error": "Lesson memory manager not initialized",
@@ -2416,13 +2418,77 @@ class GraphMemoryManager:
                 })
                 
             # Call the get_lesson_container method
+            if self.logger:
+                self.logger.info("Calling get_lesson_container method")
+                
             result = self.lesson_memory.get_lesson_container()
             
-            # Handle different return types (future-proof)
+            if self.logger:
+                self.logger.info(f"Result from get_lesson_container: {result}")
+                
+            # Parse the result to handle when no container exists
             if isinstance(result, str):
-                return result
+                result_data = json.loads(result)
             else:
-                return json.dumps(result)
+                result_data = result
+                
+            if self.logger:
+                self.logger.info(f"Parsed result data: {result_data}")
+                
+            # Check if the result is empty or has null data (indicating no container)
+            if "error" in result_data:
+                # Check if this is actually a "not found" error or a real error
+                error_msg = result_data.get("error", "").lower()
+                if self.logger:
+                    self.logger.info(f"Error message in result: {error_msg}")
+                    
+                if "not found" in error_msg or "doesn't exist" in error_msg:
+                    # This is specifically a container not found error
+                    if self.logger:
+                        self.logger.info("Container not found based on error message")
+                    return json.dumps({
+                        "status": "error",
+                        "error": "No lesson container found",
+                        "code": "container_not_found",
+                        "exists": False
+                    })
+                else:
+                    # This is some other error
+                    if self.logger:
+                        self.logger.info(f"Other error detected: {error_msg}")
+                    return json.dumps({
+                        "status": "error",
+                        "error": result_data.get("error", "Unknown error"),
+                        "code": "container_error"
+                    })
+            elif result_data.get("container"):
+                # Container exists and has data
+                if self.logger:
+                    self.logger.info(f"Container found: {result_data.get('container')}")
+                return json.dumps({
+                    "status": "success",
+                    "data": result_data,
+                    "exists": True
+                })
+            elif result_data.get("status") == "success":
+                # Status is success but no container field
+                if self.logger:
+                    self.logger.info("Success status but no container field")
+                return json.dumps({
+                    "status": "success",
+                    "data": result_data,
+                    "exists": True
+                })
+            
+            # Handle empty or unexpected response format
+            if self.logger:
+                self.logger.warning(f"Unexpected response format: {result_data}")
+            return json.dumps({
+                "status": "error",
+                "error": "No lesson container found or unexpected response format",
+                "code": "container_not_found",
+                "exists": False
+            })
                 
         except Exception as e:
             if self.logger:
@@ -2448,6 +2514,8 @@ class GraphMemoryManager:
         try:
             # Ensure lesson memory manager is available
             if not hasattr(self, "lesson_memory") or not self.lesson_memory:
+                if self.logger:
+                    self.logger.error("Lesson memory manager not initialized")
                 return json.dumps({
                     "status": "error",
                     "error": "Lesson memory manager not initialized",
@@ -2457,11 +2525,53 @@ class GraphMemoryManager:
             # Call the list_lesson_containers method
             result = self.lesson_memory.list_lesson_containers(limit, sort_by)
             
-            # Handle different return types (future-proof)
+            if self.logger:
+                self.logger.info(f"Result from list_lesson_containers: {result}")
+                
+            # Parse the result 
+            if isinstance(result, str):
+                try:
+                    result_data = json.loads(result)
+                except json.JSONDecodeError:
+                    if self.logger:
+                        self.logger.error(f"Invalid JSON response: {result}")
+                    result_data = result
+            else:
+                result_data = result
+                
+            if self.logger:
+                self.logger.info(f"Parsed result data: {result_data}")
+                
+            # Process the result to ensure consistent response format
+            if isinstance(result_data, dict):
+                # Check if this is a success response
+                if result_data.get("status") == "success":
+                    # Extract containers from data field if present
+                    containers_data = result_data.get("data", {}).get("containers", [])
+                    
+                    # Return standardized response
+                    return json.dumps({
+                        "status": "success",
+                        "message": result_data.get("message", "Successfully listed containers"),
+                        "containers": containers_data
+                    }, default=str)
+                    
+                # Check if we have an error response
+                elif result_data.get("status") == "error" or "error" in result_data:
+                    error_msg = result_data.get("error", result_data.get("message", "Unknown error"))
+                    if self.logger:
+                        self.logger.error(f"Error in list containers response: {error_msg}")
+                    return json.dumps({
+                        "status": "error",
+                        "error": error_msg,
+                        "code": result_data.get("code", "container_list_error")
+                    })
+                    
+            # Fall back to returning the raw result if format is unexpected
             if isinstance(result, str):
                 return result
             else:
-                return json.dumps(result, default=str)
+                return json.dumps(result_data, default=str)
                 
         except Exception as e:
             if self.logger:
@@ -2491,9 +2601,35 @@ class GraphMemoryManager:
                     "error": "Lesson memory manager not initialized",
                     "code": "lesson_memory_not_initialized"
                 })
+            
+            # We'll try two approaches:
+            # 1. First, direct Cypher query to check for container existence
+            exists_query = """
+            MATCH (c:LessonContainer {name: $name})
+            RETURN count(c) > 0 as exists
+            """
+            
+            try:
+                # Direct database query to check container existence
+                records = self.lesson_memory.base_manager.safe_execute_read_query(
+                    exists_query,
+                    {"name": container_name}
+                )
                 
-            # Use get_lesson_container to check existence
-            # We need to parse the result to determine if the container exists
+                if records and len(records) > 0 and records[0].get("exists", False) is True:
+                    # Container exists based on direct query
+                    return json.dumps({
+                        "status": "success",
+                        "exists": True,
+                        "container_name": container_name,
+                        "message": f"Container '{container_name}' exists"
+                    })
+            except Exception as e:
+                # If this fails, we'll try the second approach
+                if self.logger:
+                    self.logger.warning(f"Direct query for container existence failed: {str(e)}")
+            
+            # 2. Fallback: Use get_lesson_container method to check existence
             result = self.lesson_memory.get_lesson_container()
             
             # Parse the result
@@ -2502,14 +2638,26 @@ class GraphMemoryManager:
             else:
                 result_data = result
                 
-            # Check if the result indicates an error or success
-            exists = "error" not in result_data
+            # Check for container existence
+            exists = False
+            
+            # First check if the status is success
+            if result_data.get("status") == "success":
+                exists = True
+            # Next look for container data
+            elif "container" in result_data:
+                exists = True
+            # Check if there's no explicit error about container not found
+            elif "error" in result_data:
+                error_msg = result_data.get("error", "").lower()
+                exists = not ("not found" in error_msg or "doesn't exist" in error_msg)
             
             # Return a standardized response
             return json.dumps({
                 "status": "success",
                 "exists": exists,
-                "container_name": container_name
+                "container_name": container_name,
+                "message": f"Container '{container_name}' {'exists' if exists else 'does not exist'}"
             })
                 
         except Exception as e:

@@ -108,9 +108,19 @@ class LessonMemoryManager:
             # Call the container component directly
             response_json = self.container.get_container()
             
-            # Parse the JSON response to a SuccessResponse model
-            response = parse_json_to_model(response_json, SuccessResponse)
-            return json.dumps(response.model_dump(), default=str)
+            # Process the result to ensure consistent format
+            # Parse the JSON response
+            if isinstance(response_json, str):
+                try:
+                    response_data = json.loads(response_json)
+                except json.JSONDecodeError:
+                    self.logger.error(f"Invalid JSON in container response: {response_json}")
+                    response_data = {"status": "error", "error": "Invalid JSON response"}
+            else:
+                response_data = response_json
+                
+            # Return the response, ensuring it has consistent format
+            return json.dumps(response_data, default=str)
             
         except Exception as e:
             self.logger.error(f"Error retrieving lesson container: {str(e)}")
@@ -123,6 +133,7 @@ class LessonMemoryManager:
             except TypeError:
                 # If JSON serialization fails due to non-serializable objects, use str
                 return json.dumps({
+                    "status": "error",
                     "error": f"Failed to retrieve lesson container: {str(e)}",
                     "code": "container_retrieval_error"
                 })
@@ -227,6 +238,7 @@ class LessonMemoryManager:
             LIMIT toInteger($limit)
             """.format(sort_by=sort_by)
             
+            self.logger.info(f"Executing container list query with limit={limit}, sort_by={sort_by}")
             records = self.base_manager.safe_execute_read_query(
                 query,
                 {"limit": str(limit)}
@@ -236,20 +248,28 @@ class LessonMemoryManager:
             for record in records:
                 if 'c' in record:
                     container = dict(record['c'].items())
+                    # Convert Neo4j DateTime objects to ISO format strings
+                    for key, value in container.items():
+                        if hasattr(value, 'iso_format'):
+                            container[key] = value.iso_format()
                     containers.append(container)
             
-            # Use the helper function from responses module
-            success_response = create_success_response(
-                message="Successfully retrieved lesson containers",
-                data={"containers": containers}
-            )
-            return success_response.model_dump()
+            self.logger.info(f"Found {len(containers)} containers")
+            
+            # Return a well-structured response manually
+            return {
+                "status": "success",
+                "message": "Successfully retrieved lesson containers",
+                "containers": containers,
+                "count": len(containers)
+            }
         except Exception as e:
             self.logger.error(f"Error listing containers: {str(e)}")
-            return create_error_response(
-                message=f"Failed to list containers: {str(e)}",
-                code="container_list_error"
-            ).model_dump()
+            return {
+                "status": "error",
+                "error": f"Failed to list containers: {str(e)}",
+                "code": "container_list_error"
+            }
     
     def add_entity_to_lesson_container(self, container_name: str, entity_name: str) -> Dict[str, Any]:
         """
