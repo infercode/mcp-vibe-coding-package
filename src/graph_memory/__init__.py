@@ -53,6 +53,30 @@ class LessonContext:
         self.lesson_memory = lesson_memory
         self.container_name = container_name or "Lessons"
     
+    def create_container(self, **kwargs) -> str:
+        """
+        Create a lesson container.
+        
+        Args:
+            **kwargs: Optional parameters
+                - description: Description of the container
+                - metadata: Additional metadata for the container
+        
+        Returns:
+            JSON response with created container
+        """
+        # Create the lesson container
+        result = self.lesson_memory.create_lesson_container(
+            description=kwargs.get("description"),
+            metadata=kwargs.get("metadata")
+        )
+        
+        # Ensure string return
+        if isinstance(result, str):
+            return result
+        else:
+            return json.dumps(result)
+    
     def create(self, name: str, lesson_type: str, **kwargs) -> str:
         """
         Create a lesson within this context.
@@ -227,6 +251,76 @@ class LessonContext:
         else:
             return json.dumps(result)
     
+    def consolidate(self, source_lessons: List[str], new_name: str, **kwargs) -> str:
+        """
+        Consolidate multiple lessons into a single lesson.
+        
+        Args:
+            source_lessons: List of lesson names or IDs to consolidate
+            new_name: Name for the new consolidated lesson
+            **kwargs: Additional parameters
+                - merge_strategy: Strategy for merging ('union', 'intersection', 'latest')
+        
+        Returns:
+            JSON response with consolidated lesson
+        """
+        # Set container context
+        kwargs.setdefault("container_name", self.container_name)
+        merge_strategy = kwargs.get("merge_strategy", "union")
+        
+        # Convert source_lessons to proper format if needed
+        if isinstance(source_lessons, str):
+            source_lessons = [source_lessons]
+                
+        processed_sources = []
+        for lesson in source_lessons:
+            if isinstance(lesson, dict):
+                processed_sources.append(lesson)
+            else:
+                processed_sources.append({"id": lesson})
+        
+        # Merge the lessons
+        result = self.lesson_memory.merge_lessons(
+            source_lessons=processed_sources,
+            new_name=new_name,
+            merge_strategy=merge_strategy,
+            container_name=kwargs.get("container_name")
+        )
+        
+        # Ensure string return
+        if isinstance(result, str):
+            return result
+        else:
+            return json.dumps(result)
+    
+    def evolve(self, old_lesson: str, new_lesson: str, **kwargs) -> str:
+        """
+        Track evolution of lesson knowledge when a new lesson supersedes an older one.
+        
+        Args:
+            old_lesson: Name of the lesson being superseded
+            new_lesson: Name of the new lesson
+            **kwargs: Additional parameters
+                - reason: Optional reason for the evolution
+        
+        Returns:
+            JSON response with relationship data
+        """
+        reason = kwargs.get("reason")
+        
+        # Track the supersession
+        result = self.lesson_memory.track_lesson_supersession(
+            old_lesson=old_lesson,
+            new_lesson=new_lesson,
+            reason=reason
+        )
+        
+        # Ensure string return
+        if isinstance(result, str):
+            return result
+        else:
+            return json.dumps(result)
+    
     def update(self, entity_name: str, updates: Dict[str, Any]) -> str:
         """
         Update a lesson entity within this context.
@@ -358,6 +452,50 @@ class ProjectContext:
         else:
             return json.dumps(result)
     
+    def create_domain_entity(self, name: str, entity_type: str, **kwargs) -> str:
+        """
+        Create a domain entity within this project context.
+        
+        Args:
+            name: Name of the entity
+            entity_type: Type of entity (DECISION, REQUIREMENT, CONSTRAINT, etc.)
+            **kwargs: Additional parameters
+                - domain_name: Name of the domain (required)
+                - description: Optional description of the entity
+                - properties: Optional dictionary of properties
+        
+        Returns:
+            JSON response with created entity
+        """
+        # Extract optional parameters
+        domain_name = kwargs.pop("domain_name", None)
+        description = kwargs.pop("description", None)
+        properties = kwargs.pop("properties", None)
+        
+        # Domain name is required for domain entities
+        if not domain_name:
+            error_msg = "Missing domain_name for domain entity creation"
+            return json.dumps({
+                "status": "error",
+                "error": error_msg,
+                "code": "missing_domain_name"
+            })
+        
+        # Create the domain entity
+        result = self.project_memory.add_entity_to_project_domain(
+            entity_name=name,
+            entity_type=entity_type,
+            domain_name=domain_name,
+            container_name=self.project_name,
+            properties=properties or {"description": description} if description else None
+        )
+        
+        # Ensure string return
+        if isinstance(result, str):
+            return result
+        else:
+            return json.dumps(result)
+    
     def relate(self, source_name: str, target_name: str, relation_type: str, **kwargs) -> str:
         """
         Create a relationship between entities within this project context.
@@ -365,61 +503,90 @@ class ProjectContext:
         Args:
             source_name: Name of the source entity
             target_name: Name of the target entity
-            relation_type: Type of relationship
-            **kwargs: Additional parameters including entity_type and domain_name
-        
+            relation_type: Type of relationship to create
+              - DEPENDS_ON: Dependency relationship
+              - IMPLEMENTS: Implementation relationship
+              - CONTAINS: Containment relationship
+              - USES: Usage relationship
+              - EXTENDS: Extension relationship
+            **kwargs: Additional parameters
+                 
         Returns:
-            JSON response with relationship data
+            JSON response with operation results
+            
+        Required parameters:
+            - source_name: Source entity identifier
+            - target_name: Target entity identifier
+            - relation_type: Type of relationship
+            
+        Optional parameters:
+            - domain_name: Domain name if entities are in the same domain
+            - entity_type: Type of entities ('component', 'domain', 'dependency')
+            - properties: Dictionary with additional relationship attributes
+            
+        Response format:
+            All operations return a JSON string with at minimum:
+            - status: "success" or "error"
+            - message or error: Description of result or error
+            - relationship: Relationship data if successful
         """
-        # Extract optional parameters with defaults
-        entity_type = kwargs.pop("entity_type", "component").lower()
-        domain_name = kwargs.pop("domain_name", None)
-        properties = kwargs.pop("properties", None)
-        
-        # Determine which relationship creation method to use based on entity_type
-        if entity_type == "domain":
-            # Create relationship between domains
-            result = self.project_memory.create_project_domain_relationship(
-                from_domain=source_name,
-                to_domain=target_name,
-                container_name=self.project_name,
-                relation_type=relation_type,
-                properties=properties
-            )
-        elif entity_type == "component" and domain_name:
-            # Create relationship between components in the same domain
-            result = self.project_memory.create_project_component_relationship(
-                from_component=source_name,
-                to_component=target_name,
-                domain_name=domain_name,
-                container_name=self.project_name,
-                relation_type=relation_type,
-                properties=properties
-            )
-        elif entity_type == "dependency" and domain_name:
-            # Create a dependency relationship between components
-            result = self.project_memory.create_project_dependency(
-                from_component=source_name,
-                to_component=target_name,
-                domain_name=domain_name,
-                container_name=self.project_name,
-                dependency_type=relation_type,
-                properties=properties
-            )
-        else:
-            # Handle unsupported entity type or missing domain_name
-            error_msg = "Unsupported entity type or missing domain_name"
+        try:
+            # Extract optional parameters with defaults
+            entity_type = kwargs.pop("entity_type", "component").lower()
+            domain_name = kwargs.pop("domain_name", None)
+            properties = kwargs.pop("properties", None)
+            
+            # Determine which relationship creation method to use based on entity_type
+            if entity_type == "domain":
+                # Create relationship between domains
+                result = self.project_memory.create_project_domain_relationship(
+                    from_domain=source_name,
+                    to_domain=target_name,
+                    container_name=self.project_name,
+                    relation_type=relation_type,
+                    properties=properties
+                )
+            elif entity_type == "component" and domain_name:
+                # Create relationship between components in the same domain
+                result = self.project_memory.create_project_component_relationship(
+                    from_component=source_name,
+                    to_component=target_name,
+                    domain_name=domain_name,
+                    container_name=self.project_name,
+                    relation_type=relation_type,
+                    properties=properties
+                )
+            elif entity_type == "dependency" and domain_name:
+                # Create a dependency relationship between components
+                result = self.project_memory.create_project_dependency(
+                    from_component=source_name,
+                    to_component=target_name,
+                    domain_name=domain_name,
+                    container_name=self.project_name,
+                    dependency_type=relation_type,
+                    properties=properties
+                )
+            else:
+                # Handle unsupported entity type or missing domain_name
+                error_msg = "Unsupported entity type or missing domain_name"
+                return json.dumps({
+                    "status": "error",
+                    "error": error_msg,
+                    "code": "invalid_entity_type"
+                })
+            
+            # Ensure string return
+            if isinstance(result, str):
+                return result
+            else:
+                return json.dumps(result)
+                
+        except Exception as e:
             return json.dumps({
                 "status": "error",
-                "error": error_msg,
-                "code": "invalid_entity_type"
+                "error": f"Failed to create entity relationship: {str(e)}",
+                "code": "relationship_creation_error"
             })
-        
-        # Ensure string return
-        if isinstance(result, str):
-            return result
-        else:
-            return json.dumps(result)
     
     def search(self, query: str, **kwargs) -> str:
         """
@@ -595,6 +762,94 @@ class ProjectContext:
                 "error": error_msg,
                 "code": "invalid_update_parameters"
             })
+        
+        # Ensure string return
+        if isinstance(result, str):
+            return result
+        else:
+            return json.dumps(result)
+    
+    def delete_entity(self, entity_name: str, **kwargs) -> str:
+        """
+        Delete an entity within this project context.
+        
+        Args:
+            entity_name: Name of the entity to delete
+            **kwargs: Additional parameters
+                - entity_type: Type of entity (project, domain, component, observation)
+                - domain_name: Domain name (required for components)
+                - delete_contents: Whether to delete contained entities (default: False)
+                - observation_id: ID of observation to delete (for observation entity_type)
+        
+        Returns:
+            JSON response with deletion result
+        """
+        # Extract optional parameters with defaults
+        entity_type = kwargs.pop("entity_type", "component").lower()
+        domain_name = kwargs.pop("domain_name", None)
+        delete_contents = kwargs.pop("delete_contents", False)
+        observation_id = kwargs.pop("observation_id", None)
+        
+        # Build deletion parameters
+        delete_params = {
+            "entity_name": entity_name,
+            "entity_type": entity_type
+        }
+        
+        # Add container name for all operations
+        delete_params["container_name"] = self.project_name
+        
+        # Add optional parameters if provided
+        if domain_name:
+            delete_params["domain_name"] = domain_name
+        if delete_contents:
+            delete_params["delete_contents"] = delete_contents
+        if observation_id:
+            delete_params["observation_id"] = observation_id
+            
+        # Use the appropriate deletion method
+        result = self.project_memory.delete_entity(entity_name, entity_type=entity_type, **kwargs)
+        
+        # Ensure string return
+        if isinstance(result, str):
+            return result
+        else:
+            return json.dumps(result)
+    
+    def delete_relationship(self, source_name: str, target_name: str, relationship_type: str, **kwargs) -> str:
+        """
+        Delete a relationship between entities within this project context.
+        
+        Args:
+            source_name: Name of the source entity
+            target_name: Name of the target entity
+            relationship_type: Type of relationship to delete
+            **kwargs: Additional parameters
+                - domain_name: Domain name (required for component relationships)
+        
+        Returns:
+            JSON response with deletion result
+        """
+        # Extract optional parameters with defaults
+        domain_name = kwargs.pop("domain_name", None)
+        
+        # For dependencies and component relationships, domain name is required
+        if not domain_name:
+            error_msg = "Missing domain_name for relationship deletion"
+            return json.dumps({
+                "status": "error",
+                "error": error_msg,
+                "code": "missing_domain_name"
+            })
+            
+        # Delete the relationship
+        result = self.project_memory.delete_project_dependency(
+            from_component=source_name,
+            to_component=target_name,
+            domain_name=domain_name,
+            container_name=self.project_name,
+            dependency_type=relationship_type
+        )
         
         # Ensure string return
         if isinstance(result, str):
@@ -1507,6 +1762,7 @@ class GraphMemoryManager:
         Args:
             operation_type: The type of operation to perform
               - create: Create a new lesson
+              - create_container: Create a lesson container
               - observe: Add structured observations to a lesson
               - relate: Create relationships between lessons
               - search: Find relevant lessons
@@ -1521,6 +1777,7 @@ class GraphMemoryManager:
             
         Required parameters by operation_type:
             - create: name (str), lesson_type (str), container_name (str, optional)
+            - create_container: description (str, optional), metadata (dict, optional)
             - observe: entity_name (str), what_was_learned (str), why_it_matters (str), how_to_apply (str), container_name (str, optional), confidence (float, optional)
             - relate: source_name (str), target_name (str), relationship_type (str), container_name (str, optional)
             - search: query (str), limit (int, optional), container_name (str, optional)
@@ -1536,6 +1793,13 @@ class GraphMemoryManager:
 
         Examples:
             ```
+            # Create a new lesson container
+            @lesson_memory_tool({
+                "operation_type": "create_container",
+                "description": "Container for React-related lessons",
+                "metadata": {"category": "frontend", "framework": "react"}
+            })
+            
             # Create a new lesson
             @lesson_memory_tool({
                 "operation_type": "create",
@@ -1587,6 +1851,7 @@ class GraphMemoryManager:
         
         operations = {
             "create": self._handle_lesson_creation,
+            "create_container": self._handle_lesson_container_creation,
             "observe": self._handle_lesson_observation,
             "relate": self._handle_lesson_relationship,
             "search": self._handle_lesson_search,
@@ -1611,6 +1876,44 @@ class GraphMemoryManager:
                 "status": "error", 
                 "error": f"Operation failed: {str(e)}", 
                 "code": "operation_error"
+            })
+    
+    def _handle_lesson_container_creation(self, **kwargs) -> str:
+        """
+        Handle creation of a lesson container.
+        
+        Args:
+            **kwargs: Additional parameters
+                - description: Optional description of the container
+                - metadata: Optional metadata dictionary for the container
+        
+        Returns:
+            JSON response string with created container data
+        """
+        try:
+            # Extract optional parameters
+            description = kwargs.pop("description", None)
+            metadata = kwargs.pop("metadata", None)
+            
+            # Create the container - ensure string return type
+            result = self.lesson_memory.create_lesson_container(
+                description=description,
+                metadata=metadata
+            )
+            
+            # Handle different return types (future-proof)
+            if isinstance(result, str):
+                return result
+            else:
+                return json.dumps(result)
+            
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"Error creating lesson container: {str(e)}")
+            return json.dumps({
+                "status": "error",
+                "error": f"Failed to create lesson container: {str(e)}",
+                "code": "container_creation_error"
             })
     
     def _handle_lesson_creation(self, name: str, lesson_type: str, **kwargs) -> str:
@@ -2012,7 +2315,7 @@ class GraphMemoryManager:
                     "project_name": "ProjectName",
                     "container_name": "ContainerName",
                     "created_at": "2023-07-15T10:30:45.123456",
-                    "operations_available": ["create", "observe", "relate", "search", "track", "update", "consolidate", "evolve"],
+                    "operations_available": ["create_container", "create", "observe", "relate", "search", "track", "update", "consolidate", "evolve"],
                     "usage": "Use this context information with any lesson memory operation by including it in the operation's context parameter"
                 }
             }
