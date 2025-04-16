@@ -1,6 +1,7 @@
 from typing import List, Optional, Dict, Any, Union
 from fastapi import FastAPI, HTTPException, Depends
 from pydantic import BaseModel, Field
+from contextlib import asynccontextmanager
 from src.graph_memory import GraphMemoryManager
 from src.logger import get_logger, LogLevel
 from src.api.config import Settings, get_settings
@@ -10,16 +11,26 @@ from .routers import core, relations, observations, search, projects, lessons
 # Initialize settings
 settings = get_settings()
 
-# Initialize FastAPI app
+# Initialize logger first so we can use it in lifespan
+logger = get_logger()
+logger.set_level(LogLevel.DEBUG)
+
+# @asynccontextmanager
+# async def lifespan(app: FastAPI):
+#     # Startup: Log documentation URLs
+#     host = settings.host if settings.host != "0.0.0.0" else "localhost"
+#     logger.info(f"API Documentation available at: http://{host}:{settings.port}/docs")
+#     logger.info(f"Alternative ReDoc documentation: http://{host}:{settings.port}/redoc")
+#     yield
+#     # Shutdown events - nothing to do here
+
+# Initialize FastAPI app with lifespan
 app = FastAPI(
     title=settings.api_title,
     description=settings.api_description,
-    version=settings.api_version
+    version=settings.api_version,
+    # lifespan=lifespan
 )
-
-# Initialize logger
-logger = get_logger()
-logger.set_level(LogLevel.DEBUG)
 
 # Models for request/response
 class Entity(BaseModel):
@@ -90,4 +101,4 @@ if __name__ == "__main__":
         app,
         host=settings.host,
         port=settings.port
-    ) 
+    )

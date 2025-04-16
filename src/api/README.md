@@ -60,7 +60,7 @@ EMBEDDING_API_KEY=your_api_key_here
 4. **Run the API**
 
 ```bash
-uv run src.api.main
+uv run uvicorn src.api.main:app
 ```
 
 The API will be available at `http://localhost:8000`.
