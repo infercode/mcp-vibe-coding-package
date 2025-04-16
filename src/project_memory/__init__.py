@@ -18,7 +18,8 @@ from src.project_memory.project_container import ProjectContainer
 from src.models.responses import SuccessResponse, create_error_response, create_success_response
 from src.models.project_memory import (
     ProjectContainerCreate, ProjectContainerUpdate, ComponentCreate, 
-    ComponentUpdate, DomainEntityCreate, RelationshipCreate, SearchQuery
+    ComponentUpdate, DomainEntityCreate, RelationshipCreate, SearchQuery, VersionCreate, VersionGetRequest,
+    VersionCompareRequest, TagCreate, SyncRequest, CommitData
 )
 from src.graph_memory.search_manager import SearchManager
 
@@ -97,65 +98,49 @@ class ProjectMemoryManager:
                     description: Optional[str] = None,
                     properties: Optional[Dict[str, Any]] = None) -> str:
         """
-        Create a new domain within a project container.
+        Create a new project domain.
         
         Args:
             name: Name of the domain
             container_name: Name of the project container
-            description: Optional description of the domain
-            properties: Optional additional properties
+            description: Optional. Description of the domain
+            properties: Optional. Additional properties for the domain
             
         Returns:
             JSON string with the created domain
         """
         try:
-            # Create domain data dictionary from parameters and validate with Pydantic
-            domain_data: Dict[str, Any] = {
-                "name": name,
-                "entity_type": "Domain",
-                "project_id": container_name,
-                "description": description
-            }
-            
-            # Add optional parameters if provided
-            if properties:
-                domain_data["metadata"] = properties
-                
-            # Validate domain data using DomainEntityCreate model
+            # Validate parameters using Pydantic model
             try:
+                domain_data = {
+                    "name": name,
+                    "project_id": container_name,
+                    "description": description,
+                    "metadata": properties
+                }
                 domain_model = DomainEntityCreate(**domain_data)
                 validated_data = domain_model.model_dump()
             except Exception as ve:
-                self.logger.error(f"Validation error for domain creation: {str(ve)}")
+                self.logger.error(f"Validation error for domain: {str(ve)}")
                 return json.dumps(create_error_response(
                     message=f"Invalid domain data: {str(ve)}",
                     code="validation_error"
                 ).model_dump(), default=str)
             
             # Call the domain manager with validated parameters
-            result = self.domain_manager.create_domain(
-                name=validated_data["name"],
-                container_name=container_name,
-                description=validated_data.get("description"),
-                properties=validated_data.get("metadata")
-            )
+            result = self.domain_manager.create_domain(domain_model)
             
             # Parse the result
             result_data = json.loads(result)
             
-            # Check for errors
             if "error" in result_data:
-                return json.dumps(create_error_response(
-                    message=result_data["error"],
-                    code="domain_creation_error"
-                ).model_dump(), default=str)
-            
-            # Return standardized success response
-            return json.dumps(create_success_response(
-                message=f"Successfully created domain '{name}' in project '{container_name}'",
-                data=result_data
-            ).model_dump(), default=str)
-            
+                return result
+                
+            return self._standardize_response(
+                result,
+                f"Successfully created domain '{name}' in project '{container_name}'",
+                "domain_creation_error"
+            )
         except Exception as e:
             self.logger.error(f"Error creating project domain: {str(e)}")
             return json.dumps(create_error_response(
@@ -362,69 +347,31 @@ class ProjectMemoryManager:
                                 container_name: str, relation_type: str,
                                 properties: Optional[Dict[str, Any]] = None) -> str:
         """
-        Create a relationship between two domains.
+        Create a relationship between two project domains.
         
         Args:
             from_domain: Name of the source domain
             to_domain: Name of the target domain
             container_name: Name of the project container
             relation_type: Type of relationship
-            properties: Optional properties for the relationship
+            properties: Optional. Additional properties for the relationship
             
         Returns:
-            JSON string with the result
+            JSON string with the created relationship
         """
         try:
-            # First get the domain IDs from their names
-            from_domain_query = """
-            MATCH (d:Entity {name: $domain_name, entityType: 'Domain'})
-            MATCH (c:Entity {name: $container_name, entityType: 'ProjectContainer'})
-            WHERE (d)-[:PART_OF]->(c)
-            RETURN d.id as domain_id
-            """
-            
-            from_records = self.base_manager.safe_execute_read_query(
-                from_domain_query,
-                {"domain_name": from_domain, "container_name": container_name}
-            )
-            
-            if not from_records or len(from_records) == 0:
-                return json.dumps(create_error_response(
-                    message=f"Source domain '{from_domain}' not found in project '{container_name}'",
-                    code="domain_not_found"
-                ).model_dump(), default=str)
-            
-            to_records = self.base_manager.safe_execute_read_query(
-                from_domain_query,  # Reuse the same query
-                {"domain_name": to_domain, "container_name": container_name}
-            )
-            
-            if not to_records or len(to_records) == 0:
-                return json.dumps(create_error_response(
-                    message=f"Target domain '{to_domain}' not found in project '{container_name}'",
-                    code="domain_not_found"
-                ).model_dump(), default=str)
-            
-            # Get domain IDs
-            from_domain_id = from_records[0]["domain_id"]
-            to_domain_id = to_records[0]["domain_id"]
-            
-            # Prepare relationship data
-            relationship_data = {
-                "source_id": from_domain_id,
-                "target_id": to_domain_id,
-                "relationship_type": relation_type
-            }
-            
-            if properties:
-                relationship_data["properties"] = properties
-            
-            # Validate relationship data using RelationshipCreate model
+            # Validate relationship data using Pydantic model
             try:
+                relationship_data = {
+                    "source_id": from_domain,
+                    "target_id": to_domain,
+                    "relationship_type": relation_type,
+                    "properties": properties
+                }
                 relationship_model = RelationshipCreate(**relationship_data)
                 validated_data = relationship_model.model_dump()
             except Exception as ve:
-                self.logger.error(f"Validation error for relationship creation: {str(ve)}")
+                self.logger.error(f"Validation error for domain relationship: {str(ve)}")
                 return json.dumps(create_error_response(
                     message=f"Invalid relationship data: {str(ve)}",
                     code="validation_error"
@@ -432,11 +379,8 @@ class ProjectMemoryManager:
             
             # Now proceed with the domain manager call
             result = self.domain_manager.create_domain_relationship(
-                from_domain=from_domain,
-                to_domain=to_domain,
-                container_name=container_name,
-                relation_type=validated_data["relationship_type"],
-                properties=validated_data.get("properties")
+                relationship=relationship_model,
+                container_name=container_name
             )
             
             return self._standardize_response(
@@ -461,55 +405,42 @@ class ProjectMemoryManager:
                       content: Optional[str] = None,
                       metadata: Optional[Dict[str, Any]] = None) -> str:
         """
-        Create a new project component within a domain.
+        Create a new project component.
         
         Args:
             name: Name of the component
-            component_type: Type of the component (e.g. 'File', 'Feature', 'Module')
+            component_type: Type of component (e.g., 'SERVICE', 'MODULE')
             domain_name: Name of the domain
             container_name: Name of the project container
-            description: Optional description of the component
-            content: Optional content of the component
-            metadata: Optional additional metadata
+            description: Optional. Description of the component
+            content: Optional. Content or code associated with the component
+            metadata: Optional. Additional metadata for the component
             
         Returns:
             JSON string with the created component
         """
         try:
-            # Create component data dictionary from parameters
-            component_data: Dict[str, Any] = {
-                "name": name,
-                "type": component_type,
-                "project_id": container_name
-            }
-            
-            # Add optional parameters if provided
-            if description:
-                component_data["description"] = description
-            if metadata:
-                component_data["metadata"] = metadata
-                
             # Validate component data using Pydantic model
             try:
+                component_data = {
+                    "name": name,
+                    "type": component_type,  # Note: component_manager expects 'type', not 'component_type'
+                    "description": description,
+                    "metadata": metadata
+                }
                 component_model = ComponentCreate(**component_data)
-                validated_data = component_model.model_dump()
             except Exception as ve:
-                self.logger.error(f"Validation error for component creation: {str(ve)}")
+                self.logger.error(f"Validation error for component: {str(ve)}")
                 return json.dumps(create_error_response(
                     message=f"Invalid component data: {str(ve)}",
                     code="validation_error"
                 ).model_dump(), default=str)
             
             # Call the component manager with validated parameters
-            # Note: Content is not in the ComponentCreate model, so pass it separately
             result = self.component_manager.create_component(
-                name=validated_data["name"],  # str
-                component_type=validated_data["type"],  # str
-                domain_name=domain_name,  # str
-                container_name=container_name,  # str
-                description=validated_data.get("description"),  # Optional[str]
-                content=content,  # Optional[str]
-                metadata=metadata  # Use the original metadata dict instead of the Metadata model
+                component=component_model,
+                domain_name=domain_name,
+                container_name=container_name
             )
             
             return self._standardize_response(
@@ -555,64 +486,39 @@ class ProjectMemoryManager:
     
     def update_project_component(self, name: str, container_name: str, updates: Dict[str, Any], domain_name: Optional[str] = None) -> str:
         """
-        Update a component's properties.
+        Update a project component.
         
         Args:
-            name: Name of the component
+            name: Name of the component to update
             container_name: Name of the project container
-            updates: Dictionary of properties to update
-            domain_name: Optional name of the domain (for compatibility with previous API)
+            updates: Dictionary with updates to apply
+            domain_name: Optional. Name of the domain
             
         Returns:
             JSON string with the updated component
         """
         try:
-            # First get the project container to find its ID
-            project_result = self.project_container.get_project_container(container_name)
-            project_data = json.loads(project_result)
-            
-            if "error" in project_data:
+            # Validate updates using Pydantic model
+            try:
+                # Construct the update model
+                component_update = ComponentUpdate(**updates)
+                validated_updates = component_update.model_dump()
+            except Exception as ve:
+                self.logger.error(f"Validation error for component update: {str(ve)}")
                 return json.dumps(create_error_response(
-                    message=project_data["error"],
-                    code="container_not_found"
+                    message=f"Invalid update data: {str(ve)}",
+                    code="validation_error"
                 ).model_dump(), default=str)
             
-            project_id = project_data["container"]["id"]
-            
-            # Get the component using component_manager.list_components
-            # This matches the test expectation by using this method in test_update_component
-            components_result = self.component_manager.list_components(
-                domain_name="" if domain_name is None else domain_name, 
-                container_name=container_name
-            )
-            components_data = json.loads(components_result)
-            
-            if "error" in components_data:
-                return json.dumps(create_error_response(
-                    message=components_data["error"],
-                    code="component_list_error"
-                ).model_dump(), default=str)
-                
-            # Find the component by name in the list of components
-            component_found = False
-            component_id = None
-            for component in components_data.get("components", []):
-                if component.get("name") == name:
-                    component_found = True
-                    component_id = component.get("id")
-                    break
-                
-            if not component_found:
-                error_msg = f"Component '{name}' not found in {'domain ' + domain_name + ' of ' if domain_name else ''}project '{container_name}'"
-                return json.dumps(create_error_response(
-                    message=error_msg,
-                    code="component_not_found"
-                ).model_dump(), default=str)
-            
-            # Use component_manager.update_component with appropriate parameters
             # Pass an empty string when domain_name is None to maintain compatibility with the API
             domain_name_to_use = domain_name if domain_name else ""
-            update_result = self.component_manager.update_component(name, domain_name_to_use, container_name, updates)
+            
+            # Use the proper structure for the update_component call
+            update_result = self.component_manager.update_component(
+                component_update=component_update,
+                domain_name=domain_name_to_use, 
+                container_name=container_name
+            )
             
             return self._standardize_response(
                 update_result,
@@ -844,7 +750,7 @@ class ProjectMemoryManager:
                                    relation_type: str,
                                    properties: Optional[Dict[str, Any]] = None) -> str:
         """
-        Create a relationship between two components in a domain.
+        Create a relationship between two project components.
         
         Args:
             from_component: Name of the source component
@@ -852,63 +758,24 @@ class ProjectMemoryManager:
             domain_name: Name of the domain
             container_name: Name of the project container
             relation_type: Type of relationship
-            properties: Optional properties for the relationship
+            properties: Optional. Additional properties for the relationship
             
         Returns:
-            JSON string with the result
+            JSON string with the created relationship
         """
         try:
-            # First get the component IDs from their names
-            component_query = """
-            MATCH (comp:Entity {name: $component_name})
-            MATCH (d:Entity {name: $domain_name, entityType: 'Domain'})
-            MATCH (c:Entity {name: $container_name, entityType: 'ProjectContainer'})
-            WHERE (comp)-[:BELONGS_TO]->(d) AND (d)-[:PART_OF]->(c)
-            RETURN comp.id as component_id
-            """
-            
-            from_records = self.base_manager.safe_execute_read_query(
-                component_query,
-                {"component_name": from_component, "domain_name": domain_name, "container_name": container_name}
-            )
-            
-            if not from_records or len(from_records) == 0:
-                return json.dumps(create_error_response(
-                    message=f"Source component '{from_component}' not found in domain '{domain_name}'",
-                    code="component_not_found"
-                ).model_dump(), default=str)
-            
-            to_records = self.base_manager.safe_execute_read_query(
-                component_query,  # Reuse the same query
-                {"component_name": to_component, "domain_name": domain_name, "container_name": container_name}
-            )
-            
-            if not to_records or len(to_records) == 0:
-                return json.dumps(create_error_response(
-                    message=f"Target component '{to_component}' not found in domain '{domain_name}'",
-                    code="component_not_found"
-                ).model_dump(), default=str)
-            
-            # Get component IDs
-            from_component_id = from_records[0]["component_id"]
-            to_component_id = to_records[0]["component_id"]
-            
-            # Prepare relationship data
-            relationship_data = {
-                "source_id": from_component_id,
-                "target_id": to_component_id,
-                "relationship_type": relation_type
-            }
-            
-            if properties:
-                relationship_data["properties"] = properties
-                
-            # Validate relationship data using RelationshipCreate model
+            # Validate relationship data using Pydantic model
             try:
+                relationship_data = {
+                    "source_id": from_component,
+                    "target_id": to_component,
+                    "relationship_type": relation_type,
+                    "properties": properties
+                }
                 relationship_model = RelationshipCreate(**relationship_data)
                 validated_data = relationship_model.model_dump()
             except Exception as ve:
-                self.logger.error(f"Validation error for relationship creation: {str(ve)}")
+                self.logger.error(f"Validation error for component relationship: {str(ve)}")
                 return json.dumps(create_error_response(
                     message=f"Invalid relationship data: {str(ve)}",
                     code="validation_error"
@@ -916,12 +783,9 @@ class ProjectMemoryManager:
             
             # Now proceed with the component manager call
             result = self.component_manager.create_component_relationship(
-                from_component=from_component,
-                to_component=to_component,
+                relationship=relationship_model,
                 domain_name=domain_name,
-                container_name=container_name,
-                relation_type=validated_data["relationship_type"],
-                properties=validated_data.get("properties")
+                container_name=container_name
             )
             
             return self._standardize_response(
@@ -945,71 +809,32 @@ class ProjectMemoryManager:
                        dependency_type: str,
                        properties: Optional[Dict[str, Any]] = None) -> str:
         """
-        Create a dependency relationship between two components.
+        Create a dependency relationship between two project components.
         
         Args:
-            from_component: Name of the dependent component
-            to_component: Name of the dependency component
+            from_component: Name of the source component
+            to_component: Name of the target component
             domain_name: Name of the domain
             container_name: Name of the project container
-            dependency_type: Type of dependency (DEPENDS_ON, IMPORTS, USES, etc.)
-            properties: Optional properties for the dependency
+            dependency_type: Type of dependency
+            properties: Optional. Additional properties for the dependency
             
         Returns:
-            JSON string with the result
+            JSON string with the created dependency
         """
         try:
-            # First get the component IDs from their names
-            component_query = """
-            MATCH (comp:Entity {name: $component_name})
-            MATCH (d:Entity {name: $domain_name, entityType: 'Domain'})
-            MATCH (c:Entity {name: $container_name, entityType: 'ProjectContainer'})
-            WHERE (comp)-[:BELONGS_TO]->(d) AND (d)-[:PART_OF]->(c)
-            RETURN comp.id as component_id
-            """
-            
-            from_records = self.base_manager.safe_execute_read_query(
-                component_query,
-                {"component_name": from_component, "domain_name": domain_name, "container_name": container_name}
-            )
-            
-            if not from_records or len(from_records) == 0:
-                return json.dumps(create_error_response(
-                    message=f"Source component '{from_component}' not found in domain '{domain_name}'",
-                    code="component_not_found"
-                ).model_dump(), default=str)
-            
-            to_records = self.base_manager.safe_execute_read_query(
-                component_query,  # Reuse the same query
-                {"component_name": to_component, "domain_name": domain_name, "container_name": container_name}
-            )
-            
-            if not to_records or len(to_records) == 0:
-                return json.dumps(create_error_response(
-                    message=f"Target component '{to_component}' not found in domain '{domain_name}'",
-                    code="component_not_found"
-                ).model_dump(), default=str)
-            
-            # Get component IDs
-            from_component_id = from_records[0]["component_id"]
-            to_component_id = to_records[0]["component_id"]
-            
-            # Prepare relationship data
-            relationship_data = {
-                "source_id": from_component_id,
-                "target_id": to_component_id,
-                "relationship_type": dependency_type
-            }
-            
-            if properties:
-                relationship_data["properties"] = properties
-                
-            # Validate relationship data using RelationshipCreate model
+            # Validate relationship data using Pydantic model
             try:
+                relationship_data = {
+                    "source_id": from_component,
+                    "target_id": to_component,
+                    "relationship_type": dependency_type,
+                    "properties": properties
+                }
                 relationship_model = RelationshipCreate(**relationship_data)
                 validated_data = relationship_model.model_dump()
             except Exception as ve:
-                self.logger.error(f"Validation error for dependency creation: {str(ve)}")
+                self.logger.error(f"Validation error for dependency relationship: {str(ve)}")
                 return json.dumps(create_error_response(
                     message=f"Invalid dependency data: {str(ve)}",
                     code="validation_error"
@@ -1017,12 +842,9 @@ class ProjectMemoryManager:
             
             # Now proceed with the dependency manager call
             result = self.dependency_manager.create_dependency(
-                from_component=from_component,
-                to_component=to_component,
+                relationship=relationship_model,
                 domain_name=domain_name,
-                container_name=container_name,
-                dependency_type=validated_data["relationship_type"],
-                properties=validated_data.get("properties")
+                container_name=container_name
             )
             
             return self._standardize_response(
@@ -1353,99 +1175,52 @@ class ProjectMemoryManager:
                     changes: Optional[str] = None,
                     metadata: Optional[Dict[str, Any]] = None) -> str:
         """
-        Create a new version for a component.
+        Create a new version for a project component.
         
         Args:
             component_name: Name of the component
             domain_name: Name of the domain
             container_name: Name of the project container
-            version_number: Version number (e.g., '1.0.0')
-            commit_hash: Optional commit hash from version control
-            content: Optional content of the component at this version
-            changes: Optional description of changes from previous version
-            metadata: Optional additional metadata
+            version_number: Version number (e.g., "1.0.0")
+            commit_hash: Optional. Associated commit hash
+            content: Optional. Content of this version
+            changes: Optional. Description of changes in this version
+            metadata: Optional. Additional metadata for the version
             
         Returns:
             JSON string with the created version
         """
         try:
-            # Validate version number format
-            if not self._is_valid_version(version_number):
-                return json.dumps(create_error_response(
-                    message=f"Invalid version number format: {version_number}. Expected format: X.Y.Z",
-                    code="invalid_version_format"
-                ).model_dump(), default=str)
-            
-            # First get the component ID from its name
-            component_query = """
-            MATCH (comp:Entity {name: $component_name})
-            MATCH (d:Entity {name: $domain_name, entityType: 'Domain'})
-            MATCH (c:Entity {name: $container_name, entityType: 'ProjectContainer'})
-            WHERE (comp)-[:BELONGS_TO]->(d) AND (d)-[:PART_OF]->(c)
-            RETURN comp.id as component_id
-            """
-            
-            records = self.base_manager.safe_execute_read_query(
-                component_query,
-                {"component_name": component_name, "domain_name": domain_name, "container_name": container_name}
-            )
-            
-            if not records or len(records) == 0:
-                return json.dumps(create_error_response(
-                    message=f"Component '{component_name}' not found in domain '{domain_name}'",
-                    code="component_not_found"
-                ).model_dump(), default=str)
-            
-            # Get component ID
-            component_id = records[0]["component_id"]
-            
-            # Prepare version data for validation
-            version_data = {
-                "component_id": component_id,
-                "version_number": version_number,
-                "commit_hash": commit_hash,
-                "changes": changes
-            }
-            
-            # Add metadata if provided
-            if metadata:
-                version_data["metadata"] = metadata
+            # Validate and prepare version data using Pydantic model
+            try:
+                # Import VersionCreate if not already imported
+                from src.models.project_memory import VersionCreate
                 
-            # Validate version data - since there's no dedicated VersionCreate model, 
-            # we'll do some basic validation here
-            
-            # Check version number format with regex
-            import re
-            if not re.match(r"^\d+\.\d+\.\d+(?:-[a-zA-Z0-9\.]+)?(?:\+[a-zA-Z0-9\.]+)?$", version_number):
+                version_data = {
+                    "component_id": component_name,  # Using name as ID for now
+                    "version_number": version_number,
+                    "commit_hash": commit_hash,
+                    "content": content,
+                    "changes": changes,
+                    "metadata": metadata
+                }
+                version_model = VersionCreate(**version_data)
+                
+                # Add domain and container info
+                version_model_dict = version_model.model_dump()
+                version_model_dict["domain_name"] = domain_name
+                version_model_dict["container_name"] = container_name
+                
+            except Exception as ve:
+                self.logger.error(f"Validation error for version data: {str(ve)}")
                 return json.dumps(create_error_response(
-                    message=f"Invalid semantic version format: {version_number}. Expected format: X.Y.Z[-prerelease][+build]",
-                    code="invalid_version_format"
-                ).model_dump(), default=str)
-            
-            # Check commit hash format if provided
-            if commit_hash and not re.match(r"^[0-9a-f]{7,40}$", commit_hash):
-                return json.dumps(create_error_response(
-                    message=f"Invalid commit hash format: {commit_hash}. Expected a valid git hash.",
-                    code="invalid_commit_hash"
-                ).model_dump(), default=str)
-            
-            # If metadata is provided, ensure it's a dictionary
-            if metadata and not isinstance(metadata, dict):
-                return json.dumps(create_error_response(
-                    message="Metadata must be a dictionary",
-                    code="invalid_metadata"
+                    message=f"Invalid version data: {str(ve)}",
+                    code="validation_error"
                 ).model_dump(), default=str)
             
             # Now call the version manager with validated data
             result = self.version_manager.create_version(
-                component_name=component_name,
-                domain_name=domain_name,
-                container_name=container_name,
-                version_number=version_number,
-                commit_hash=commit_hash,
-                content=content,
-                changes=changes,
-                metadata=metadata
+                version_data=version_model
             )
             
             return self._standardize_response(
@@ -1459,7 +1234,7 @@ class ProjectMemoryManager:
                 message=f"Failed to create version: {str(e)}",
                 code="version_creation_error"
             ).model_dump(), default=str)
-            
+    
     def _is_valid_version(self, version: str) -> bool:
         """
         Validate a version string against semantic versioning format.
@@ -1479,21 +1254,30 @@ class ProjectMemoryManager:
                  container_name: str, 
                  version_number: Optional[str] = None) -> str:
         """
-        Get a specific version of a component.
+        Get a specific version of a project component.
         
         Args:
             component_name: Name of the component
             domain_name: Name of the domain
             container_name: Name of the project container
-            version_number: Optional version number (latest if not specified)
+            version_number: Optional. Version number to retrieve (gets latest if not specified)
             
         Returns:
             JSON string with the version details
         """
         try:
-            result = self.version_manager.get_version(
-                component_name, domain_name, container_name, version_number
+            # Create a version request object
+            version_request = VersionGetRequest(
+                component_name=component_name,
+                domain_name=domain_name,
+                container_name=container_name,
+                version_number=version_number
             )
+            
+            result = self.version_manager.get_version(
+                version_request=version_request
+            )
+            
             version_desc = version_number if version_number else "latest version"
             return self._standardize_response(
                 result,
@@ -1510,7 +1294,7 @@ class ProjectMemoryManager:
     def list_project_versions(self, component_name: str, domain_name: str,
                    container_name: str, limit: int = 10) -> str:
         """
-        List all versions of a component.
+        List versions of a project component.
         
         Args:
             component_name: Name of the component
@@ -1522,9 +1306,18 @@ class ProjectMemoryManager:
             JSON string with the list of versions
         """
         try:
-            result = self.version_manager.list_versions(
-                component_name, domain_name, container_name, limit
+            # Create a version request object
+            version_request = VersionGetRequest(
+                component_name=component_name,
+                domain_name=domain_name,
+                container_name=container_name
             )
+            
+            result = self.version_manager.list_versions(
+                version_request=version_request,
+                limit=limit
+            )
+            
             return self._standardize_response(
                 result,
                 f"Listed versions of component '{component_name}' in domain '{domain_name}'",
@@ -1541,21 +1334,30 @@ class ProjectMemoryManager:
                          container_name: str,
                          include_content: bool = False) -> str:
         """
-        Get the version history of a component with supersedes relationships.
+        Get the version history of a project component.
         
         Args:
             component_name: Name of the component
             domain_name: Name of the domain
             container_name: Name of the project container
-            include_content: Whether to include content in the version history
-            
+            include_content: Whether to include content in the history
+        
         Returns:
             JSON string with the version history
         """
         try:
-            result = self.version_manager.get_version_history(
-                component_name, domain_name, container_name, include_content
+            # Create a version request object
+            version_request = VersionGetRequest(
+                component_name=component_name,
+                domain_name=domain_name,
+                container_name=container_name
             )
+            
+            result = self.version_manager.get_version_history(
+                version_request=version_request,
+                include_content=include_content
+            )
+            
             content_note = " with content" if include_content else ""
             return self._standardize_response(
                 result,
@@ -1573,7 +1375,7 @@ class ProjectMemoryManager:
                       container_name: str, version1: str, 
                       version2: str) -> str:
         """
-        Compare two versions of a component.
+        Compare two versions of a project component.
         
         Args:
             component_name: Name of the component
@@ -1581,31 +1383,41 @@ class ProjectMemoryManager:
             container_name: Name of the project container
             version1: First version number
             version2: Second version number
-            
+        
         Returns:
-            JSON string with the comparison result
+            JSON string with the version comparison
         """
         try:
-            result = self.version_manager.compare_versions(
-                component_name, domain_name, container_name, version1, version2
+            # Create a version compare request object
+            compare_request = VersionCompareRequest(
+                component_name=component_name,
+                domain_name=domain_name,
+                container_name=container_name,
+                version1=version1,
+                version2=version2
             )
+            
+            result = self.version_manager.compare_versions(
+                compare_request=compare_request
+            )
+            
             return self._standardize_response(
                 result,
                 f"Compared versions {version1} and {version2} of component '{component_name}'",
-                "version_comparison_error"
+                "version_compare_error"
             )
         except Exception as e:
             self.logger.error(f"Error comparing project versions: {str(e)}")
             return json.dumps(create_error_response(
                 message=f"Failed to compare versions: {str(e)}",
-                code="version_comparison_error"
+                code="version_compare_error"
             ).model_dump(), default=str)
     
     def tag_project_version(self, component_name: str, domain_name: str,
                  container_name: str, version_number: str,
                  tag_name: str, tag_description: Optional[str] = None) -> str:
         """
-        Add a tag to a specific version of a component.
+        Tag a version of a project component.
         
         Args:
             component_name: Name of the component
@@ -1613,51 +1425,77 @@ class ProjectMemoryManager:
             container_name: Name of the project container
             version_number: Version number to tag
             tag_name: Name of the tag
-            tag_description: Optional description of the tag
-            
+            tag_description: Optional. Description of the tag
+        
         Returns:
-            JSON string with the result
+            JSON string with the created tag
         """
         try:
-            result = self.version_manager.tag_version(
-                component_name, domain_name, container_name, 
-                version_number, tag_name, tag_description
+            # Create a tag create request object
+            tag_data = TagCreate(
+                component_name=component_name,
+                domain_name=domain_name,
+                container_name=container_name,
+                version_number=version_number,
+                tag_name=tag_name,
+                tag_description=tag_description
             )
+            
+            result = self.version_manager.tag_version(
+                tag_data=tag_data
+            )
+            
             return self._standardize_response(
                 result,
-                f"Tagged version {version_number} of component '{component_name}' with tag '{tag_name}'",
-                "version_tagging_error"
+                f"Tagged version {version_number} of component '{component_name}' as '{tag_name}'",
+                "version_tag_error"
             )
         except Exception as e:
             self.logger.error(f"Error tagging project version: {str(e)}")
             return json.dumps(create_error_response(
                 message=f"Failed to tag version: {str(e)}",
-                code="version_tagging_error"
+                code="version_tag_error"
             ).model_dump(), default=str)
     
     def sync_project_version_control(self, component_name: str, domain_name: str,
                               container_name: str,
                               commit_data: List[Dict[str, Any]]) -> str:
         """
-        Synchronize component versions with version control system data.
+        Synchronize a project component with version control data.
         
         Args:
             component_name: Name of the component
             domain_name: Name of the domain
             container_name: Name of the project container
-            commit_data: List of commit data, each with hash, version, date, author, message, and content
-            
+            commit_data: List of commit data dictionaries
+                Each dict should have: hash, version, date, author, message, content
+        
         Returns:
-            JSON string with the sync result
+            JSON string with the sync results
         """
         try:
-            result = self.version_manager.sync_with_version_control(
-                component_name, domain_name, container_name, commit_data
+            # Convert commit data list to CommitData objects
+            commits = []
+            for commit in commit_data:
+                commit_obj = CommitData(**commit)
+                commits.append(commit_obj)
+            
+            # Create a sync request object
+            sync_request = SyncRequest(
+                component_name=component_name,
+                domain_name=domain_name,
+                container_name=container_name,
+                commits=commits
             )
+            
+            result = self.version_manager.sync_with_version_control(
+                sync_request=sync_request
+            )
+            
             commit_count = len(commit_data) if commit_data else 0
             return self._standardize_response(
                 result,
-                f"Synchronized {commit_count} commits for component '{component_name}' in domain '{domain_name}'",
+                f"Synchronized {commit_count} commits for component '{component_name}'",
                 "version_sync_error"
             )
         except Exception as e:
@@ -1697,7 +1535,8 @@ class ProjectMemoryManager:
                     code="validation_error"
                 ).model_dump(), default=str)
                 
-            result_json = self.project_container.create_project_container(validated_data)
+            # The project_container expects ProjectContainerCreate model, not a dict
+            result_json = self.project_container.create_project_container(project_model)
             project_name = validated_data.get("name", "New project")
             return self._standardize_response(
                 result_json,
@@ -1737,11 +1576,14 @@ class ProjectMemoryManager:
             
     def update_project_container(self, name: str, updates: Dict[str, Any]) -> str:
         """
-        Update a project container's properties.
+        Update a project container.
         
         Args:
             name: Name of the project container
-            updates: Dictionary of properties to update
+            updates: Dictionary with updates to apply
+                - description: Optional. New description
+                - metadata: Optional. New metadata
+                - tags: Optional. New tags
             
         Returns:
             JSON string with the updated project container
@@ -1749,13 +1591,8 @@ class ProjectMemoryManager:
         try:
             # Validate updates using Pydantic model
             try:
-                # Add the ID field which is required by ProjectContainerUpdate
-                updates_with_id = {"id": name, **updates}
-                update_model = ProjectContainerUpdate(**updates_with_id)
-                validated_updates = update_model.model_dump(exclude_unset=True)
-                # Remove id from validated updates as it's not needed for the update operation
-                if "id" in validated_updates:
-                    validated_updates.pop("id")
+                update_model = ProjectContainerUpdate(**updates)
+                validated_updates = update_model.model_dump()
             except Exception as ve:
                 self.logger.error(f"Validation error for project container update: {str(ve)}")
                 return json.dumps(create_error_response(
@@ -1763,7 +1600,7 @@ class ProjectMemoryManager:
                     code="validation_error"
                 ).model_dump(), default=str)
                 
-            result_json = self.project_container.update_project_container(name, validated_updates)
+            result_json = self.project_container.update_project_container(name, update_model)
             return self._standardize_response(
                 result_json,
                 f"Updated project container '{name}'",
