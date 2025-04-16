@@ -1,9 +1,24 @@
 from typing import Any, Dict, List, Optional, Union
 import time
 import json
+from datetime import datetime
 
 from src.utils import dict_to_json, generate_id
 from src.graph_memory.base_manager import BaseManager
+from src.models.project_memory import (
+    ProjectContainer as ProjectContainerModel,
+    ProjectContainerCreate,
+    ProjectContainerUpdate,
+    ComponentCreate,
+    ComponentUpdate,
+    DomainEntityCreate,
+    RelationshipCreate,
+    SearchQuery,
+    ErrorResponse,
+    ErrorDetail,
+    SuccessResponse,
+    ProjectContainerResponse
+)
 
 class ProjectContainer:
     """
@@ -21,12 +36,12 @@ class ProjectContainer:
         self.base_manager = base_manager
         self.logger = base_manager.logger
     
-    def create_project_container(self, project_data: Dict[str, Any]) -> str:
+    def create_project_container(self, project_data: ProjectContainerCreate) -> str:
         """
         Create a new project container.
         
         Args:
-            project_data: Dictionary containing project information
+            project_data: ProjectContainerCreate model containing project information
                 - name: Required. The name of the project container (unique identifier)
                 - description: Optional. Description of the project
                 - metadata: Optional. Additional metadata for the project
@@ -38,13 +53,7 @@ class ProjectContainer:
         try:
             self.base_manager.ensure_initialized()
             
-            # Validate required fields
-            if "name" not in project_data:
-                return dict_to_json({
-                    "error": "Missing required field: name"
-                })
-                
-            name = project_data["name"]
+            name = project_data.name
             
             # Check if a container with this name already exists
             check_query = """
@@ -76,17 +85,18 @@ class ProjectContainer:
             }
             
             # Add description if provided
-            if "description" in project_data and project_data["description"]:
-                container_properties["description"] = project_data["description"]
+            if project_data.description:
+                container_properties["description"] = project_data.description
                 
             # Add metadata if provided
-            if "metadata" in project_data and isinstance(project_data["metadata"], dict):
-                for key, value in project_data["metadata"].items():
+            if project_data.metadata:
+                metadata_dict = project_data.metadata.model_dump(exclude_none=True)
+                for key, value in metadata_dict.items():
                     container_properties[key] = value
                     
             # Add tags if provided
-            if "tags" in project_data and isinstance(project_data["tags"], list):
-                container_properties["tags"] = project_data["tags"]
+            if project_data.tags:
+                container_properties["tags"] = json.dumps(project_data.tags)
             
             # Create container
             create_query = """
@@ -110,16 +120,28 @@ class ProjectContainer:
             # Return created container
             container = dict(create_records[0]["c"].items())
             
-            return dict_to_json({
-                "status": "success",
-                "message": f"Project container '{name}' created successfully",
-                "container": container
-            })
+            # Create response using Pydantic response model
+            response = ProjectContainerResponse(
+                message=f"Project container '{name}' created successfully",
+                project_id=container_id,
+                project=container,
+                timestamp=datetime.now()
+            )
+            
+            return dict_to_json(response.model_dump(exclude_none=True))
                 
         except Exception as e:
             error_msg = f"Error creating project container: {str(e)}"
             self.logger.error(error_msg)
-            return dict_to_json({"error": error_msg})
+            error_response = ErrorResponse(
+                error=ErrorDetail(
+                    code="ERROR",
+                    message=error_msg,
+                    details={}
+                ),
+                timestamp=datetime.now()
+            )
+            return dict_to_json(error_response.model_dump())
     
     def get_project_container(self, name: str) -> str:
         """
@@ -148,9 +170,15 @@ class ProjectContainer:
             )
             
             if not records or len(records) == 0:
-                return dict_to_json({
-                    "error": f"Project container '{name}' not found"
-                })
+                error_response = ErrorResponse(
+                    error=ErrorDetail(
+                        code="NOT_FOUND",
+                        message=f"Project container '{name}' not found",
+                        details={}
+                    ),
+                    timestamp=datetime.now()
+                )
+                return dict_to_json(error_response.model_dump())
             
             # Extract container info
             record = records[0]
@@ -183,22 +211,36 @@ class ProjectContainer:
             container["component_count"] = component_count
             container["domain_counts"] = domain_counts
             
-            return dict_to_json({
-                "container": container
-            })
+            # Create response using Pydantic model
+            response = ProjectContainerResponse(
+                message=f"Project container '{name}' retrieved successfully",
+                project_id=container.get("id"),
+                project=container,
+                timestamp=datetime.now()
+            )
+            
+            return dict_to_json(response.model_dump(exclude_none=True))
                 
         except Exception as e:
             error_msg = f"Error retrieving project container: {str(e)}"
             self.logger.error(error_msg)
-            return dict_to_json({"error": error_msg})
+            error_response = ErrorResponse(
+                error=ErrorDetail(
+                    code="ERROR",
+                    message=error_msg,
+                    details={}
+                ),
+                timestamp=datetime.now()
+            )
+            return dict_to_json(error_response.model_dump())
     
-    def update_project_container(self, name: str, updates: Dict[str, Any]) -> str:
+    def update_project_container(self, name: str, updates: ProjectContainerUpdate) -> str:
         """
         Update a project container's properties.
         
         Args:
             name: Name of the project container
-            updates: Dictionary of properties to update
+            updates: ProjectContainerUpdate model with properties to update
             
         Returns:
             JSON string with the updated container
@@ -219,25 +261,51 @@ class ProjectContainer:
             )
             
             if not records or len(records) == 0:
-                return dict_to_json({
-                    "error": f"Project container '{name}' not found"
-                })
+                error_response = ErrorResponse(
+                    error=ErrorDetail(
+                        code="NOT_FOUND",
+                        message=f"Project container '{name}' not found",
+                        details={}
+                    ),
+                    timestamp=datetime.now()
+                )
+                return dict_to_json(error_response.model_dump())
+            
+            # Get the existing container ID
+            container_id = dict(records[0]["c"].items()).get("id")
+            
+            # Extract validated updates
+            update_data = updates.model_dump(exclude={"id"}, exclude_none=True)
             
             # Validate updates - prevent changing core properties
             protected_fields = ["id", "name", "entityType", "domain", "created"]
-            invalid_updates = [field for field in updates if field in protected_fields]
+            invalid_updates = [field for field in update_data if field in protected_fields]
             
             if invalid_updates:
-                return dict_to_json({
-                    "error": f"Cannot update protected fields: {', '.join(invalid_updates)}"
-                })
+                error_response = ErrorResponse(
+                    error=ErrorDetail(
+                        code="INVALID_UPDATE",
+                        message=f"Cannot update protected fields: {', '.join(invalid_updates)}",
+                        details={"invalid_fields": invalid_updates}
+                    ),
+                    timestamp=datetime.now()
+                )
+                return dict_to_json(error_response.model_dump())
             
-            # Add lastUpdated timestamp
-            updates["lastUpdated"] = time.time()
+            # Handle special fields
+            if "tags" in update_data and isinstance(update_data["tags"], list):
+                update_data["tags"] = json.dumps(update_data["tags"])
+                
+            if "metadata" in update_data and update_data["metadata"]:
+                # Flatten metadata into top-level properties
+                metadata = update_data.pop("metadata")
+                if isinstance(metadata, dict):
+                    for key, value in metadata.items():
+                        update_data[key] = value
             
             # Prepare update parts
             set_parts = []
-            for key, value in updates.items():
+            for key, value in update_data.items():
                 set_parts.append(f"c.{key} = ${key}")
             
             # Build update query
@@ -248,7 +316,7 @@ class ProjectContainer:
             """
             
             # Add name to updates for the query
-            params = {"name": name, **updates}
+            params = {"name": name, **update_data}
             
             # Use safe_execute_write_query for validation (this is a write operation)
             update_records = self.base_manager.safe_execute_write_query(
@@ -257,23 +325,41 @@ class ProjectContainer:
             )
             
             if not update_records or len(update_records) == 0:
-                return dict_to_json({
-                    "error": "Failed to update project container"
-                })
+                error_response = ErrorResponse(
+                    error=ErrorDetail(
+                        code="UPDATE_FAILED",
+                        message="Failed to update project container",
+                        details={}
+                    ),
+                    timestamp=datetime.now()
+                )
+                return dict_to_json(error_response.model_dump())
             
             # Return updated container
             container = dict(update_records[0]["c"].items())
             
-            return dict_to_json({
-                "status": "success",
-                "message": f"Project container '{name}' updated successfully",
-                "container": container
-            })
+            # Create response using Pydantic model
+            response = ProjectContainerResponse(
+                message=f"Project container '{name}' updated successfully",
+                project_id=container.get("id"),
+                project=container,
+                timestamp=datetime.now()
+            )
+            
+            return dict_to_json(response.model_dump(exclude_none=True))
                 
         except Exception as e:
             error_msg = f"Error updating project container: {str(e)}"
             self.logger.error(error_msg)
-            return dict_to_json({"error": error_msg})
+            error_response = ErrorResponse(
+                error=ErrorDetail(
+                    code="ERROR",
+                    message=error_msg,
+                    details={}
+                ),
+                timestamp=datetime.now()
+            )
+            return dict_to_json(error_response.model_dump())
     
     def delete_project_container(self, name: str, delete_contents: bool = False) -> str:
         """
@@ -301,9 +387,15 @@ class ProjectContainer:
             )
             
             if not records or len(records) == 0:
-                return dict_to_json({
-                    "error": f"Project container '{name}' not found"
-                })
+                error_response = ErrorResponse(
+                    error=ErrorDetail(
+                        code="NOT_FOUND",
+                        message=f"Project container '{name}' not found",
+                        details={}
+                    ),
+                    timestamp=datetime.now()
+                )
+                return dict_to_json(error_response.model_dump())
             
             if delete_contents:
                 # Delete all components in the container along with their relationships and observations
@@ -345,10 +437,11 @@ class ProjectContainer:
                     {"name": name}
                 )
                 
-                return dict_to_json({
-                    "status": "success",
-                    "message": f"Project container '{name}' and {deleted_count} components deleted successfully"
-                })
+                response = SuccessResponse(
+                    message=f"Project container '{name}' and {deleted_count} components deleted successfully",
+                    timestamp=datetime.now()
+                )
+                return dict_to_json(response.model_dump())
             else:
                 # Check if container has components
                 check_components_query = """
@@ -367,9 +460,15 @@ class ProjectContainer:
                     component_count = component_records[0]["component_count"]
                 
                 if component_count > 0:
-                    return dict_to_json({
-                        "error": f"Cannot delete project container '{name}' with {component_count} components. Set delete_contents=True to delete the container and its contents."
-                    })
+                    error_response = ErrorResponse(
+                        error=ErrorDetail(
+                            code="COMPONENTS_EXIST",
+                            message=f"Cannot delete project container '{name}' with {component_count} components. Set delete_contents=True to delete the container and its contents.",
+                            details={"component_count": component_count}
+                        ),
+                        timestamp=datetime.now()
+                    )
+                    return dict_to_json(error_response.model_dump())
                 
                 # Delete the container (which has no components)
                 delete_container_query = """
@@ -382,15 +481,24 @@ class ProjectContainer:
                     {"name": name}
                 )
                 
-                return dict_to_json({
-                    "status": "success",
-                    "message": f"Project container '{name}' deleted successfully"
-                })
+                response = SuccessResponse(
+                    message=f"Project container '{name}' deleted successfully",
+                    timestamp=datetime.now()
+                )
+                return dict_to_json(response.model_dump())
                 
         except Exception as e:
             error_msg = f"Error deleting project container: {str(e)}"
             self.logger.error(error_msg)
-            return dict_to_json({"error": error_msg})
+            error_response = ErrorResponse(
+                error=ErrorDetail(
+                    code="ERROR",
+                    message=error_msg,
+                    details={}
+                ),
+                timestamp=datetime.now()
+            )
+            return dict_to_json(error_response.model_dump())
     
     def list_project_containers(self, sort_by: str = "name", limit: int = 100) -> str:
         """
@@ -434,15 +542,31 @@ class ProjectContainer:
                     container["component_count"] = record["component_count"]
                     containers.append(container)
             
-            return dict_to_json({
-                "containers": containers,
-                "count": len(containers)
-            })
+            # Create response using Pydantic model
+            response = SuccessResponse(
+                message=f"Retrieved {len(containers)} project containers",
+                timestamp=datetime.now()
+            )
+            
+            # Add container data to response
+            response_dict = response.model_dump()
+            response_dict["containers"] = containers
+            response_dict["count"] = len(containers)
+            
+            return dict_to_json(response_dict)
                 
         except Exception as e:
             error_msg = f"Error listing project containers: {str(e)}"
             self.logger.error(error_msg)
-            return dict_to_json({"error": error_msg})
+            error_response = ErrorResponse(
+                error=ErrorDetail(
+                    code="ERROR",
+                    message=error_msg,
+                    details={}
+                ),
+                timestamp=datetime.now()
+            )
+            return dict_to_json(error_response.model_dump())
     
     def add_component_to_container(self, container_name: str, entity_name: str) -> str:
         """
@@ -470,9 +594,15 @@ class ProjectContainer:
             )
             
             if not container_records or len(container_records) == 0:
-                return dict_to_json({
-                    "error": f"Project container '{container_name}' not found"
-                })
+                error_response = ErrorResponse(
+                    error=ErrorDetail(
+                        code="NOT_FOUND",
+                        message=f"Project container '{container_name}' not found",
+                        details={}
+                    ),
+                    timestamp=datetime.now()
+                )
+                return dict_to_json(error_response.model_dump())
             
             # Check if entity exists
             entity_query = """
@@ -486,9 +616,15 @@ class ProjectContainer:
             )
             
             if not entity_records or len(entity_records) == 0:
-                return dict_to_json({
-                    "error": f"Entity '{entity_name}' not found"
-                })
+                error_response = ErrorResponse(
+                    error=ErrorDetail(
+                        code="NOT_FOUND",
+                        message=f"Entity '{entity_name}' not found",
+                        details={}
+                    ),
+                    timestamp=datetime.now()
+                )
+                return dict_to_json(error_response.model_dump())
             
             # Check if entity is already in the container
             check_query = """
@@ -504,38 +640,55 @@ class ProjectContainer:
             )
             
             if check_records and len(check_records) > 0:
-                return dict_to_json({
-                    "status": "success",
-                    "message": f"Entity '{entity_name}' is already in project container '{container_name}'"
-                })
+                # Already in container, return success
+                response = SuccessResponse(
+                    message=f"Entity '{entity_name}' is already in project container '{container_name}'",
+                    timestamp=datetime.now()
+                )
+                return dict_to_json(response.model_dump())
             
             # Add entity to container
             add_query = """
             MATCH (c:Entity {name: $container_name, entityType: 'ProjectContainer'})
             MATCH (e:Entity {name: $entity_name})
-            CREATE (e)-[:PART_OF {created: $timestamp}]->(c)
+            CREATE (e)-[:PART_OF {created: datetime()}]->(c)
             RETURN e
             """
             
             add_records = self.base_manager.safe_execute_write_query(
                 add_query,
-                {"container_name": container_name, "entity_name": entity_name, "timestamp": time.time()}
+                {"container_name": container_name, "entity_name": entity_name}
             )
             
             if not add_records or len(add_records) == 0:
-                return dict_to_json({
-                    "error": f"Failed to add entity '{entity_name}' to project container '{container_name}'"
-                })
+                error_response = ErrorResponse(
+                    error=ErrorDetail(
+                        code="UPDATE_FAILED",
+                        message=f"Failed to add entity '{entity_name}' to project container '{container_name}'",
+                        details={}
+                    ),
+                    timestamp=datetime.now()
+                )
+                return dict_to_json(error_response.model_dump())
             
-            return dict_to_json({
-                "status": "success",
-                "message": f"Entity '{entity_name}' added to project container '{container_name}'"
-            })
+            response = SuccessResponse(
+                message=f"Entity '{entity_name}' added to project container '{container_name}'",
+                timestamp=datetime.now()
+            )
+            return dict_to_json(response.model_dump())
                 
         except Exception as e:
             error_msg = f"Error adding component to container: {str(e)}"
             self.logger.error(error_msg)
-            return dict_to_json({"error": error_msg})
+            error_response = ErrorResponse(
+                error=ErrorDetail(
+                    code="ERROR",
+                    message=error_msg,
+                    details={}
+                ),
+                timestamp=datetime.now()
+            )
+            return dict_to_json(error_response.model_dump())
     
     def remove_component_from_container(self, container_name: str, entity_name: str) -> str:
         """
@@ -565,9 +718,15 @@ class ProjectContainer:
             )
             
             if not check_records or len(check_records) == 0:
-                return dict_to_json({
-                    "error": f"Entity '{entity_name}' is not in project container '{container_name}'"
-                })
+                error_response = ErrorResponse(
+                    error=ErrorDetail(
+                        code="NOT_FOUND",
+                        message=f"Entity '{entity_name}' is not in project container '{container_name}'",
+                        details={}
+                    ),
+                    timestamp=datetime.now()
+                )
+                return dict_to_json(error_response.model_dump())
             
             # Remove entity from container
             remove_query = """
@@ -582,15 +741,24 @@ class ProjectContainer:
                 {"container_name": container_name, "entity_name": entity_name}
             )
             
-            return dict_to_json({
-                "status": "success",
-                "message": f"Entity '{entity_name}' removed from project container '{container_name}'"
-            })
+            response = SuccessResponse(
+                message=f"Entity '{entity_name}' removed from project container '{container_name}'",
+                timestamp=datetime.now()
+            )
+            return dict_to_json(response.model_dump())
                 
         except Exception as e:
             error_msg = f"Error removing component from container: {str(e)}"
             self.logger.error(error_msg)
-            return dict_to_json({"error": error_msg})
+            error_response = ErrorResponse(
+                error=ErrorDetail(
+                    code="ERROR",
+                    message=error_msg,
+                    details={}
+                ),
+                timestamp=datetime.now()
+            )
+            return dict_to_json(error_response.model_dump())
     
     def get_container_components(self, container_name: str, entity_type: Optional[str] = None) -> str:
         """
@@ -618,9 +786,15 @@ class ProjectContainer:
             )
             
             if not container_records or len(container_records) == 0:
-                return dict_to_json({
-                    "error": f"Project container '{container_name}' not found"
-                })
+                error_response = ErrorResponse(
+                    error=ErrorDetail(
+                        code="NOT_FOUND",
+                        message=f"Project container '{container_name}' not found",
+                        details={}
+                    ),
+                    timestamp=datetime.now()
+                )
+                return dict_to_json(error_response.model_dump())
             
             # Build query based on entity_type
             if entity_type:
@@ -655,17 +829,33 @@ class ProjectContainer:
                     component = dict(record["e"].items())
                     components.append(component)
             
-            return dict_to_json({
-                "container": container_name,
-                "component_count": len(components),
-                "entity_type_filter": entity_type,
-                "components": components
-            })
+            # Create response using Pydantic model
+            response = SuccessResponse(
+                message=f"Retrieved {len(components)} components from project container '{container_name}'",
+                timestamp=datetime.now()
+            )
+            
+            # Add component data to response
+            response_dict = response.model_dump()
+            response_dict["container"] = container_name
+            response_dict["component_count"] = len(components)
+            response_dict["entity_type_filter"] = entity_type
+            response_dict["components"] = components
+            
+            return dict_to_json(response_dict)
                 
         except Exception as e:
             error_msg = f"Error retrieving container components: {str(e)}"
             self.logger.error(error_msg)
-            return dict_to_json({"error": error_msg})
+            error_response = ErrorResponse(
+                error=ErrorDetail(
+                    code="ERROR",
+                    message=error_msg,
+                    details={}
+                ),
+                timestamp=datetime.now()
+            )
+            return dict_to_json(error_response.model_dump())
     
     def change_container_status(self, container_name: str, status: str) -> str:
         """
@@ -684,41 +874,65 @@ class ProjectContainer:
             # Validate status
             valid_statuses = ["active", "archived", "completed"]
             if status not in valid_statuses:
-                return dict_to_json({
-                    "error": f"Invalid status '{status}'. Valid values are: {', '.join(valid_statuses)}"
-                })
+                error_response = ErrorResponse(
+                    error=ErrorDetail(
+                        code="INVALID_STATUS",
+                        message=f"Invalid status '{status}'. Valid values are: {', '.join(valid_statuses)}",
+                        details={"valid_statuses": valid_statuses}
+                    ),
+                    timestamp=datetime.now()
+                )
+                return dict_to_json(error_response.model_dump())
             
             # Update container status
             update_query = """
             MATCH (c:Entity {name: $container_name, entityType: 'ProjectContainer'})
             SET c.status = $status,
-                c.lastUpdated = $timestamp
+                c.lastUpdated = datetime()
             RETURN c
             """
             
             update_records = self.base_manager.safe_execute_write_query(
                 update_query,
-                {"container_name": container_name, "status": status, "timestamp": time.time()}
+                {"container_name": container_name, "status": status}
             )
             
             if not update_records or len(update_records) == 0:
-                return dict_to_json({
-                    "error": f"Project container '{container_name}' not found"
-                })
+                error_response = ErrorResponse(
+                    error=ErrorDetail(
+                        code="NOT_FOUND",
+                        message=f"Project container '{container_name}' not found",
+                        details={}
+                    ),
+                    timestamp=datetime.now()
+                )
+                return dict_to_json(error_response.model_dump())
             
             # Return updated container
             container = dict(update_records[0]["c"].items())
             
-            return dict_to_json({
-                "status": "success",
-                "message": f"Project container '{container_name}' status changed to '{status}'",
-                "container": container
-            })
+            # Create response using Pydantic model
+            response = ProjectContainerResponse(
+                message=f"Project container '{container_name}' status changed to '{status}'",
+                project_id=container.get("id"),
+                project=container,
+                timestamp=datetime.now()
+            )
+            
+            return dict_to_json(response.model_dump(exclude_none=True))
                 
         except Exception as e:
             error_msg = f"Error changing container status: {str(e)}"
             self.logger.error(error_msg)
-            return dict_to_json({"error": error_msg})
+            error_response = ErrorResponse(
+                error=ErrorDetail(
+                    code="ERROR",
+                    message=error_msg,
+                    details={}
+                ),
+                timestamp=datetime.now()
+            )
+            return dict_to_json(error_response.model_dump())
     
     def get_container_stats(self, container_name: str) -> str:
         """
@@ -745,9 +959,15 @@ class ProjectContainer:
             )
             
             if not container_records or len(container_records) == 0:
-                return dict_to_json({
-                    "error": f"Project container '{container_name}' not found"
-                })
+                error_response = ErrorResponse(
+                    error=ErrorDetail(
+                        code="NOT_FOUND",
+                        message=f"Project container '{container_name}' not found",
+                        details={}
+                    ),
+                    timestamp=datetime.now()
+                )
+                return dict_to_json(error_response.model_dump())
             
             # Get container info
             container = dict(container_records[0]["c"].items())
@@ -823,18 +1043,33 @@ class ProjectContainer:
             relationship_count = sum(relationship_types.values()) if relationship_types else 0
             observation_count = sum(observation_types.values()) if observation_types else 0
             
-            # Return stats
-            return dict_to_json({
-                "container": container,
-                "total_entities": entity_count,
-                "entity_types": entity_types,
-                "total_relationships": relationship_count,
-                "relationship_types": relationship_types,
-                "total_observations": observation_count,
-                "observation_types": observation_types
-            })
+            # Create response using Pydantic model
+            response = SuccessResponse(
+                message=f"Retrieved statistics for project container '{container_name}'",
+                timestamp=datetime.now()
+            )
+            
+            # Add stats to response
+            response_dict = response.model_dump()
+            response_dict["container"] = container
+            response_dict["total_entities"] = entity_count
+            response_dict["entity_types"] = entity_types
+            response_dict["total_relationships"] = relationship_count
+            response_dict["relationship_types"] = relationship_types
+            response_dict["total_observations"] = observation_count
+            response_dict["observation_types"] = observation_types
+            
+            return dict_to_json(response_dict)
                 
         except Exception as e:
             error_msg = f"Error retrieving container stats: {str(e)}"
             self.logger.error(error_msg)
-            return dict_to_json({"error": error_msg}) 
+            error_response = ErrorResponse(
+                error=ErrorDetail(
+                    code="ERROR",
+                    message=error_msg,
+                    details={}
+                ),
+                timestamp=datetime.now()
+            )
+            return dict_to_json(error_response.model_dump()) 

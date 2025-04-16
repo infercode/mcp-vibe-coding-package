@@ -407,4 +407,145 @@ class SearchResponse(SuccessResponse):
         """Custom serialization with has_results field."""
         data = self.model_dump(exclude_none=True)
         data["has_results"] = self.has_results
-        return data 
+        return data
+
+
+# Version and Tag Models
+
+class VersionCreate(BaseModel):
+    """Model for creating a new version of a component."""
+    component_name: Annotated[str, Field(description="Name of the component")]
+    domain_name: Annotated[str, Field(description="Name of the domain")]
+    container_name: Annotated[str, Field(description="Name of the project container")]
+    version_number: Annotated[str, Field(description="Version number (e.g., '1.0.0')")]
+    commit_hash: Optional[str] = Field(None, description="Commit hash from version control")
+    content: Optional[str] = Field(None, description="Content of the component at this version")
+    changes: Optional[str] = Field(None, description="Description of changes from previous version")
+    metadata: Optional[Dict[str, Any]] = Field(None, description="Additional metadata")
+    
+    model_config = ConfigDict(
+        validate_assignment=True,
+        json_schema_extra={
+            "examples": [
+                {
+                    "component_name": "Authentication Service",
+                    "domain_name": "Backend",
+                    "container_name": "E-commerce Platform",
+                    "version_number": "1.0.0",
+                    "commit_hash": "a1b2c3d4",
+                    "changes": "Initial version"
+                }
+            ]
+        }
+    )
+
+    @field_validator('version_number')
+    @classmethod
+    def validate_version_number(cls, v: str) -> str:
+        """Validate version number format."""
+        if not v or not isinstance(v, str):
+            raise ValueError("Version number must be a non-empty string")
+        return v
+
+class VersionGetRequest(BaseModel):
+    """Model for retrieving a version of a component."""
+    component_name: Annotated[str, Field(description="Name of the component")]
+    domain_name: Annotated[str, Field(description="Name of the domain")]
+    container_name: Annotated[str, Field(description="Name of the project container")]
+    version_number: Optional[str] = None
+    
+    model_config = ConfigDict(
+        validate_assignment=True
+    )
+
+class VersionResponse(SuccessResponse):
+    """Response model for version operations."""
+    version_id: Optional[str] = Field(None, description="ID of the created or retrieved version")
+    version: Optional[Dict[str, Any]] = Field(None, description="Version data")
+    component_name: Optional[str] = Field(None, description="Name of the component")
+    
+    model_config = ConfigDict(
+        validate_assignment=True
+    )
+
+class VersionListResponse(SuccessResponse):
+    """Response model for listing versions."""
+    component_name: str = Field(..., description="Name of the component")
+    domain_name: str = Field(..., description="Name of the domain")
+    container_name: str = Field(..., description="Name of the project container")
+    version_count: int = Field(0, description="Number of versions")
+    versions: List[Dict[str, Any]] = Field(default_factory=list, description="List of versions")
+    
+    model_config = ConfigDict(
+        validate_assignment=True
+    )
+
+class TagCreate(BaseModel):
+    """Model for creating a tag on a version."""
+    component_name: Annotated[str, Field(description="Name of the component")]
+    domain_name: Annotated[str, Field(description="Name of the domain")]
+    container_name: Annotated[str, Field(description="Name of the project container")]
+    version_number: Annotated[str, Field(description="Version number to tag")]
+    tag_name: Annotated[str, Field(description="Name of the tag")]
+    tag_description: Optional[str] = Field(None, description="Description of the tag")
+    
+    model_config = ConfigDict(
+        validate_assignment=True
+    )
+
+class TagResponse(SuccessResponse):
+    """Response model for tag operations."""
+    tag_id: Optional[str] = Field(None, description="ID of the created tag")
+    tag: Optional[Dict[str, Any]] = Field(None, description="Tag data")
+    component_name: Optional[str] = Field(None, description="Name of the component")
+    version_number: Optional[str] = Field(None, description="Version number")
+    
+    model_config = ConfigDict(
+        validate_assignment=True
+    )
+
+# Additional models for version control operations
+
+class CommitData(BaseModel):
+    """Model for a commit from version control."""
+    hash: str = Field(..., description="Commit hash")
+    version: str = Field(..., description="Version number associated with the commit")
+    date: Optional[str] = Field(None, description="Commit date")
+    author: Optional[str] = Field(None, description="Commit author")
+    message: Optional[str] = Field(None, description="Commit message")
+    content: Optional[str] = Field(None, description="Content at this commit")
+    
+    model_config = ConfigDict(
+        validate_assignment=True
+    )
+
+class SyncRequest(BaseModel):
+    """Model for a version control sync request."""
+    component_name: str = Field(..., description="Name of the component")
+    domain_name: str = Field(..., description="Name of the domain")
+    container_name: str = Field(..., description="Name of the project container")
+    commits: List[CommitData] = Field(..., description="List of commits to sync")
+    
+    model_config = ConfigDict(
+        validate_assignment=True
+    )
+
+class VersionCompareRequest(BaseModel):
+    """Model for comparing two versions of a component."""
+    component_name: Annotated[str, Field(description="Name of the component")]
+    domain_name: Annotated[str, Field(description="Name of the domain")]
+    container_name: Annotated[str, Field(description="Name of the project container")]
+    version1: Annotated[str, Field(description="First version number to compare")]
+    version2: Annotated[str, Field(description="Second version number to compare")]
+    
+    model_config = ConfigDict(
+        validate_assignment=True
+    )
+    
+    @model_validator(mode='after')
+    @classmethod
+    def validate_versions(cls, values):
+        """Ensure both version numbers are provided and valid."""
+        if not values.version1 or not values.version2:
+            raise ValueError("Both version numbers must be provided")
+        return values 

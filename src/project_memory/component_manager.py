@@ -2,10 +2,21 @@ from typing import Any, Dict, List, Optional, Union
 import time
 import json
 import logging
+from datetime import datetime
 
 from src.utils import dict_to_json, generate_id
 from src.graph_memory.base_manager import BaseManager
 from src.graph_memory.entity_manager import EntityManager
+from src.models.project_memory import (
+    ComponentCreate, 
+    ComponentUpdate,
+    ComponentResponse,
+    Metadata,
+    ErrorResponse,
+    ErrorDetail,
+    SuccessResponse,
+    RelationshipCreate
+)
 
 class ComponentManager:
     """
@@ -24,24 +35,17 @@ class ComponentManager:
         self.logger = logging.getLogger(__name__)
         self.entity_manager = EntityManager(base_manager)
     
-    def create_component(self, name: str, 
-                      component_type: str,
+    def create_component(self, 
+                      component: ComponentCreate,
                       domain_name: str,
-                      container_name: str,
-                      description: Optional[str] = None,
-                      content: Optional[str] = None,
-                      metadata: Optional[Dict[str, Any]] = None) -> str:
+                      container_name: str) -> str:
         """
         Create a new project component within a domain.
         
         Args:
-            name: Name of the component
-            component_type: Type of the component (e.g. 'File', 'Feature', 'Module')
+            component: ComponentCreate Pydantic model with component details
             domain_name: Name of the domain
             container_name: Name of the project container
-            description: Optional description of the component
-            content: Optional content of the component
-            metadata: Optional additional metadata
             
         Returns:
             JSON string with the created component
@@ -62,9 +66,16 @@ class ComponentManager:
             )
             
             if not domain_records or len(domain_records) == 0:
-                return dict_to_json({
-                    "error": f"Domain '{domain_name}' not found in container '{container_name}'"
-                })
+                error = ErrorDetail(
+                    code="DOMAIN_NOT_FOUND",
+                    message=f"Domain '{domain_name}' not found in container '{container_name}'",
+                    details=None
+                )
+                return dict_to_json(ErrorResponse(
+                    status="error",
+                    timestamp=datetime.now(),
+                    error=error
+                ).model_dump())
             
             # Check if component already exists in domain
             component_check_query = """
@@ -76,13 +87,20 @@ class ComponentManager:
             
             component_records = self.base_manager.safe_execute_read_query(
                 component_check_query,
-                {"container_name": container_name, "domain_name": domain_name, "name": name}
+                {"container_name": container_name, "domain_name": domain_name, "name": component.name}
             )
             
             if component_records and len(component_records) > 0:
-                return dict_to_json({
-                    "error": f"Component '{name}' already exists in domain '{domain_name}'"
-                })
+                error = ErrorDetail(
+                    code="COMPONENT_EXISTS",
+                    message=f"Component '{component.name}' already exists in domain '{domain_name}'",
+                    details=None
+                )
+                return dict_to_json(ErrorResponse(
+                    status="error",
+                    timestamp=datetime.now(),
+                    error=error
+                ).model_dump())
             
             # Generate component ID
             component_id = generate_id("cmp")
@@ -90,23 +108,20 @@ class ComponentManager:
             # Prepare component entity
             component_entity = {
                 "id": component_id,
-                "name": name,
-                "entityType": component_type,
+                "name": component.name,
+                "entityType": component.type,
                 "domain": "project",
                 "created": time.time(),
                 "lastUpdated": time.time()
             }
             
-            if description:
-                component_entity["description"] = description
+            if component.description:
+                component_entity["description"] = component.description
                 
-            if content:
-                component_entity["content"] = content
-                
-            if metadata:
-                for key, value in metadata.items():
-                    if key not in component_entity:
-                        component_entity[key] = value
+            if component.metadata:
+                metadata_dict = component.metadata.model_dump(exclude_none=True)
+                for key, value in metadata_dict.items():
+                    component_entity[f"metadata_{key}"] = value
             
             # Create component query
             create_query = f"""
@@ -126,23 +141,44 @@ class ComponentManager:
             )
             
             if not create_records or len(create_records) == 0:
-                return dict_to_json({
-                    "error": "Failed to create component entity"
-                })
+                error = ErrorDetail(
+                    code="CREATION_FAILED",
+                    message="Failed to create component entity",
+                    details=None
+                )
+                return dict_to_json(ErrorResponse(
+                    status="error",
+                    timestamp=datetime.now(),
+                    error=error
+                ).model_dump())
             
             # Get created component
-            component = dict(create_records[0]["e"].items())
+            component_data = dict(create_records[0]["e"].items())
             
-            return dict_to_json({
-                "status": "success",
-                "message": f"Component '{name}' created successfully in domain '{domain_name}'",
-                "component": component
-            })
+            # Create response
+            response = ComponentResponse(
+                status="success",
+                timestamp=datetime.now(),
+                message=f"Component '{component.name}' created successfully in domain '{domain_name}'",
+                component_id=component_id,
+                component=component_data
+            )
+            
+            return dict_to_json(response.model_dump(exclude_none=True))
                 
         except Exception as e:
             error_msg = f"Error creating component: {str(e)}"
             self.logger.error(error_msg)
-            return dict_to_json({"error": error_msg})
+            error = ErrorDetail(
+                code="INTERNAL_ERROR",
+                message=error_msg,
+                details=None
+            )
+            return dict_to_json(ErrorResponse(
+                status="error",
+                timestamp=datetime.now(),
+                error=error
+            ).model_dump())
     
     def get_component(self, name: str, domain_name: str, container_name: str) -> str:
         """
@@ -222,16 +258,17 @@ class ComponentManager:
             self.logger.error(error_msg)
             return dict_to_json({"error": error_msg})
     
-    def update_component(self, name: str, domain_name: str, container_name: str, 
-                      updates: Dict[str, Any]) -> str:
+    def update_component(self, 
+                      component_update: ComponentUpdate,
+                      domain_name: str, 
+                      container_name: str) -> str:
         """
         Update a component's properties.
         
         Args:
-            name: Name of the component
+            component_update: ComponentUpdate Pydantic model with updated properties
             domain_name: Name of the domain
             container_name: Name of the project container
-            updates: Dictionary of properties to update
             
         Returns:
             JSON string with the updated component
@@ -243,49 +280,93 @@ class ComponentManager:
             component_query = """
             MATCH (c:Entity {name: $container_name, entityType: 'ProjectContainer'})
             MATCH (d:Entity {name: $domain_name, entityType: 'Domain'})-[:PART_OF]->(c)
-            MATCH (comp:Entity {name: $name})-[:BELONGS_TO]->(d)
+            MATCH (comp:Entity {id: $id})-[:BELONGS_TO]->(d)
             RETURN comp
             """
             
             component_records = self.base_manager.safe_execute_read_query(
                 component_query,
-                {"container_name": container_name, "domain_name": domain_name, "name": name}
+                {"container_name": container_name, "domain_name": domain_name, "id": component_update.id}
             )
             
             if not component_records or len(component_records) == 0:
-                return dict_to_json({
-                    "error": f"Component '{name}' not found in domain '{domain_name}'"
-                })
+                error = ErrorDetail(
+                    code="COMPONENT_NOT_FOUND",
+                    message=f"Component with ID '{component_update.id}' not found in domain '{domain_name}'",
+                    details=None
+                )
+                return dict_to_json(ErrorResponse(
+                    status="error",
+                    timestamp=datetime.now(),
+                    error=error
+                ).model_dump())
+            
+            # Get current component data
+            component = dict(component_records[0]["comp"].items())
             
             # Validate updates - prevent changing core properties
-            protected_fields = ["id", "name", "domain", "created", "entityType"]
+            protected_fields = ["id", "domain", "created", "entityType"]
+            updates = component_update.model_dump(exclude_none=True)
+            
+            # Remove ID as it's used for identification
+            if "id" in updates:
+                updates.pop("id")
+            
+            # Check for protected fields
             invalid_updates = [field for field in updates if field in protected_fields]
             
             if invalid_updates:
-                return dict_to_json({
-                    "error": f"Cannot update protected fields: {', '.join(invalid_updates)}"
-                })
+                error = ErrorDetail(
+                    code="INVALID_UPDATE",
+                    message=f"Cannot update protected fields: {', '.join(invalid_updates)}",
+                    details=None
+                )
+                return dict_to_json(ErrorResponse(
+                    status="error",
+                    timestamp=datetime.now(),
+                    error=error
+                ).model_dump())
             
             # Add lastUpdated timestamp
             updates["lastUpdated"] = time.time()
+            
+            # Handle metadata updates
+            if "metadata" in updates:
+                metadata = updates.pop("metadata")
+                if metadata:
+                    metadata_dict = metadata
+                    if hasattr(metadata, "model_dump"):
+                        metadata_dict = metadata.model_dump(exclude_none=True)
+                    for key, value in metadata_dict.items():
+                        updates[f"metadata_{key}"] = value
             
             # Prepare update parts
             set_parts = []
             for key, value in updates.items():
                 set_parts.append(f"comp.{key} = ${key}")
             
+            # If no updates, return success
+            if not set_parts:
+                response = ComponentResponse(
+                    status="success",
+                    timestamp=datetime.now(),
+                    message=f"No updates provided for component",
+                    component_id=component_update.id,
+                    component=component
+                )
+                return dict_to_json(response.model_dump(exclude_none=True))
+            
             # Update entity
             update_query = f"""
-            MATCH (e:Entity)
-            WHERE e.name = $name
-            AND EXISTS(()-[:PART_OF]->(d:Entity {{name: $domain_name, entityType: 'Domain'}}))
-            AND EXISTS(()-[:BELONGS_TO]->(c:Entity {{name: $container_name, entityType: 'ProjectContainer'}}))
-            SET {', '.join(set_parts)}, e.lastUpdated = datetime()
-            RETURN e
+            MATCH (comp:Entity {{id: $id}})
+            WHERE EXISTS((comp)-[:BELONGS_TO]->(:Entity {{name: $domain_name, entityType: 'Domain'}}))
+            AND EXISTS((comp)-[:PART_OF]->(:Entity {{name: $container_name, entityType: 'ProjectContainer'}}))
+            SET {', '.join(set_parts)}, comp.lastUpdated = datetime()
+            RETURN comp
             """
             
-            # Add name, domain_name and container_name to updates for the query
-            params = {"name": name, "domain_name": domain_name, "container_name": container_name, **updates}
+            # Add component id, domain_name and container_name to updates for the query
+            params = {"id": component_update.id, "domain_name": domain_name, "container_name": container_name, **updates}
             
             update_records = self.base_manager.safe_execute_write_query(
                 update_query,
@@ -293,23 +374,43 @@ class ComponentManager:
             )
             
             if not update_records or len(update_records) == 0:
-                return dict_to_json({
-                    "error": f"Failed to update component '{name}'"
-                })
+                error = ErrorDetail(
+                    code="UPDATE_FAILED",
+                    message=f"Failed to update component '{component_update.id}'",
+                    details=None
+                )
+                return dict_to_json(ErrorResponse(
+                    status="error",
+                    timestamp=datetime.now(),
+                    error=error
+                ).model_dump())
             
             # Return updated component
-            component = dict(update_records[0]["e"].items())
+            updated_component = dict(update_records[0]["comp"].items())
             
-            return dict_to_json({
-                "status": "success",
-                "message": f"Component '{name}' updated successfully",
-                "component": component
-            })
+            response = ComponentResponse(
+                status="success",
+                timestamp=datetime.now(),
+                message=f"Component updated successfully",
+                component_id=component_update.id,
+                component=updated_component
+            )
+            
+            return dict_to_json(response.model_dump(exclude_none=True))
                 
         except Exception as e:
             error_msg = f"Error updating component: {str(e)}"
             self.logger.error(error_msg)
-            return dict_to_json({"error": error_msg})
+            error = ErrorDetail(
+                code="INTERNAL_ERROR",
+                message=error_msg,
+                details=None
+            )
+            return dict_to_json(ErrorResponse(
+                status="error",
+                timestamp=datetime.now(),
+                error=error
+            ).model_dump())
     
     def delete_component(self, name: str, domain_name: str, container_name: str) -> str:
         """
@@ -340,9 +441,16 @@ class ComponentManager:
             )
             
             if not component_records or len(component_records) == 0:
-                return dict_to_json({
-                    "error": f"Component '{name}' not found in domain '{domain_name}'"
-                })
+                error = ErrorDetail(
+                    code="COMPONENT_NOT_FOUND",
+                    message=f"Component '{name}' not found in domain '{domain_name}'",
+                    details=None
+                )
+                return dict_to_json(ErrorResponse(
+                    status="error",
+                    timestamp=datetime.now(),
+                    error=error
+                ).model_dump())
             
             # Get component ID
             component_id = component_records[0]["comp"]["id"]
@@ -365,9 +473,16 @@ class ComponentManager:
                 relation_count = relation_records[0]["relation_count"]
             
             if relation_count > 0:
-                return dict_to_json({
-                    "error": f"Cannot delete component '{name}' with {relation_count} relationships. Remove relationships first."
-                })
+                error = ErrorDetail(
+                    code="COMPONENT_HAS_RELATIONSHIPS",
+                    message=f"Cannot delete component '{name}' with {relation_count} relationships. Remove relationships first.",
+                    details=None
+                )
+                return dict_to_json(ErrorResponse(
+                    status="error",
+                    timestamp=datetime.now(),
+                    error=error
+                ).model_dump())
             
             # Delete component observations
             delete_observations_query = """
@@ -404,15 +519,25 @@ class ComponentManager:
                 {"component_id": component_id}
             )
             
-            return dict_to_json({
-                "status": "success",
-                "message": f"Component '{name}' deleted successfully"
-            })
+            return dict_to_json(SuccessResponse(
+                status="success",
+                timestamp=datetime.now(),
+                message=f"Component '{name}' deleted successfully"
+            ).model_dump(exclude_none=True))
                 
         except Exception as e:
             error_msg = f"Error deleting component: {str(e)}"
             self.logger.error(error_msg)
-            return dict_to_json({"error": error_msg})
+            error = ErrorDetail(
+                code="INTERNAL_ERROR",
+                message=error_msg,
+                details=None
+            )
+            return dict_to_json(ErrorResponse(
+                status="error",
+                timestamp=datetime.now(),
+                error=error
+            ).model_dump())
     
     def list_components(self, domain_name: str, container_name: str, 
                      component_type: Optional[str] = None,
@@ -446,9 +571,16 @@ class ComponentManager:
             )
             
             if not domain_records or len(domain_records) == 0:
-                return dict_to_json({
-                    "error": f"Domain '{domain_name}' not found in container '{container_name}'"
-                })
+                error = ErrorDetail(
+                    code="DOMAIN_NOT_FOUND",
+                    message=f"Domain '{domain_name}' not found in container '{container_name}'",
+                    details=None
+                )
+                return dict_to_json(ErrorResponse(
+                    status="error",
+                    timestamp=datetime.now(),
+                    error=error
+                ).model_dump())
             
             # Validate sort_by
             valid_sort_fields = ["name", "created", "lastUpdated"]
@@ -501,33 +633,45 @@ class ComponentManager:
                     component = dict(record["comp"].items())
                     components.append(component)
             
-            return dict_to_json({
+            # Create custom response structure since there's no specific model for listing components
+            response_data = {
+                "status": "success",
+                "timestamp": datetime.now().isoformat(),
+                "message": f"Found {len(components)} components in domain '{domain_name}'",
                 "domain": domain_name,
                 "container": container_name,
                 "component_count": len(components),
                 "component_type_filter": component_type,
                 "components": components
-            })
+            }
+            
+            return dict_to_json(response_data)
                 
         except Exception as e:
             error_msg = f"Error listing components: {str(e)}"
             self.logger.error(error_msg)
-            return dict_to_json({"error": error_msg})
+            error = ErrorDetail(
+                code="INTERNAL_ERROR",
+                message=error_msg,
+                details=None
+            )
+            return dict_to_json(ErrorResponse(
+                status="error",
+                timestamp=datetime.now(),
+                error=error
+            ).model_dump())
     
-    def create_component_relationship(self, from_component: str, to_component: str, 
-                                   domain_name: str, container_name: str,
-                                   relation_type: str,
-                                   properties: Optional[Dict[str, Any]] = None) -> str:
+    def create_component_relationship(self, 
+                                  relationship: RelationshipCreate,
+                                  domain_name: str, 
+                                  container_name: str) -> str:
         """
         Create a relationship between two components in a domain.
         
         Args:
-            from_component: Name of the source component
-            to_component: Name of the target component
+            relationship: RelationshipCreate Pydantic model with relationship details
             domain_name: Name of the domain
             container_name: Name of the project container
-            relation_type: Type of relationship
-            properties: Optional properties for the relationship
             
         Returns:
             JSON string with the result
@@ -535,13 +679,23 @@ class ComponentManager:
         try:
             self.base_manager.ensure_initialized()
             
+            # Split component ids to get names
+            # Assuming component ids are in the format of 'cmp-<name>'
+            from_id = relationship.source_id
+            to_id = relationship.target_id
+            
+            # Extract component names from ids if needed
+            # This depends on the format of your IDs
+            from_component = from_id
+            to_component = to_id
+            
             # Check if components exist in domain
             components_query = """
             MATCH (c:Entity {name: $container_name, entityType: 'ProjectContainer'})
             MATCH (d:Entity {name: $domain_name, entityType: 'Domain'})-[:PART_OF]->(c)
-            MATCH (from:Entity {name: $from_component})-[:BELONGS_TO]->(d)
-            MATCH (to:Entity {name: $to_component})-[:BELONGS_TO]->(d)
-            RETURN from, to
+            MATCH (from:Entity {id: $from_id})-[:BELONGS_TO]->(d)
+            MATCH (to:Entity {id: $to_id})-[:BELONGS_TO]->(d)
+            RETURN from.name as from_name, to.name as to_name
             """
             
             components_records = self.base_manager.safe_execute_read_query(
@@ -549,22 +703,33 @@ class ComponentManager:
                 {
                     "container_name": container_name, 
                     "domain_name": domain_name, 
-                    "from_component": from_component, 
-                    "to_component": to_component
+                    "from_id": from_id, 
+                    "to_id": to_id
                 }
             )
             
             if not components_records or len(components_records) == 0:
-                return dict_to_json({
-                    "error": f"One or both components not found in domain '{domain_name}'"
-                })
+                error = ErrorDetail(
+                    code="COMPONENTS_NOT_FOUND",
+                    message=f"One or both components not found in domain '{domain_name}'",
+                    details=None
+                )
+                return dict_to_json(ErrorResponse(
+                    status="error",
+                    timestamp=datetime.now(),
+                    error=error
+                ).model_dump())
+            
+            # Get component names for more descriptive messages
+            from_name = components_records[0]["from_name"]
+            to_name = components_records[0]["to_name"]
             
             # Check if relationship already exists
             check_query = """
             MATCH (c:Entity {name: $container_name, entityType: 'ProjectContainer'})
             MATCH (d:Entity {name: $domain_name, entityType: 'Domain'})-[:PART_OF]->(c)
-            MATCH (from:Entity {name: $from_component})-[:BELONGS_TO]->(d)
-            MATCH (to:Entity {name: $to_component})-[:BELONGS_TO]->(d)
+            MATCH (from:Entity {id: $from_id})-[:BELONGS_TO]->(d)
+            MATCH (to:Entity {id: $to_id})-[:BELONGS_TO]->(d)
             MATCH (from)-[r]->(to)
             WHERE type(r) = $relation_type
             RETURN r
@@ -575,20 +740,26 @@ class ComponentManager:
                 {
                     "container_name": container_name, 
                     "domain_name": domain_name, 
-                    "from_component": from_component, 
-                    "to_component": to_component,
-                    "relation_type": relation_type
+                    "from_id": from_id, 
+                    "to_id": to_id,
+                    "relation_type": relationship.relationship_type
                 }
             )
             
             if check_records and len(check_records) > 0:
-                return dict_to_json({
-                    "status": "success",
-                    "message": f"Relationship of type '{relation_type}' already exists between components '{from_component}' and '{to_component}'"
-                })
+                return dict_to_json(SuccessResponse(
+                    status="success",
+                    timestamp=datetime.now(),
+                    message=f"Relationship of type '{relationship.relationship_type}' already exists between components '{from_name}' and '{to_name}'"
+                ).model_dump(exclude_none=True))
             
             # Prepare relationship properties
-            relation_props = properties or {}
+            relation_props = {}
+            if relationship.metadata:
+                metadata_dict = relationship.metadata.model_dump(exclude_none=True)
+                for key, value in metadata_dict.items():
+                    relation_props[f"metadata_{key}"] = value
+            
             relation_props["created"] = time.time()
             relation_props["domain"] = "project"
             
@@ -596,9 +767,9 @@ class ComponentManager:
             create_query = f"""
             MATCH (c:Entity {{name: $container_name, entityType: 'ProjectContainer'}})
             MATCH (d:Entity {{name: $domain_name, entityType: 'Domain'}})-[:PART_OF]->(c)
-            MATCH (from:Entity {{name: $from_component}})-[:BELONGS_TO]->(d)
-            MATCH (to:Entity {{name: $to_component}})-[:BELONGS_TO]->(d)
-            CREATE (from)-[r:{relation_type} $properties]->(to)
+            MATCH (from:Entity {{id: $from_id}})-[:BELONGS_TO]->(d)
+            MATCH (to:Entity {{id: $to_id}})-[:BELONGS_TO]->(d)
+            CREATE (from)-[r:{relationship.relationship_type} $properties]->(to)
             RETURN r
             """
             
@@ -607,23 +778,40 @@ class ComponentManager:
                 {
                     "container_name": container_name, 
                     "domain_name": domain_name, 
-                    "from_component": from_component, 
-                    "to_component": to_component,
+                    "from_id": from_id, 
+                    "to_id": to_id,
                     "properties": relation_props
                 }
             )
             
             if not create_records or len(create_records) == 0:
-                return dict_to_json({
-                    "error": f"Failed to create relationship between components '{from_component}' and '{to_component}'"
-                })
+                error = ErrorDetail(
+                    code="RELATIONSHIP_CREATION_FAILED",
+                    message=f"Failed to create relationship between components '{from_name}' and '{to_name}'",
+                    details=None
+                )
+                return dict_to_json(ErrorResponse(
+                    status="error",
+                    timestamp=datetime.now(),
+                    error=error
+                ).model_dump())
             
-            return dict_to_json({
-                "status": "success",
-                "message": f"Relationship of type '{relation_type}' created between components '{from_component}' and '{to_component}'"
-            })
+            return dict_to_json(SuccessResponse(
+                status="success",
+                timestamp=datetime.now(),
+                message=f"Relationship of type '{relationship.relationship_type}' created between components '{from_name}' and '{to_name}'"
+            ).model_dump(exclude_none=True))
                 
         except Exception as e:
             error_msg = f"Error creating component relationship: {str(e)}"
             self.logger.error(error_msg)
-            return dict_to_json({"error": error_msg}) 
+            error = ErrorDetail(
+                code="INTERNAL_ERROR",
+                message=error_msg,
+                details=None
+            )
+            return dict_to_json(ErrorResponse(
+                status="error",
+                timestamp=datetime.now(),
+                error=error
+            ).model_dump()) 
