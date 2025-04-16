@@ -8,6 +8,7 @@ import time
 import json
 import logging
 import re
+from datetime import datetime
 
 from src.graph_memory.base_manager import BaseManager
 from src.project_memory.domain_manager import DomainManager
@@ -19,7 +20,7 @@ from src.models.responses import SuccessResponse, create_error_response, create_
 from src.models.project_memory import (
     ProjectContainerCreate, ProjectContainerUpdate, ComponentCreate, 
     ComponentUpdate, DomainEntityCreate, RelationshipCreate, SearchQuery, VersionCreate, VersionGetRequest,
-    VersionCompareRequest, TagCreate, SyncRequest, CommitData
+    VersionCompareRequest, TagCreate, SyncRequest, CommitData, ErrorDetail, ErrorResponse
 )
 from src.graph_memory.search_manager import SearchManager
 
@@ -53,42 +54,71 @@ class ProjectMemoryManager:
     
     def _standardize_response(self, result_json: str, success_message: str, error_code: str) -> str:
         """
-        Standardize a response from a component manager.
+        Standardize API responses.
         
         Args:
-            result_json: JSON string result from a component manager
-            success_message: Message to include in success response
-            error_code: Code to use for error responses
+            result_json: JSON result string from a manager
+            success_message: Message to include in successful responses
+            error_code: Error code to use for error responses
             
         Returns:
-            Standardized JSON string response
+            Standardized JSON response string
         """
         try:
-            # Parse the result
-            if isinstance(result_json, dict):
-                result_data = result_json
-            else:
-                result_data = json.loads(result_json)
+            # Parse the result JSON
+            result_data = json.loads(result_json)
             
-            # Check for errors - use dictionary get method to check for presence of key
-            if isinstance(result_data, dict) and result_data.get("error") is not None:
-                return json.dumps(create_error_response(
-                    message=str(result_data.get("error", "Unknown error")),
-                    code=error_code
-                ).model_dump(), default=str)
+            # If the result already has a Pydantic-style error structure, return it directly
+            if isinstance(result_data, dict) and result_data.get("status") == "error" and "error" in result_data:
+                return result_json
+                
+            # If result contains an "error" key, convert to proper error response
+            if isinstance(result_data, dict) and "error" in result_data:
+                from src.models.project_memory import ErrorDetail, ErrorResponse
+                error = ErrorDetail(
+                    code=error_code,
+                    message=result_data["error"],
+                    details=None
+                )
+                error_response = ErrorResponse(
+                    status="error",
+                    timestamp=datetime.now(),
+                    error=error
+                )
+                return error_response.model_dump_json()
+                
+            # Otherwise, it's a success response - create proper Pydantic response
+            from src.models.project_memory import SuccessResponse
             
-            # Return standardized success response
-            return json.dumps(create_success_response(
+            # Create a standard response with just the message and timestamp
+            success_response = SuccessResponse(
                 message=success_message,
-                data=result_data
-            ).model_dump(), default=str)
+                timestamp=datetime.now()
+            )
+            
+            # Convert the response to a dict and merge with result data
+            response_dict = success_response.model_dump(exclude_none=True)
+            if isinstance(result_data, dict):
+                response_dict.update(result_data)
+            
+            # Return as JSON
+            return json.dumps(response_dict, default=str)
             
         except Exception as e:
+            # Something went wrong while processing the response
             self.logger.error(f"Error standardizing response: {str(e)}")
-            return json.dumps(create_error_response(
-                message=f"Failed to process response: {str(e)}",
-                code="response_processing_error"
-            ).model_dump(), default=str)
+            from src.models.project_memory import ErrorDetail, ErrorResponse
+            error = ErrorDetail(
+                code="response_processing_error",
+                message=f"Error processing response: {str(e)}",
+                details={"original_response": result_json}
+            )
+            error_response = ErrorResponse(
+                status="error",
+                timestamp=datetime.now(),
+                error=error
+            )
+            return error_response.model_dump_json()
     
     # ============================================================================
     # Domain management methods
@@ -110,43 +140,75 @@ class ProjectMemoryManager:
             JSON string with the created domain
         """
         try:
-            # Validate parameters using Pydantic model
+            # Use Pydantic v2 validation with modern error handling
+            from pydantic import ValidationError
+            
             try:
+                # Prepare domain data for the Pydantic model
                 domain_data = {
                     "name": name,
                     "project_id": container_name,
                     "description": description,
-                    "metadata": properties
+                    "metadata": properties,
+                    "type": "Domain"  # Required by DomainEntityCreate
                 }
+                
+                # Create and validate with Pydantic
                 domain_model = DomainEntityCreate(**domain_data)
-                validated_data = domain_model.model_dump()
-            except Exception as ve:
-                self.logger.error(f"Validation error for domain: {str(ve)}")
-                return json.dumps(create_error_response(
-                    message=f"Invalid domain data: {str(ve)}",
-                    code="validation_error"
-                ).model_dump(), default=str)
+                
+                # We can access computed fields or perform model validation
+                if hasattr(domain_model, 'entity_identifier'):
+                    domain_id = domain_model.entity_identifier
+                    self.logger.debug(f"Creating domain with generated ID: {domain_id}")
+                
+            except ValidationError as ve:
+                # Enhanced validation error handling
+                self.logger.error(f"Validation error for domain: {ve}")
+                error = ErrorDetail(
+                    code="validation_error",
+                    message="Invalid domain data",
+                    details={"validation_errors": ve.errors()}
+                )
+                error_response = ErrorResponse(
+                    status="error",
+                    timestamp=datetime.now(),
+                    error=error
+                )
+                return error_response.model_dump_json()
             
-            # Call the domain manager with validated parameters
+            # Call the domain manager with the validated model
             result = self.domain_manager.create_domain(domain_model)
             
-            # Parse the result
+            # Process and standardize the response
             result_data = json.loads(result)
             
+            # Handle errors in the domain manager response
             if "error" in result_data:
+                # We can directly return since it's already in error format
                 return result
-                
+            
+            # We can transform to a proper response type if needed
+            # For now, standardize using our helper method
             return self._standardize_response(
                 result,
                 f"Successfully created domain '{name}' in project '{container_name}'",
                 "domain_creation_error"
             )
+            
         except Exception as e:
+            # Centralized error handling with Pydantic models
             self.logger.error(f"Error creating project domain: {str(e)}")
-            return json.dumps(create_error_response(
+            error = ErrorDetail(
+                code="domain_creation_error",
                 message=f"Failed to create project domain: {str(e)}",
-                code="domain_creation_error"
-            ).model_dump(), default=str)
+                details=None
+            )
+            error_response = ErrorResponse(
+                status="error",
+                timestamp=datetime.now(),
+                error=error
+            )
+            return error_response.model_dump_json()
     
     def get_project_domain(self, name: str, container_name: str) -> str:
         """
@@ -420,40 +482,75 @@ class ProjectMemoryManager:
             JSON string with the created component
         """
         try:
-            # Validate component data using Pydantic model
+            # Use Pydantic v2 validation and conversion
+            from pydantic import ValidationError
+            from src.models.project_memory import ComponentResponse
+            
             try:
+                # Convert parameters to a dictionary for component construction
                 component_data = {
                     "name": name,
-                    "type": component_type,  # Note: component_manager expects 'type', not 'component_type'
+                    "type": component_type,  # component_manager expects 'type'
                     "description": description,
+                    "project_id": container_name,  # required by ComponentCreate model
                     "metadata": metadata
                 }
+                
+                # Create the Pydantic model with validation
                 component_model = ComponentCreate(**component_data)
-            except Exception as ve:
-                self.logger.error(f"Validation error for component: {str(ve)}")
-                return json.dumps(create_error_response(
-                    message=f"Invalid component data: {str(ve)}",
-                    code="validation_error"
-                ).model_dump(), default=str)
+                
+                # Use the model's computed fields if needed
+                component_id = component_model.component_identifier
+                self.logger.debug(f"Creating component with ID: {component_id}")
+                
+            except ValidationError as ve:
+                # Handle validation errors with proper Pydantic error format
+                self.logger.error(f"Validation error for component: {ve}")
+                error = ErrorDetail(
+                    code="validation_error",
+                    message="Invalid component data",
+                    details={"validation_errors": ve.errors()}
+                )
+                error_response = ErrorResponse(
+                    status="error",
+                    timestamp=datetime.now(),
+                    error=error
+                )
+                return error_response.model_dump_json()
             
-            # Call the component manager with validated parameters
+            # Call the component manager with validated Pydantic model
             result = self.component_manager.create_component(
                 component=component_model,
                 domain_name=domain_name,
                 container_name=container_name
             )
             
-            return self._standardize_response(
-                result,
-                f"Created {component_type} component '{name}' in domain '{domain_name}' of project '{container_name}'",
-                "component_creation_error"
-            )
+            # Process the response with Pydantic
+            try:
+                # Try to parse directly as a Pydantic ComponentResponse
+                response_obj = ComponentResponse.model_validate_json(result)
+                return response_obj.model_dump_json()
+            except Exception:
+                # Fallback to standard response
+                return self._standardize_response(
+                    result,
+                    f"Created {component_type} component '{name}' in domain '{domain_name}' of project '{container_name}'",
+                    "component_creation_error"
+                )
+                
         except Exception as e:
             self.logger.error(f"Error creating project component: {str(e)}")
-            return json.dumps(create_error_response(
+            error = ErrorDetail(
+                code="component_creation_error",
                 message=f"Failed to create component: {str(e)}",
-                code="component_creation_error"
-            ).model_dump(), default=str)
+                details=None
+            )
+            error_response = ErrorResponse(
+                status="error",
+                timestamp=datetime.now(),
+                error=error
+            )
+            return error_response.model_dump_json()
     
     def get_project_component(self, name: str, domain_name: str, 
                     container_name: str) -> str:
@@ -498,19 +595,37 @@ class ProjectMemoryManager:
             JSON string with the updated component
         """
         try:
-            # Validate updates using Pydantic model
-            try:
-                # Construct the update model
-                component_update = ComponentUpdate(**updates)
-                validated_updates = component_update.model_dump()
-            except Exception as ve:
-                self.logger.error(f"Validation error for component update: {str(ve)}")
-                return json.dumps(create_error_response(
-                    message=f"Invalid update data: {str(ve)}",
-                    code="validation_error"
-                ).model_dump(), default=str)
+            # Use Pydantic v2 validation and conversion
+            from pydantic import ValidationError
+            from src.models.project_memory import ComponentResponse
             
-            # Pass an empty string when domain_name is None to maintain compatibility with the API
+            try:
+                # Add the required ID field to the updates
+                updates_with_id = {"id": name, **updates}
+                
+                # Create and validate the ComponentUpdate model
+                component_update = ComponentUpdate(**updates_with_id)
+                
+                # We can access computed fields if they exist
+                if hasattr(component_update, 'update_count'):
+                    self.logger.debug(f"Updating {component_update.update_count} fields for component '{name}'")
+                
+            except ValidationError as ve:
+                # Enhanced validation error handling
+                self.logger.error(f"Validation error for component update: {ve}")
+                error = ErrorDetail(
+                    code="validation_error",
+                    message="Invalid update data",
+                    details={"validation_errors": ve.errors()}
+                )
+                error_response = ErrorResponse(
+                    status="error",
+                    timestamp=datetime.now(),
+                    error=error
+                )
+                return error_response.model_dump_json()
+            
+            # Pass an empty string when domain_name is None for API compatibility
             domain_name_to_use = domain_name if domain_name else ""
             
             # Use the proper structure for the update_component call
@@ -520,17 +635,35 @@ class ProjectMemoryManager:
                 container_name=container_name
             )
             
-            return self._standardize_response(
-                update_result,
-                f"Updated component '{name}' in {'domain ' + domain_name + ' of ' if domain_name else ''}project '{container_name}'",
-                "component_update_error"
-            )
+            # Process the response with Pydantic
+            try:
+                # Try to parse as a Pydantic response model
+                response_obj = ComponentResponse.model_validate_json(update_result)
+                return response_obj.model_dump_json()
+            except Exception:
+                # Domain description for message
+                domain_desc = f" in domain '{domain_name}'" if domain_name else ""
+                
+                # Fallback to standard response handling
+                return self._standardize_response(
+                    update_result,
+                    f"Updated component '{name}'{domain_desc} in project '{container_name}'",
+                    "component_update_error"
+                )
+                
         except Exception as e:
             self.logger.error(f"Error updating project component: {str(e)}")
-            return json.dumps(create_error_response(
+            error = ErrorDetail(
+                code="component_update_error",
                 message=f"Failed to update component: {str(e)}",
-                code="component_update_error"
-            ).model_dump(), default=str)
+                details=None
+            )
+            error_response = ErrorResponse(
+                status="error",
+                timestamp=datetime.now(),
+                error=error
+            )
+            return error_response.model_dump_json()
     
     def delete_project_component(self, component_id: str, domain_name: Optional[str] = None, 
                       container_name: Optional[str] = None) -> str:
@@ -764,41 +897,70 @@ class ProjectMemoryManager:
             JSON string with the created relationship
         """
         try:
-            # Validate relationship data using Pydantic model
+            # Use Pydantic v2 validation with proper error handling
+            from pydantic import ValidationError
+            
             try:
+                # Create the relationship data for the Pydantic model
                 relationship_data = {
                     "source_id": from_component,
                     "target_id": to_component,
                     "relationship_type": relation_type,
                     "properties": properties
                 }
+                
+                # Create and validate the RelationshipCreate model
                 relationship_model = RelationshipCreate(**relationship_data)
-                validated_data = relationship_model.model_dump()
-            except Exception as ve:
-                self.logger.error(f"Validation error for component relationship: {str(ve)}")
-                return json.dumps(create_error_response(
-                    message=f"Invalid relationship data: {str(ve)}",
-                    code="validation_error"
-                ).model_dump(), default=str)
+                
+                # We can access computed fields if needed
+                if hasattr(relationship_model, 'relationship_label'):
+                    relationship_label = relationship_model.relationship_label
+                    self.logger.debug(f"Creating relationship with label: {relationship_label}")
+                
+            except ValidationError as ve:
+                # Enhanced validation error handling
+                self.logger.error(f"Validation error for component relationship: {ve}")
+                error = ErrorDetail(
+                    code="validation_error",
+                    message="Invalid relationship data",
+                    details={"validation_errors": ve.errors()}
+                )
+                error_response = ErrorResponse(
+                    status="error",
+                    timestamp=datetime.now(),
+                    error=error
+                )
+                return error_response.model_dump_json()
             
-            # Now proceed with the component manager call
+            # Call the component manager with the validated model
             result = self.component_manager.create_component_relationship(
                 relationship=relationship_model,
                 domain_name=domain_name,
                 container_name=container_name
             )
             
+            # Process the response - use standard response
+            # We don't have a RelationshipResponse model currently
+            relationship_desc = relationship_model.relationship_type
             return self._standardize_response(
                 result,
-                f"Created {validated_data['relationship_type']} relationship from component '{from_component}' to '{to_component}' in domain '{domain_name}'",
+                f"Created {relationship_desc} relationship from component '{from_component}' to '{to_component}' in domain '{domain_name}'",
                 "component_relationship_error"
             )
+                
         except Exception as e:
-            self.logger.error(f"Error creating component relationship: {str(e)}")
-            return json.dumps(create_error_response(
+            self.logger.error(f"Error creating project component relationship: {str(e)}")
+            error = ErrorDetail(
+                code="component_relationship_error",
                 message=f"Failed to create component relationship: {str(e)}",
-                code="component_relationship_error"
-            ).model_dump(), default=str)
+                details=None
+            )
+            error_response = ErrorResponse(
+                status="error",
+                timestamp=datetime.now(),
+                error=error
+            )
+            return error_response.model_dump_json()
     
     # ============================================================================
     # Dependency management methods
@@ -1191,49 +1353,75 @@ class ProjectMemoryManager:
             JSON string with the created version
         """
         try:
-            # Validate and prepare version data using Pydantic model
+            # Use Pydantic v2 validation with proper error handling
+            from pydantic import ValidationError
+            from src.models.project_memory import VersionResponse
+            
             try:
-                # Import VersionCreate if not already imported
-                from src.models.project_memory import VersionCreate
-                
+                # Prepare version data for the Pydantic model
                 version_data = {
-                    "component_id": component_name,  # Using name as ID for now
+                    "component_name": component_name,
+                    "domain_name": domain_name,
+                    "container_name": container_name,
                     "version_number": version_number,
                     "commit_hash": commit_hash,
                     "content": content,
                     "changes": changes,
                     "metadata": metadata
                 }
+                
+                # Create and validate the VersionCreate model
                 version_model = VersionCreate(**version_data)
                 
-                # Add domain and container info
-                version_model_dict = version_model.model_dump()
-                version_model_dict["domain_name"] = domain_name
-                version_model_dict["container_name"] = container_name
+                # Validate version number format using Pydantic
+                # The model should handle this through its validators
                 
-            except Exception as ve:
-                self.logger.error(f"Validation error for version data: {str(ve)}")
-                return json.dumps(create_error_response(
-                    message=f"Invalid version data: {str(ve)}",
-                    code="validation_error"
-                ).model_dump(), default=str)
+            except ValidationError as ve:
+                # Enhanced validation error handling
+                self.logger.error(f"Validation error for version data: {ve}")
+                error = ErrorDetail(
+                    code="validation_error",
+                    message="Invalid version data",
+                    details={"validation_errors": ve.errors()}
+                )
+                error_response = ErrorResponse(
+                    status="error",
+                    timestamp=datetime.now(),
+                    error=error
+                )
+                return error_response.model_dump_json()
             
-            # Now call the version manager with validated data
+            # Call the version manager with the validated model
             result = self.version_manager.create_version(
                 version_data=version_model
             )
             
-            return self._standardize_response(
-                result,
-                f"Created version {version_number} for component '{component_name}' in domain '{domain_name}'",
-                "version_creation_error"
-            )
+            # Process the response with Pydantic if possible
+            try:
+                # Try to parse as a VersionResponse model if available
+                response_obj = VersionResponse.model_validate_json(result)
+                return response_obj.model_dump_json()
+            except Exception:
+                # Fallback to standard response
+                return self._standardize_response(
+                    result,
+                    f"Created version {version_number} for component '{component_name}' in domain '{domain_name}'",
+                    "version_creation_error"
+                )
+                
         except Exception as e:
             self.logger.error(f"Error creating project version: {str(e)}")
-            return json.dumps(create_error_response(
+            error = ErrorDetail(
+                code="version_creation_error",
                 message=f"Failed to create version: {str(e)}",
-                code="version_creation_error"
-            ).model_dump(), default=str)
+                details=None
+            )
+            error_response = ErrorResponse(
+                status="error",
+                timestamp=datetime.now(),
+                error=error
+            )
+            return error_response.model_dump_json()
     
     def _is_valid_version(self, version: str) -> bool:
         """
@@ -1524,31 +1712,58 @@ class ProjectMemoryManager:
             JSON string with the created project container
         """
         try:
-            # Validate project data using Pydantic model
+            # Use Pydantic v2 validation and conversion
+            from pydantic import ValidationError
+            from src.models.project_memory import ProjectContainerResponse
+            
             try:
+                # Create the Pydantic model from input data
                 project_model = ProjectContainerCreate(**project_data)
-                validated_data = project_model.model_dump()
-            except Exception as ve:
-                self.logger.error(f"Validation error for project container: {str(ve)}")
-                return json.dumps(create_error_response(
-                    message=f"Invalid project data: {str(ve)}",
-                    code="validation_error"
-                ).model_dump(), default=str)
-                
-            # The project_container expects ProjectContainerCreate model, not a dict
+            except ValidationError as ve:
+                # Proper handling of Pydantic validation errors
+                self.logger.error(f"Validation error for project container: {ve}")
+                error = ErrorDetail(
+                    code="validation_error",
+                    message="Invalid project data",
+                    details={"validation_errors": ve.errors()}  # Convert to dict for ErrorDetail
+                )
+                error_response = ErrorResponse(
+                    status="error",
+                    timestamp=datetime.now(),
+                    error=error
+                )
+                return error_response.model_dump_json()
+            
+            # The project_container expects ProjectContainerCreate model
             result_json = self.project_container.create_project_container(project_model)
-            project_name = validated_data.get("name", "New project")
-            return self._standardize_response(
-                result_json,
-                f"Created project container '{project_name}'",
-                "container_creation_error"
-            )
+            
+            # Process the response
+            try:
+                # Try to parse as a Pydantic response model
+                response_obj = ProjectContainerResponse.model_validate_json(result_json)
+                return response_obj.model_dump_json()
+            except Exception:
+                # Fallback to standard response handling
+                project_name = project_model.name
+                return self._standardize_response(
+                    result_json,
+                    f"Created project container '{project_name}'",
+                    "container_creation_error"
+                )
+                
         except Exception as e:
             self.logger.error(f"Error creating project container: {str(e)}")
-            return json.dumps(create_error_response(
+            error = ErrorDetail(
+                code="container_creation_error",
                 message=f"Failed to create project container: {str(e)}",
-                code="container_creation_error"
-            ).model_dump(), default=str)
+                details=None
+            )
+            error_response = ErrorResponse(
+                status="error",
+                timestamp=datetime.now(),
+                error=error
+            )
+            return error_response.model_dump_json()
     
     def get_project_container(self, name: str) -> str:
         """
@@ -1561,18 +1776,37 @@ class ProjectMemoryManager:
             JSON string with the container details
         """
         try:
+            # Import the appropriate response model
+            from src.models.project_memory import ProjectContainerResponse
+            
+            # Call the manager method
             result_json = self.project_container.get_project_container(name)
-            return self._standardize_response(
-                result_json,
-                f"Retrieved project container '{name}'",
-                "container_retrieval_error"
-            )
+            
+            # Try to parse as a Pydantic response model
+            try:
+                response_obj = ProjectContainerResponse.model_validate_json(result_json)
+                return response_obj.model_dump_json()
+            except Exception:
+                # Fallback to standard response handling
+                return self._standardize_response(
+                    result_json,
+                    f"Retrieved project container '{name}'",
+                    "container_retrieval_error"
+                )
+                
         except Exception as e:
             self.logger.error(f"Error retrieving project container: {str(e)}")
-            return json.dumps(create_error_response(
+            error = ErrorDetail(
+                code="container_retrieval_error",
                 message=f"Failed to retrieve project container: {str(e)}",
-                code="container_retrieval_error"
-            ).model_dump(), default=str)
+                details=None
+            )
+            error_response = ErrorResponse(
+                status="error",
+                timestamp=datetime.now(),
+                error=error
+            )
+            return error_response.model_dump_json()
             
     def update_project_container(self, name: str, updates: Dict[str, Any]) -> str:
         """
@@ -1589,29 +1823,58 @@ class ProjectMemoryManager:
             JSON string with the updated project container
         """
         try:
-            # Validate updates using Pydantic model
+            # Use Pydantic v2 validation and conversion
+            from pydantic import ValidationError
+            from src.models.project_memory import ProjectContainerResponse
+            
             try:
-                update_model = ProjectContainerUpdate(**updates)
-                validated_updates = update_model.model_dump()
-            except Exception as ve:
-                self.logger.error(f"Validation error for project container update: {str(ve)}")
-                return json.dumps(create_error_response(
-                    message=f"Invalid update data: {str(ve)}",
-                    code="validation_error"
-                ).model_dump(), default=str)
-                
+                # Add the ID field for ProjectContainerUpdate
+                updates_with_id = {"id": name, **updates}
+                update_model = ProjectContainerUpdate(**updates_with_id)
+            except ValidationError as ve:
+                # Proper handling of Pydantic validation errors
+                self.logger.error(f"Validation error for project container update: {ve}")
+                error = ErrorDetail(
+                    code="validation_error",
+                    message="Invalid update data",
+                    details={"validation_errors": ve.errors()}  # Convert to dict for ErrorDetail
+                )
+                error_response = ErrorResponse(
+                    status="error",
+                    timestamp=datetime.now(),
+                    error=error
+                )
+                return error_response.model_dump_json()
+            
+            # The project_container expects ProjectContainerUpdate model
             result_json = self.project_container.update_project_container(name, update_model)
-            return self._standardize_response(
-                result_json,
-                f"Updated project container '{name}'",
-                "container_update_error"
-            )
+            
+            # Process the response
+            try:
+                # Try to parse as a Pydantic response model
+                response_obj = ProjectContainerResponse.model_validate_json(result_json)
+                return response_obj.model_dump_json()
+            except Exception:
+                # Fallback to standard response handling
+                return self._standardize_response(
+                    result_json,
+                    f"Updated project container '{name}'",
+                    "container_update_error"
+                )
+                
         except Exception as e:
             self.logger.error(f"Error updating project container: {str(e)}")
-            return json.dumps(create_error_response(
+            error = ErrorDetail(
+                code="container_update_error",
                 message=f"Failed to update project container: {str(e)}",
-                code="container_update_error"
-            ).model_dump(), default=str)
+                details=None
+            )
+            error_response = ErrorResponse(
+                status="error",
+                timestamp=datetime.now(),
+                error=error
+            )
+            return error_response.model_dump_json()
     
     def delete_project_container(self, name: str, delete_contents: bool = False) -> str:
         """
@@ -1619,25 +1882,63 @@ class ProjectMemoryManager:
         
         Args:
             name: Name of the project container
-            delete_contents: If True, delete all domains and components in the container
+            delete_contents: Whether to delete all contents of the container
             
         Returns:
             JSON string with the deletion result
         """
         try:
+            # Use Pydantic for request structure if needed
+            # For a simple delete, we can directly call the manager
             result_json = self.project_container.delete_project_container(name, delete_contents)
-            content_note = " and all its contents" if delete_contents else ""
-            return self._standardize_response(
-                result_json,
-                f"Deleted project container '{name}'{content_note}",
-                "container_deletion_error"
+            
+            # Parse the response
+            result_data = json.loads(result_json)
+            
+            # Check for errors in the response
+            if isinstance(result_data, dict) and "error" in result_data:
+                error = ErrorDetail(
+                    code="container_deletion_error",
+                    message=result_data["error"],
+                    details=None
+                )
+                error_response = ErrorResponse(
+                    status="error",
+                    timestamp=datetime.now(),
+                    error=error
+                )
+                return error_response.model_dump_json()
+            
+            # Create a success response with more details
+            from src.models.project_memory import SuccessResponse
+            success_response = SuccessResponse(
+                message=f"Successfully deleted project container '{name}'{' and all its contents' if delete_contents else ''}",
+                timestamp=datetime.now()
             )
+            
+            # Add any additional details from the result
+            response_dict = success_response.model_dump(exclude_none=True)
+            if isinstance(result_data, dict):
+                # Add relevant fields from the result to the response
+                for key in ["deleted_components", "deleted_relationships"]:
+                    if key in result_data:
+                        response_dict[key] = result_data[key]
+            
+            return json.dumps(response_dict, default=str)
+            
         except Exception as e:
             self.logger.error(f"Error deleting project container: {str(e)}")
-            return json.dumps(create_error_response(
+            error = ErrorDetail(
+                code="container_deletion_error",
                 message=f"Failed to delete project container: {str(e)}",
-                code="container_deletion_error"
-            ).model_dump(), default=str)
+                details=None
+            )
+            error_response = ErrorResponse(
+                status="error",
+                timestamp=datetime.now(),
+                error=error
+            )
+            return error_response.model_dump_json()
     
     def list_project_containers(self, sort_by: str = "name", limit: int = 100) -> str:
         """
@@ -1864,123 +2165,124 @@ class ProjectMemoryManager:
     # ============================================================================
     
     def search_project_entities(self, search_term: str, container_name: str, 
-                                entity_types: Optional[List[str]] = None,
-                                limit: int = 10, semantic: bool = False) -> str:
+                      entity_types: Optional[List[str]] = None,
+                      limit: int = 10, semantic: bool = False) -> str:
         """
-        Search for entities within a project container.
+        Search for entities in a project container.
         
         Args:
-            search_term: The term to search for
-            container_name: Name of the project container to search within
-            entity_types: Optional list of entity types to filter by (e.g., 'Component', 'Domain', 'Decision')
+            search_term: Search query term
+            container_name: Name of the project container
+            entity_types: Optional. List of entity types to filter by
             limit: Maximum number of results to return
-            semantic: Whether to perform semantic (embedding-based) search
+            semantic: Whether to use semantic search
             
         Returns:
-            JSON string with the search results
+            JSON string with search results
         """
         try:
-            # Validate search parameters using SearchQuery model
-            search_data = {
-                "query": search_term,
-                "entity_types": entity_types,
-                "limit": limit
-            }
+            # Use Pydantic v2 for search query validation
+            from pydantic import ValidationError
+            from src.models.project_memory import SearchQuery, SearchResponse
             
             try:
-                # Use SearchQuery from project_memory.py for validation
-                search_model = SearchQuery(**search_data)
-                validated_data = search_model.model_dump()
-            except Exception as ve:
-                self.logger.error(f"Validation error for search query: {str(ve)}")
-                return json.dumps(create_error_response(
-                    message=f"Invalid search query: {str(ve)}",
-                    code="validation_error"
-                ).model_dump(), default=str)
-            
-            self.base_manager.ensure_initialized()
-            
-            # Get container ID first to filter results
-            container_query = """
-            MATCH (c:Entity {name: $container_name, entityType: 'ProjectContainer'})
-            RETURN c.id as container_id
-            """
-            
-            container_records = self.base_manager.safe_execute_read_query(
-                container_query,
-                {"container_name": container_name}
-            )
-            
-            if not container_records or len(container_records) == 0:
-                return json.dumps(create_error_response(
-                    message=f"Project container '{container_name}' not found",
-                    code="search_error"
-                ).model_dump(), default=str)
-            
-            # Perform search using SearchManager with validated parameters
-            result = self.search_manager.search_entities(
-                search_term=validated_data["query"],
-                limit=validated_data["limit"],
-                entity_types=validated_data.get("entity_types"),
-                semantic=semantic
-            )
-            
-            # Parse the result
-            result_data = json.loads(result)
-            
-            # Filter results to only include entities in the specified container
-            if "entities" in result_data:
-                # Get all entities that belong to the specified container
-                filtered_entities = []
-                for entity in result_data["entities"]:
-                    # Additional query to check container membership
-                    membership_query = """
-                    MATCH (e:Entity {id: $entity_id})
-                    MATCH (c:Entity {name: $container_name, entityType: 'ProjectContainer'})
-                    RETURN EXISTS((e)-[:BELONGS_TO]->(c)) as belongs_to_container
-                    """
-                    
-                    membership_records = self.base_manager.safe_execute_read_query(
-                        membership_query,
-                        {"entity_id": entity.get("id"), "container_name": container_name}
-                    )
-                    
-                    if membership_records and len(membership_records) > 0 and membership_records[0]["belongs_to_container"]:
-                        filtered_entities.append(entity)
+                # Create a search query model
+                search_data = {
+                    "query": search_term,
+                    "entity_types": entity_types,
+                    "limit": limit
+                }
                 
-                result_data["entities"] = filtered_entities
-                result_data["total_count"] = len(filtered_entities)
+                # Validate using Pydantic
+                search_query = SearchQuery(**search_data)
                 
-                # Add search context to results
-                result_data["search_term"] = validated_data["query"]
-                result_data["container_name"] = container_name
-                result_data["search_type"] = "semantic" if semantic else "text"
+                # We can use computed fields if needed
+                if hasattr(search_query, 'has_filters'):
+                    self.logger.debug(f"Search uses filters: {search_query.has_filters}")
                 
-                search_message = f"Found {len(filtered_entities)} {'semantic' if semantic else 'text'} search results for '{validated_data['query']}' in project '{container_name}'"
-                return json.dumps(create_success_response(
-                    message=search_message,
-                    data=result_data
-                ).model_dump(), default=str)
+            except ValidationError as ve:
+                # Enhanced validation error handling
+                self.logger.error(f"Validation error for search query: {ve}")
+                error = ErrorDetail(
+                    code="validation_error",
+                    message="Invalid search parameters",
+                    details={"validation_errors": ve.errors()}
+                )
+                error_response = ErrorResponse(
+                    status="error",
+                    timestamp=datetime.now(),
+                    error=error
+                )
+                return error_response.model_dump_json()
             
-            # If there's an error in the result, pass it through
-            if "error" in result_data:
-                return json.dumps(create_error_response(
-                    message=result_data["error"],
-                    code="search_error"
-                ).model_dump(), default=str)
+            # Choose search method based on semantic flag
+            if semantic:
+                result = self.semantic_search_project(
+                    search_term, container_name, entity_types, limit
+                )
+            else:
+                # Construct the search query - we're directly passing parameters here
+                # but we could modify this to use the search_query model's fields
+                query = f"""
+                MATCH (c:Entity {{name: $container_name, entityType: 'ProjectContainer'}})
+                MATCH (e:Entity)-[:BELONGS_TO|PART_OF*..2]->(c)
+                WHERE (e.name CONTAINS $search_term OR 
+                      e.description CONTAINS $search_term OR
+                      e.content CONTAINS $search_term)
+                      {f"AND e.entityType IN $entity_types" if entity_types else ""}
+                RETURN e
+                ORDER BY e.name
+                LIMIT $limit
+                """
+                
+                # Parameters for the search
+                params = {
+                    "container_name": container_name,
+                    "search_term": search_term,
+                    "limit": limit
+                }
+                
+                if entity_types:
+                    params["entity_types"] = entity_types
+                
+                # Execute the search
+                records = self.base_manager.safe_execute_read_query(query, params)
+                
+                # Process the results
+                results = []
+                for record in records:
+                    entity = dict(record["e"].items())
+                    results.append(entity)
+                
+                # Create a Pydantic SearchResponse model
+                search_response = SearchResponse(
+                    status="success",
+                    timestamp=datetime.now(),
+                    message=f"Found {len(results)} results for query '{search_term}'",
+                    results=results,
+                    total_count=len(results),
+                    query=search_term
+                )
+                
+                # Return as JSON
+                return search_response.model_dump_json()
             
-            # Default error case
-            return json.dumps(create_error_response(
-                message="Unexpected error during search",
-                code="search_error"
-            ).model_dump(), default=str)
+            # If we used semantic search, just return its result
+            return result
             
         except Exception as e:
             self.logger.error(f"Error searching project entities: {str(e)}")
-            return json.dumps(create_error_response(
-                message=f"Failed to search project entities: {str(e)}",
-                code="search_error"
-            ).model_dump(), default=str)
+            error = ErrorDetail(
+                code="search_error",
+                message=f"Failed to search entities: {str(e)}",
+                details=None
+            )
+            error_response = ErrorResponse(
+                status="error",
+                timestamp=datetime.now(),
+                error=error
+            )
+            return error_response.model_dump_json()
     
     def _get_entity_domain(self, entity_id: str) -> Optional[str]:
         """
