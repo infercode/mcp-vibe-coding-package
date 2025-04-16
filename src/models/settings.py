@@ -6,31 +6,59 @@ leveraging Pydantic's settings management capabilities.
 """
 
 import os
-from typing import Dict, List, Optional, Any, Union
-from pydantic import BaseModel, Field, field_validator, model_validator
+from typing import Dict, List, Optional, Any, Union, Annotated
+from pydantic import BaseModel, Field, field_validator, model_validator, ConfigDict
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Neo4jSettings(BaseModel):
     """Neo4j database connection settings."""
-    uri: str = Field("bolt://localhost:7687", description="Neo4j connection URI")
-    username: str = Field("neo4j", description="Neo4j username")
-    password: str = Field("password", description="Neo4j password")
-    database: str = Field("neo4j", description="Neo4j database name")
-    max_connection_lifetime: int = Field(3600, description="Maximum lifetime of a connection in seconds")
-    max_connection_pool_size: int = Field(50, description="Maximum number of connections in the pool")
-    connection_timeout: int = Field(30, description="Connection timeout in seconds")
+    uri: Annotated[str, Field(default="bolt://localhost:7687", description="Neo4j connection URI")]
+    username: Annotated[str, Field(default="neo4j", description="Neo4j username")]
+    password: Annotated[str, Field(default="password", description="Neo4j password")]
+    database: Annotated[str, Field(default="neo4j", description="Neo4j database name")]
+    max_connection_lifetime: Annotated[int, Field(default=3600, description="Maximum lifetime of a connection in seconds")]
+    max_connection_pool_size: Annotated[int, Field(default=50, description="Maximum number of connections in the pool")]
+    connection_timeout: Annotated[int, Field(default=30, description="Connection timeout in seconds")]
+    
+    model_config = ConfigDict(
+        validate_assignment=True,
+        json_schema_extra={
+            "examples": [
+                {
+                    "uri": "bolt://localhost:7687",
+                    "username": "neo4j",
+                    "password": "password",
+                    "database": "neo4j"
+                }
+            ]
+        }
+    )
 
 
 class VectorSettings(BaseModel):
     """Vector embedding settings."""
-    enabled: bool = Field(False, description="Whether vector embeddings are enabled")
-    provider: str = Field("openai", description="Embedding provider (openai, azure, huggingface, etc.)")
-    model: str = Field("text-embedding-ada-002", description="Embedding model name")
-    dimensions: int = Field(1536, description="Embedding dimensions")
-    api_key: Optional[str] = Field(None, description="API key for the embedding provider")
-    api_base: Optional[str] = Field(None, description="API base URL for the embedding provider")
-    index_name: str = Field("graph_embeddings", description="Neo4j index name for vector search")
+    enabled: Annotated[bool, Field(default=False, description="Whether vector embeddings are enabled")]
+    provider: Annotated[str, Field(default="openai", description="Embedding provider (openai, azure, huggingface, etc.)")]
+    model: Annotated[str, Field(default="text-embedding-ada-002", description="Embedding model name")]
+    dimensions: Annotated[int, Field(default=1536, description="Embedding dimensions")]
+    api_key: Annotated[Optional[str], Field(default=None, description="API key for the embedding provider")]
+    api_base: Annotated[Optional[str], Field(default=None, description="API base URL for the embedding provider")]
+    index_name: Annotated[str, Field(default="graph_embeddings", description="Neo4j index name for vector search")]
+    
+    model_config = ConfigDict(
+        validate_assignment=True,
+        json_schema_extra={
+            "examples": [
+                {
+                    "enabled": True,
+                    "provider": "openai",
+                    "model": "text-embedding-ada-002",
+                    "dimensions": 1536
+                }
+            ]
+        }
+    )
     
     @field_validator('provider')
     @classmethod
@@ -47,12 +75,24 @@ class VectorSettings(BaseModel):
 
 class LoggingSettings(BaseModel):
     """Logging configuration."""
-    level: str = Field("INFO", description="Logging level")
-    format: str = Field(
-        "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level: Annotated[str, Field(default="INFO", description="Logging level")]
+    format: Annotated[str, Field(
+        default="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
         description="Log message format"
+    )]
+    file: Annotated[Optional[str], Field(default=None, description="Log file path (None for console logging)")]
+    
+    model_config = ConfigDict(
+        validate_assignment=True,
+        json_schema_extra={
+            "examples": [
+                {
+                    "level": "INFO",
+                    "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+                }
+            ]
+        }
     )
-    file: Optional[str] = Field(None, description="Log file path (None for console logging)")
 
 
 def create_neo4j_settings() -> Neo4jSettings:
@@ -92,14 +132,14 @@ def create_logging_settings() -> LoggingSettings:
 
 class GraphMemorySettings(BaseSettings):
     """Main settings model for MCP Graph Memory."""
-    neo4j: Neo4jSettings = Field(default_factory=create_neo4j_settings, description="Neo4j database settings")
-    vector: VectorSettings = Field(default_factory=create_vector_settings, description="Vector embedding settings")
-    logging: LoggingSettings = Field(default_factory=create_logging_settings, description="Logging settings")
-    default_project_name: str = Field("default", description="Default project name")
-    mode: str = Field("sse", description="Mode (sse or stdio)")
-    client_timeout: int = Field(3600, description="Client session timeout in seconds")
-    cleanup_interval: int = Field(300, description="Session cleanup interval in seconds")
-    config_file_path: Optional[str] = Field(None, description="Path to the config file")
+    neo4j: Annotated[Neo4jSettings, Field(default_factory=create_neo4j_settings, description="Neo4j database settings")]
+    vector: Annotated[VectorSettings, Field(default_factory=create_vector_settings, description="Vector embedding settings")]
+    logging: Annotated[LoggingSettings, Field(default_factory=create_logging_settings, description="Logging settings")]
+    default_project_name: Annotated[str, Field(default="default", description="Default project name")]
+    mode: Annotated[str, Field(default="sse", description="Mode (sse or stdio)")]
+    client_timeout: Annotated[int, Field(default=3600, description="Client session timeout in seconds")]
+    cleanup_interval: Annotated[int, Field(default=300, description="Session cleanup interval in seconds")]
+    config_file_path: Annotated[Optional[str], Field(default=None, description="Path to the config file")]
     
     # Nested model settings
     model_config = SettingsConfigDict(
@@ -109,10 +149,20 @@ class GraphMemorySettings(BaseSettings):
         validate_assignment=True,
         extra="ignore",
         env_file=".env",
-        env_file_encoding="utf-8"
+        env_file_encoding="utf-8",
+        json_schema_extra={
+            "examples": [
+                {
+                    "default_project_name": "my_project",
+                    "mode": "sse",
+                    "client_timeout": 3600
+                }
+            ]
+        }
     )
     
     @model_validator(mode='after')
+    @classmethod
     def check_environment_overrides(cls, values):
         """Apply environment variable overrides for specific fields."""
         # Neo4j settings from env vars

@@ -6,8 +6,8 @@ This module defines the data models used for tool registry, including
 metadata, parameters, and results.
 """
 
-from typing import Any, Dict, List, Optional, Union, Callable, Awaitable
-from pydantic import BaseModel, Field, validator
+from typing import Any, Dict, List, Optional, Union, Callable, Awaitable, Annotated
+from pydantic import BaseModel, Field, field_validator, ConfigDict
 import inspect
 import json
 
@@ -18,12 +18,13 @@ class ToolParameters(BaseModel):
     
     This model is used to validate and normalize parameters passed to tools.
     """
-    tool_name: str = Field(..., description="The name of the tool to execute")
-    params: Dict[str, Any] = Field(default_factory=dict, description="Parameters to pass to the tool")
+    tool_name: Annotated[str, Field(description="The name of the tool to execute")]
+    params: Annotated[Dict[str, Any], Field(default_factory=dict, description="Parameters to pass to the tool")]
     
-    class Config:
-        arbitrary_types_allowed = True
-        extra = "allow"
+    model_config = ConfigDict(
+        arbitrary_types_allowed=True,
+        extra="allow"
+    )
 
 
 class FunctionResult(BaseModel):
@@ -32,11 +33,11 @@ class FunctionResult(BaseModel):
     
     This model standardizes the return format from all registered tools.
     """
-    status: str = Field(..., description="Status of the execution (success/error)")
-    message: str = Field(..., description="Human-readable message about the result")
-    data: Optional[Dict[str, Any]] = Field(None, description="Result data if successful")
-    error_code: Optional[str] = Field(None, description="Error code if failed")
-    error_details: Optional[Dict[str, Any]] = Field(None, description="Detailed error information")
+    status: Annotated[str, Field(description="Status of the execution (success/error)")]
+    message: Annotated[str, Field(description="Human-readable message about the result")]
+    data: Annotated[Optional[Dict[str, Any]], Field(None, description="Result data if successful")]
+    error_code: Annotated[Optional[str], Field(None, description="Error code if failed")]
+    error_details: Annotated[Optional[Dict[str, Any]], Field(None, description="Detailed error information")]
     
     @classmethod
     def success(cls, message: str, data: Optional[Dict[str, Any]] = None) -> 'FunctionResult':
@@ -73,23 +74,24 @@ class ToolMetadata(BaseModel):
     This model contains information about the tool, its parameters,
     return type, and documentation.
     """
-    name: str = Field(..., description="Full tool name with namespace")
-    short_name: str = Field(..., description="Short name without namespace")
-    namespace: str = Field(..., description="Category/namespace the tool belongs to")
-    description: str = Field(..., description="Human-readable description of the tool")
-    parameters: Dict[str, Dict[str, Any]] = Field(
+    name: Annotated[str, Field(description="Full tool name with namespace")]
+    short_name: Annotated[str, Field(description="Short name without namespace")]
+    namespace: Annotated[str, Field(description="Category/namespace the tool belongs to")]
+    description: Annotated[str, Field(description="Human-readable description of the tool")]
+    parameters: Annotated[Dict[str, Dict[str, Any]], Field(
         default_factory=dict, 
         description="Parameters the tool accepts"
-    )
-    return_type: str = Field(..., description="Return type of the tool")
-    is_async: bool = Field(False, description="Whether the tool is asynchronous")
-    examples: List[Dict[str, Any]] = Field(
+    )]
+    return_type: Annotated[str, Field(description="Return type of the tool")]
+    is_async: Annotated[bool, Field(default=False, description="Whether the tool is asynchronous")]
+    examples: Annotated[List[Dict[str, Any]], Field(
         default_factory=list,
         description="Example usage of the tool"
-    )
-    source_file: Optional[str] = Field(None, description="Source file where the tool is defined")
+    )]
+    source_file: Annotated[Optional[str], Field(None, description="Source file where the tool is defined")]
     
-    @validator('parameters')
+    @field_validator('parameters')
+    @classmethod
     def validate_parameters(cls, v):
         """Ensure parameters are properly structured."""
         for param_name, param_info in v.items():
@@ -233,9 +235,13 @@ class ValidationError(BaseModel):
     
     This model represents an error that occurred during parameter validation.
     """
-    param_name: str = Field(..., description="Name of the parameter that failed validation")
-    error_type: str = Field(..., description="Type of validation error")
-    message: str = Field(..., description="Human-readable error message")
+    param_name: Annotated[str, Field(description="Name of the parameter that failed validation")]
+    error_type: Annotated[str, Field(description="Type of validation error")]
+    message: Annotated[str, Field(description="Human-readable error message")]
+    
+    model_config = ConfigDict(
+        validate_assignment=True
+    )
 
 
 class ParameterInfo(BaseModel):
@@ -245,21 +251,22 @@ class ParameterInfo(BaseModel):
     This model contains metadata about a tool parameter, including its type,
     description, and validation requirements.
     """
-    type: str = Field(..., description="Data type of the parameter")
-    description: str = Field(..., description="Human-readable description")
-    required: bool = Field(False, description="Whether the parameter is required")
-    default: Optional[Any] = Field(None, description="Default value if not provided")
-    enum: Optional[List[Any]] = Field(None, description="List of allowed values")
-    min_value: Optional[float] = Field(None, description="Minimum allowed value for numeric types")
-    max_value: Optional[float] = Field(None, description="Maximum allowed value for numeric types")
-    min_length: Optional[int] = Field(None, description="Minimum length for string/array types")
-    max_length: Optional[int] = Field(None, description="Maximum length for string/array types")
-    pattern: Optional[str] = Field(None, description="Regex pattern for string validation")
-    format: Optional[str] = Field(None, description="Format specifier (e.g., 'date', 'email')")
-    custom_validator: Optional[str] = Field(None, description="Name of custom validator function")
+    type: Annotated[str, Field(description="Data type of the parameter")]
+    description: Annotated[str, Field(description="Human-readable description")]
+    required: Annotated[bool, Field(default=False, description="Whether the parameter is required")]
+    default: Annotated[Optional[Any], Field(None, description="Default value if not provided")]
+    enum: Annotated[Optional[List[Any]], Field(None, description="List of allowed values")]
+    min_value: Annotated[Optional[float], Field(None, description="Minimum allowed value for numeric types")]
+    max_value: Annotated[Optional[float], Field(None, description="Maximum allowed value for numeric types")]
+    min_length: Annotated[Optional[int], Field(None, description="Minimum length for string/array types")]
+    max_length: Annotated[Optional[int], Field(None, description="Maximum length for string/array types")]
+    pattern: Annotated[Optional[str], Field(None, description="Regex pattern for string validation")]
+    format: Annotated[Optional[str], Field(None, description="Format specifier (e.g., 'date', 'email')")]
+    custom_validator: Annotated[Optional[str], Field(None, description="Name of custom validator function")]
     
-    class Config:
-        arbitrary_types_allowed = True
+    model_config = ConfigDict(
+        arbitrary_types_allowed=True
+    )
 
 
 # Add backward compatibility aliases at the end of the file
