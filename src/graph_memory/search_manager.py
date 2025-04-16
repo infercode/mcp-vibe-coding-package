@@ -1,8 +1,14 @@
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union, cast
+from datetime import datetime
 
 from src.utils import dict_to_json
 from src.utils.neo4j_query_utils import sanitize_query_parameters
 from src.graph_memory.base_manager import BaseManager
+from src.models.response_models import (
+    SearchQueryBase, SearchResponse, SearchResultItem,
+    ErrorDetail, ErrorResponse, VectorSearchOptions,
+    SuccessResponse
+)
 
 class SearchManager:
     """Manager for search operations in the knowledge graph."""
@@ -17,9 +23,13 @@ class SearchManager:
         self.base_manager = base_manager
         self.logger = base_manager.logger
     
-    def search_entities(self, search_term: str, limit: int = 10, 
-                        entity_types: Optional[List[str]] = None,
-                        semantic: bool = False) -> str:
+    def search_entities(
+        self, 
+        search_term: str, 
+        limit: int = 10, 
+        entity_types: Optional[List[str]] = None,
+        semantic: bool = False
+    ) -> str:
         """
         Search for entities in the knowledge graph.
         
@@ -35,8 +45,20 @@ class SearchManager:
         try:
             self.base_manager.ensure_initialized()
             
+            # Create a validated search query model
+            query_model = SearchQueryBase(
+                query=search_term,
+                limit=min(limit, 100),  # Cap limit for safety
+                semantic=semantic,
+                confidence_threshold=None  # Optional parameter
+            )
+            
             if semantic:
-                return self.semantic_search_entities(search_term, limit, entity_types)
+                return self.semantic_search_entities(
+                    search_term=query_model.query or "", 
+                    limit=query_model.limit,
+                    entity_types=entity_types
+                )
             
             # Prepare base query parts
             query_parts = ["MATCH (e:Entity)"]
@@ -58,7 +80,7 @@ class SearchManager:
             # Complete the query with ordering and limit
             query_parts.append("RETURN e")
             query_parts.append("ORDER BY e.name")
-            query_parts.append(f"LIMIT {min(limit, 100)}")  # Cap limit for safety
+            query_parts.append(f"LIMIT {query_model.limit}")
             
             # Execute the query with validation
             query = " ".join(query_parts)
@@ -72,30 +94,78 @@ class SearchManager:
                     sanitized_params
                 )
                 
-                # Process results
-                entities = []
+                # Process results into SearchResultItem objects
+                results = []
                 if records:
                     for record in records:
                         entity = record.get("e")
                         if entity:
                             # Convert Neo4j node to dict
                             entity_dict = dict(entity.items())
-                            entity_dict["id"] = entity.id  # Add the Neo4j ID
-                            entities.append(entity_dict)
+                            entity_id = str(entity.id)  # Add the Neo4j ID
+                            
+                            # Create a properly formatted search result item
+                            result_item = SearchResultItem(
+                                id=entity_id,
+                                name=entity_dict.get("name", "Unknown"),
+                                entity_type=entity_dict.get("type", "Entity"),
+                                confidence=entity_dict.get("confidence"),
+                                score=None,  # No similarity score for non-semantic search
+                                snippet=None,  # No snippet for basic search
+                                metadata={k: v for k, v in entity_dict.items() 
+                                         if k not in ["name", "type", "confidence"]}
+                            )
+                            results.append(result_item)
                 
-                return dict_to_json({"entities": entities})
+                # Create a standardized search response
+                response = SearchResponse(
+                    status="success",
+                    timestamp=datetime.now(),
+                    message=f"Found {len(results)} entities matching '{search_term}'",
+                    results=results,
+                    total_count=len(results),
+                    query=query_model.model_dump(),
+                    is_semantic=False,
+                    data=None  # Add missing data parameter
+                )
+                
+                return response.model_dump_json()
+                
             except ValueError as e:
-                error_msg = f"Query validation error: {str(e)}"
-                self.logger.error(error_msg)
-                return dict_to_json({"error": error_msg})
+                error = ErrorDetail(
+                    code="query_validation_error",
+                    message=f"Query validation error: {str(e)}",
+                    details={"query": query}
+                )
+                error_response = ErrorResponse(
+                    status="error",
+                    timestamp=datetime.now(),
+                    error=error
+                )
+                self.logger.error(f"Query validation error: {str(e)}")
+                return error_response.model_dump_json()
             
         except Exception as e:
-            error_msg = f"Error searching entities: {str(e)}"
-            self.logger.error(error_msg)
-            return dict_to_json({"error": error_msg})
+            error = ErrorDetail(
+                code="search_error",
+                message=f"Error searching entities: {str(e)}",
+                details=None
+            )
+            error_response = ErrorResponse(
+                status="error",
+                timestamp=datetime.now(),
+                error=error
+            )
+            self.logger.error(f"Error searching entities: {str(e)}")
+            return error_response.model_dump_json()
     
-    def semantic_search_entities(self, search_term: str, limit: int = 10,
-                               entity_types: Optional[List[str]] = None) -> str:
+    def semantic_search_entities(
+        self, 
+        search_term: str, 
+        limit: int = 10,
+        entity_types: Optional[List[str]] = None,
+        vector_options: Optional[VectorSearchOptions] = None
+    ) -> str:
         """
         Perform a semantic search for entities using vector embeddings.
         
@@ -103,21 +173,54 @@ class SearchManager:
             search_term: The term to search for
             limit: Maximum number of results to return
             entity_types: Optional list of entity types to filter by
+            vector_options: Optional configuration for vector search
             
         Returns:
             JSON string with the search results
         """
         try:
             if not search_term:
-                return dict_to_json({"error": "Search term is required for semantic search"})
+                error = ErrorDetail(
+                    code="missing_search_term",
+                    message="Search term is required for semantic search",
+                    details=None
+                )
+                error_response = ErrorResponse(
+                    status="error",
+                    timestamp=datetime.now(),
+                    error=error
+                )
+                return error_response.model_dump_json()
             
             self.base_manager.ensure_initialized()
+            
+            # Create a validated search query model with semantic=True
+            query_model = SearchQueryBase(
+                query=search_term,
+                limit=min(limit, 100),  # Cap limit for safety
+                semantic=True,
+                confidence_threshold=None  # Optional parameter
+            )
+            
+            # Use provided vector options or create default ones
+            if vector_options is None:
+                vector_options = VectorSearchOptions()
             
             # Generate embedding for search term
             embedding = self.base_manager.generate_embedding(search_term)
             if not embedding:
+                error = ErrorDetail(
+                    code="embedding_generation_error",
+                    message="Failed to generate embedding for search term",
+                    details={"search_term": search_term}
+                )
+                error_response = ErrorResponse(
+                    status="error",
+                    timestamp=datetime.now(),
+                    error=error
+                )
                 self.logger.error(f"Failed to generate embedding for search term: {search_term}")
-                return dict_to_json({"error": "Failed to generate embedding for search term"})
+                return error_response.model_dump_json()
             
             # Prepare vector search query
             vector_query_parts = [
@@ -139,7 +242,7 @@ class SearchManager:
             # Prepare parameters
             params = {
                 "index_name": getattr(self.base_manager, "embedding_index_name", "entity_embedding"),
-                "k": min(limit, 100),  # Cap limit for safety
+                "k": query_model.limit,
                 "embedding": embedding
             }
             
@@ -156,8 +259,8 @@ class SearchManager:
                     sanitized_params
                 )
                 
-                # Process results
-                entities = []
+                # Process results into SearchResultItem objects
+                results = []
                 if records:
                     for record in records:
                         entity = record.get("e")
@@ -166,20 +269,73 @@ class SearchManager:
                         if entity:
                             # Convert Neo4j node to dict
                             entity_dict = dict(entity.items())
-                            entity_dict["id"] = entity.id  # Add the Neo4j ID
-                            entity_dict["similarity_score"] = score  # Add similarity score
-                            entities.append(entity_dict)
+                            entity_id = str(entity.id)
+                            
+                            # Generate a snippet if there's a description field
+                            snippet = None
+                            if "description" in entity_dict:
+                                desc = entity_dict["description"]
+                                if desc and isinstance(desc, str):
+                                    max_len = 150
+                                    snippet = desc if len(desc) <= max_len else desc[:max_len] + "..."
+                            
+                            # Create a properly formatted search result item
+                            result_item = SearchResultItem(
+                                id=entity_id,
+                                name=entity_dict.get("name", "Unknown"),
+                                entity_type=entity_dict.get("type", "Entity"),
+                                score=score,  # Similarity score from vector search
+                                confidence=entity_dict.get("confidence"),
+                                snippet=snippet,  # Include a snippet if available
+                                metadata={k: v for k, v in entity_dict.items() 
+                                         if k not in ["name", "type", "confidence", "description"]}
+                            )
+                            results.append(result_item)
                 
-                return dict_to_json({"entities": entities})
+                # Create a standardized search response
+                response = SearchResponse(
+                    status="success",
+                    timestamp=datetime.now(),
+                    message=f"Found {len(results)} semantically similar entities for '{search_term}'",
+                    results=results,
+                    total_count=len(results),
+                    query={
+                        **query_model.model_dump(),
+                        "vector_options": vector_options.model_dump()
+                    },
+                    is_semantic=True,
+                    data=None  # Add missing data parameter
+                )
+                
+                return response.model_dump_json()
+                
             except ValueError as e:
-                error_msg = f"Query validation error: {str(e)}"
-                self.logger.error(error_msg)
-                return dict_to_json({"error": error_msg})
+                error = ErrorDetail(
+                    code="vector_query_validation_error",
+                    message=f"Vector query validation error: {str(e)}",
+                    details={"query": vector_query}
+                )
+                error_response = ErrorResponse(
+                    status="error",
+                    timestamp=datetime.now(),
+                    error=error
+                )
+                self.logger.error(f"Query validation error: {str(e)}")
+                return error_response.model_dump_json()
             
         except Exception as e:
-            error_msg = f"Error in semantic search: {str(e)}"
-            self.logger.error(error_msg)
-            return dict_to_json({"error": error_msg})
+            error = ErrorDetail(
+                code="semantic_search_error",
+                message=f"Error in semantic search: {str(e)}",
+                details=None
+            )
+            error_response = ErrorResponse(
+                status="error",
+                timestamp=datetime.now(),
+                error=error
+            )
+            self.logger.error(f"Error in semantic search: {str(e)}")
+            return error_response.model_dump_json()
     
     def query_knowledge_graph(self, cypher_query: str, params: Optional[Dict[str, Any]] = None) -> str:
         """

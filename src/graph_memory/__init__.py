@@ -8,7 +8,6 @@ as a facade class that maintains backward compatibility with the original API.
 
 from typing import Any, Dict, List, Optional, Union, cast
 import json
-import datetime
 import time
 import os
 import logging
@@ -16,6 +15,8 @@ import sys
 import uuid
 import re
 from contextlib import contextmanager
+from datetime import datetime
+from pydantic import BaseModel, Field
 
 from src.graph_memory.base_manager import BaseManager
 from src.graph_memory.entity_manager import EntityManager
@@ -28,6 +29,9 @@ from src.utils import dict_to_json
 # Import specialized memory managers
 from src.lesson_memory import LessonMemoryManager
 from src.project_memory import ProjectMemoryManager
+
+# Import error and success models
+from src.models.response_models import ErrorDetail, ErrorResponse, SuccessResponse
 
 __all__ = [
     'BaseManager',
@@ -55,9 +59,14 @@ class LessonContext:
             lesson_memory: LessonMemory manager instance
             container_name: Optional container name to use for operations
         """
+        from typing import Optional, Any
+        from src.models.response_models import LessonContextModel
+        
         self.lesson_memory = lesson_memory
         self.container_name = container_name
         self.logger = lesson_memory.logger if hasattr(lesson_memory, "logger") else None
+        # Storage for the Pydantic context model
+        self._context_model: Optional[LessonContextModel] = None
     
     def create_container(self, **kwargs) -> str:
         """
@@ -423,18 +432,26 @@ class LessonContext:
             return json.dumps(result)
 
 class ProjectContext:
-    """Helper class for context-bound project operations."""
+    """
+    Context manager for batch project memory operations.
+    """
     
     def __init__(self, project_memory, project_name=None):
         """
-        Initialize with project memory manager and project context.
+        Initialize a project context.
         
         Args:
-            project_memory: The ProjectMemoryManager instance
-            project_name: Optional project name to use as context
+            project_memory: ProjectMemory manager instance
+            project_name: Optional project name to use for operations
         """
+        from typing import Optional, Any
+        from src.models.response_models import ProjectContextModel
+        
         self.project_memory = project_memory
-        self.project_name = project_name or "default"
+        self.project_name = project_name
+        self.logger = project_memory.logger if hasattr(project_memory, "logger") else None
+        # Storage for the Pydantic context model
+        self._context_model: Optional[ProjectContextModel] = None
     
     def create_project(self, name: str, **kwargs) -> str:
         """
@@ -1018,6 +1035,99 @@ class GraphMemoryManager:
         self._client_id = None
         self._client_projects = {}
     
+    def _standardize_response(self, result_json: Union[str, Dict[str, Any]], success_message: str, error_code: str) -> str:
+        """
+        Standardize API responses for consistency across the system.
+        
+        Args:
+            result_json: JSON result string or dict from a manager or operation
+            success_message: Message to include in successful responses
+            error_code: Error code to use for error responses
+            
+        Returns:
+            Standardized JSON response string
+        """
+        try:
+            # Parse the result JSON
+            if isinstance(result_json, str):
+                try:
+                    result_data = json.loads(result_json)
+                except json.JSONDecodeError as e:
+                    if hasattr(self, 'logger') and self.logger:
+                        self.logger.error(f"Error parsing JSON: {str(e)}, original: {result_json}")
+                    error = ErrorDetail(
+                        code="json_parse_error",
+                        message=f"Invalid JSON response: {str(e)}",
+                        details=None
+                    )
+                    error_response = ErrorResponse(
+                        status="error",
+                        timestamp=datetime.now(),
+                        error=error
+                    )
+                    return error_response.model_dump_json()
+            else:
+                # Handle case where result is already a dict
+                result_data = result_json
+            
+            # If the result already has a Pydantic-style error structure, return it directly
+            if isinstance(result_data, dict) and result_data.get("status") == "error" and "error" in result_data:
+                if isinstance(result_json, str):
+                    return result_json
+                else:
+                    # Convert dict to JSON if needed
+                    return json.dumps(result_data, default=str)
+                
+            # If result contains an "error" key, convert to proper error response
+            if isinstance(result_data, dict) and "error" in result_data:
+                details = None
+                # Extract additional details if they exist
+                if "details" in result_data:
+                    details = result_data["details"]
+                elif "context" in result_data:
+                    details = result_data["context"]
+                
+                error = ErrorDetail(
+                    code=error_code,
+                    message=result_data["error"],
+                    details=details
+                )
+                error_response = ErrorResponse(
+                    status="error",
+                    timestamp=datetime.now(),
+                    error=error
+                )
+                return error_response.model_dump_json()
+                
+            # Otherwise, it's a success response - create proper Pydantic response
+            # Create a standard response with just the message and timestamp
+            success_response = SuccessResponse(
+                status="success",
+                message=success_message,
+                timestamp=datetime.now(),
+                data=result_data  # Include all result data
+            )
+            
+            # Return as JSON with proper datetime handling
+            return success_response.model_dump_json()
+            
+        except Exception as e:
+            # Something went wrong while processing the response
+            if hasattr(self, 'logger') and self.logger:
+                self.logger.error(f"Error standardizing response: {str(e)}")
+                
+            error = ErrorDetail(
+                code="response_processing_error",
+                message=f"Error processing response: {str(e)}",
+                details={"original_response": str(result_json)[:1000]} if result_json else None
+            )
+            error_response = ErrorResponse(
+                status="error",
+                timestamp=datetime.now(),
+                error=error
+            )
+            return error_response.model_dump_json()
+    
     def _detect_sse_mode(self) -> bool:
         """
         Detect if running in SSE mode by checking for common indicators.
@@ -1242,14 +1352,37 @@ class GraphMemoryManager:
         Returns:
             JSON string with the result
         """
-        self._ensure_initialized()
-        
-        # Associate with current project if not specified
-        if "project" not in entity_data and self.default_project_name:
-            entity_data["project"] = self.default_project_name
+        try:
+            self._ensure_initialized()
             
-        # Use the entity manager to create the entity
-        return self.entity_manager.create_entities([entity_data])
+            # Associate with current project if not specified
+            if "project" not in entity_data and self.default_project_name:
+                entity_data["project"] = self.default_project_name
+                
+            # Use the entity manager to create the entity
+            result = self.entity_manager.create_entities([entity_data])
+            
+            # Standardize the response
+            return self._standardize_response(
+                result_json=result,
+                success_message="Entity created successfully",
+                error_code="entity_creation_error"
+            )
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"Error creating entity: {str(e)}")
+                
+            error = ErrorDetail(
+                code="entity_creation_error",
+                message=f"Failed to create entity: {str(e)}",
+                details=None
+            )
+            error_response = ErrorResponse(
+                status="error",
+                timestamp=datetime.now(),
+                error=error
+            )
+            return error_response.model_dump_json()
     
     def create_entities(self, entities: List[Dict[str, Any]]) -> str:
         """
@@ -1261,16 +1394,39 @@ class GraphMemoryManager:
         Returns:
             JSON string with the result
         """
-        self._ensure_initialized()
-        
-        # Associate with current project if not specified
-        if self.default_project_name:
-            for entity in entities:
-                if "project" not in entity:
-                    entity["project"] = self.default_project_name
-                    
-        # Use the entity manager to create the entities
-        return self.entity_manager.create_entities(entities)
+        try:
+            self._ensure_initialized()
+            
+            # Associate with current project if not specified
+            if self.default_project_name:
+                for entity in entities:
+                    if "project" not in entity:
+                        entity["project"] = self.default_project_name
+                        
+            # Use the entity manager to create the entities
+            result = self.entity_manager.create_entities(entities)
+            
+            # Standardize the response
+            return self._standardize_response(
+                result_json=result,
+                success_message=f"Created {len(entities)} entities",
+                error_code="entity_creation_error"
+            )
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"Error creating entities: {str(e)}")
+                
+            error = ErrorDetail(
+                code="entity_creation_error",
+                message=f"Failed to create entities: {str(e)}",
+                details={"entity_count": len(entities)}
+            )
+            error_response = ErrorResponse(
+                status="error",
+                timestamp=datetime.now(),
+                error=error
+            )
+            return error_response.model_dump_json()
     
     def get_entity(self, entity_name: str) -> str:
         """
@@ -1282,8 +1438,33 @@ class GraphMemoryManager:
         Returns:
             JSON string with the entity information
         """
-        self._ensure_initialized()
-        return self.entity_manager.get_entity(entity_name)
+        try:
+            self._ensure_initialized()
+            
+            # Use the entity manager to get the entity
+            result = self.entity_manager.get_entity(entity_name)
+            
+            # Standardize the response
+            return self._standardize_response(
+                result_json=result,
+                success_message=f"Retrieved entity: {entity_name}",
+                error_code="entity_retrieval_error"
+            )
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"Error retrieving entity: {str(e)}")
+                
+            error = ErrorDetail(
+                code="entity_retrieval_error",
+                message=f"Failed to retrieve entity: {str(e)}",
+                details={"entity_name": entity_name}
+            )
+            error_response = ErrorResponse(
+                status="error",
+                timestamp=datetime.now(),
+                error=error
+            )
+            return error_response.model_dump_json()
     
     def update_entity(self, entity_name: str, updates: Dict[str, Any]) -> str:
         """
@@ -1473,8 +1654,38 @@ class GraphMemoryManager:
         Returns:
             JSON string with search results
         """
-        self._ensure_initialized()
-        return self.search_manager.search_entities(query, limit, entity_types, semantic)
+        try:
+            self._ensure_initialized()
+            
+            # Use the search manager to search for entities
+            result = self.search_manager.search_entities(query, limit, entity_types, semantic)
+            
+            # Standardize the response
+            return self._standardize_response(
+                result_json=result,
+                success_message=f"Search completed for: {query}",
+                error_code="search_error"
+            )
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"Error searching nodes: {str(e)}")
+                
+            error = ErrorDetail(
+                code="search_error",
+                message=f"Failed to search nodes: {str(e)}",
+                details={
+                    "query": query,
+                    "limit": limit,
+                    "entity_types": entity_types,
+                    "semantic": semantic
+                }
+            )
+            error_response = ErrorResponse(
+                status="error",
+                timestamp=datetime.now(),
+                error=error
+            )
+            return error_response.model_dump_json()
     
     def query_knowledge_graph(self, cypher_query: str, params: Optional[Dict[str, Any]] = None) -> str:
         """
@@ -1798,7 +2009,7 @@ class GraphMemoryManager:
         config = {
             "project_name": self.default_project_name,
             "client_id": self._client_id,
-            "timestamp": datetime.datetime.now().isoformat(),
+            "timestamp": datetime.now().isoformat(),
             "neo4j": {
                 "uri": self.neo4j_uri,
                 "username": self.neo4j_user,
@@ -1855,139 +2066,70 @@ class GraphMemoryManager:
                 
         Returns:
             JSON response with operation results
-            
-        Required parameters by operation_type:
-            - create: name (str), lesson_type (str), container_name (str, optional)
-            - create_container: description (str, optional), metadata (dict, optional)
-            - get_container: (no parameters required)
-            - list_containers: limit (int, optional), sort_by (str, optional)
-            - container_exists: container_name (str, optional, defaults to "Lessons")
-            - observe: entity_name (str), what_was_learned (str), why_it_matters (str), how_to_apply (str), container_name (str, optional), confidence (float, optional)
-            - relate: source_name (str), target_name (str), relationship_type (str), container_name (str, optional)
-            - search: query (str), limit (int, optional), container_name (str, optional)
-            - track: lesson_name (str), project_name (str), success_score (float), application_notes (str)
-            - update: name (str), properties (dict), container_name (str, optional)
-            - consolidate: primary_lesson (str), lessons_to_consolidate (list), container_name (str, optional)
-            - evolve: original_lesson (str), new_understanding (str), container_name (str, optional)
-            
-        Response format:
-            All operations return a JSON string with at minimum:
-            - status: "success" or "error"
-            - message or error: Description of result or error
-
-        Examples:
-            ```
-            # Create a new lesson container
-            @lesson_memory_tool({
-                "operation_type": "create_container",
-                "description": "Container for React-related lessons",
-                "metadata": {"category": "frontend", "framework": "react"}
-            })
-            
-            # Get the lesson container
-            @lesson_memory_tool({
-                "operation_type": "get_container"
-            })
-            
-            # Check if a container exists
-            @lesson_memory_tool({
-                "operation_type": "container_exists",
-                "container_name": "Lessons"
-            })
-            
-            # Create a new lesson
-            @lesson_memory_tool({
-                "operation_type": "create",
-                "name": "ReactHookRules",
-                "lesson_type": "BestPractice"
-            })
-            
-            # Add observations to the lesson
-            @lesson_memory_tool({
-                "operation_type": "observe",
-                "entity_name": "ReactHookRules",
-                "what_was_learned": "React hooks must be called at the top level of components",
-                "why_it_matters": "Hook call order must be consistent between renders",
-                "how_to_apply": "Extract conditional logic into the hook implementation instead"
-            })
-            
-            # Create a relationship
-            @lesson_memory_tool({
-                "operation_type": "relate",
-                "source_name": "ReactHookRules",
-                "target_name": "ReactPerformance",
-                "relationship_type": "RELATED_TO"
-            })
-            
-            # Search for lessons
-            @lesson_memory_tool({
-                "operation_type": "search",
-                "query": "best practices for state management in React",
-                "limit": 3
-            })
-            
-            # Using with context
-            # First get a context
-            context = @lesson_memory_context({
-                "project_name": "WebApp",
-                "container_name": "ReactLessons"
-            })
-            
-            # Then use context in operations
-            @lesson_memory_tool({
-                "operation_type": "create",
-                "name": "StateManagementPatterns",
-                "lesson_type": "Pattern",
-                "context": context["context"]
-            })
-            ```
         """
-        self._ensure_initialized()
-        
-        # Map operation types to handler methods
-        operation_handlers = {
-            # Container operations
-            "create_container": self._handle_lesson_container_creation,
-            "get_container": self._handle_get_lesson_container,
-            "list_containers": self._handle_list_lesson_containers,
-            "container_exists": self._handle_container_exists,
-            
-            # Lesson operations
-            "create": self._handle_lesson_creation,
-            "observe": self._handle_lesson_observation,
-            "relate": self._handle_lesson_relationship,
-            "search": self._handle_lesson_search,
-            "track": self._handle_lesson_tracking,
-            "consolidate": self._handle_lesson_consolidation,
-            "evolve": self._handle_lesson_evolution,
-            "update": self._handle_lesson_update,
-            # ... add any other operations here
-        }
-        
-        # Check if operation type is valid
-        if operation_type not in operation_handlers:
-            return json.dumps({
-                "status": "error",
-                "error": f"Unknown operation type: {operation_type}",
-                "code": "unknown_operation"
-            })
-        
         try:
-            # Get the appropriate handler
-            handler = operation_handlers[operation_type]
+            self._ensure_initialized()
             
-            # Call the handler with the provided arguments
-            return handler(**kwargs)
+            # Map operation types to handler methods
+            operation_handlers = {
+                # Container operations
+                "create_container": self._handle_lesson_container_creation,
+                "get_container": self._handle_get_lesson_container,
+                "list_containers": self._handle_list_lesson_containers,
+                "container_exists": self._handle_container_exists,
+                
+                # Lesson operations
+                "create": self._handle_lesson_creation,
+                "observe": self._handle_lesson_observation,
+                "relate": self._handle_lesson_relationship,
+                "search": self._handle_lesson_search,
+                "track": self._handle_lesson_tracking,
+                "consolidate": self._handle_lesson_consolidation,
+                "evolve": self._handle_lesson_evolution,
+                "update": self._handle_lesson_update,
+            }
+            
+            # Check if operation type is valid
+            if operation_type not in operation_handlers:
+                error = ErrorDetail(
+                    code="unknown_operation",
+                    message=f"Unknown operation type: {operation_type}",
+                    details={"available_operations": list(operation_handlers.keys())}
+                )
+                error_response = ErrorResponse(
+                    status="error",
+                    timestamp=datetime.now(),
+                    error=error
+                )
+                return error_response.model_dump_json()
+            
+            # Get the appropriate handler and call it with the provided arguments
+            handler = operation_handlers[operation_type]
+            result = handler(**kwargs)
+            
+            # Standardize the response
+            return self._standardize_response(
+                result_json=result,
+                success_message=f"Lesson operation '{operation_type}' completed successfully",
+                error_code=f"lesson_{operation_type}_error"
+            )
+                
         except Exception as e:
             # Log and report the error
             if self.logger:
                 self.logger.error(f"Error in lesson operation '{operation_type}': {str(e)}")
             
-            return json.dumps({
-                "status": "error",
-                "error": f"Error in lesson operation '{operation_type}': {str(e)}",
-                "code": "lesson_operation_error"
-            })
+            error = ErrorDetail(
+                code=f"lesson_{operation_type}_error",
+                message=f"Error in lesson operation '{operation_type}': {str(e)}",
+                details={"operation_args": kwargs}
+            )
+            error_response = ErrorResponse(
+                status="error",
+                timestamp=datetime.now(),
+                error=error
+            )
+            return error_response.model_dump_json()
     
     def _handle_lesson_container_creation(self, **kwargs) -> str:
         """
@@ -2001,31 +2143,57 @@ class GraphMemoryManager:
         Returns:
             JSON response string with created container data
         """
+        # Initialize variables that may be used in error handling
+        description = kwargs.get("description", None)
+        metadata = kwargs.get("metadata", None)
+        
         try:
+            # Validate required fields
+            if not hasattr(self, "lesson_memory") or not self.lesson_memory:
+                error = ErrorDetail(
+                    code="lesson_memory_not_initialized",
+                    message="Lesson memory system not initialized",
+                    details=None
+                )
+                error_response = ErrorResponse(
+                    status="error",
+                    timestamp=datetime.now(),
+                    error=error
+                )
+                return error_response.model_dump_json()
+            
             # Extract optional parameters
             description = kwargs.pop("description", None)
             metadata = kwargs.pop("metadata", None)
             
-            # Create the container - ensure string return type
+            # Create the container 
             result = self.lesson_memory.create_lesson_container(
                 description=description,
                 metadata=metadata
             )
             
-            # Handle different return types (future-proof)
-            if isinstance(result, str):
-                return result
-            else:
-                return json.dumps(result)
+            # Return standardized response
+            return self._standardize_response(
+                result_json=result,
+                success_message="Lesson container created successfully",
+                error_code="container_creation_error"
+            )
             
         except Exception as e:
             if self.logger:
                 self.logger.error(f"Error creating lesson container: {str(e)}")
-            return json.dumps({
-                "status": "error",
-                "error": f"Failed to create lesson container: {str(e)}",
-                "code": "container_creation_error"
-            })
+            
+            error = ErrorDetail(
+                code="container_creation_error",
+                message=f"Failed to create lesson container: {str(e)}",
+                details={"description": description, "metadata_keys": list(metadata.keys()) if metadata else None}
+            )
+            error_response = ErrorResponse(
+                status="error",
+                timestamp=datetime.now(),
+                error=error
+            )
+            return error_response.model_dump_json()
     
     def _handle_lesson_creation(self, name: str, lesson_type: str, **kwargs) -> str:
         """
@@ -2042,32 +2210,92 @@ class GraphMemoryManager:
         Returns:
             JSON response string with created lesson data
         """
+        # Initialize variables that may be used in error handling
+        container = kwargs.get("container_name", "Lessons")
+        observations = kwargs.get("observations", None)
+        metadata = kwargs.get("metadata", None)
+        
         try:
+            # Validate required parameters
+            if not name or not name.strip():
+                error = ErrorDetail(
+                    code="missing_lesson_name",
+                    message="Lesson name is required",
+                    details=None
+                )
+                error_response = ErrorResponse(
+                    status="error",
+                    timestamp=datetime.now(),
+                    error=error
+                )
+                return error_response.model_dump_json()
+                
+            if not lesson_type or not lesson_type.strip():
+                error = ErrorDetail(
+                    code="missing_lesson_type",
+                    message="Lesson type is required",
+                    details=None
+                )
+                error_response = ErrorResponse(
+                    status="error",
+                    timestamp=datetime.now(),
+                    error=error
+                )
+                return error_response.model_dump_json()
+            
+            # Validate lesson memory system
+            if not hasattr(self, "lesson_memory") or not self.lesson_memory:
+                error = ErrorDetail(
+                    code="lesson_memory_not_initialized",
+                    message="Lesson memory system not initialized",
+                    details=None
+                )
+                error_response = ErrorResponse(
+                    status="error",
+                    timestamp=datetime.now(),
+                    error=error
+                )
+                return error_response.model_dump_json()
+            
             # Extract optional parameters with defaults
             container = kwargs.pop("container_name", "Lessons")
             observations = kwargs.pop("observations", None)
             metadata = kwargs.pop("metadata", None)
             
-            # Create the lesson entity - ensure string return type
+            # Create the lesson entity
             result = self.lesson_memory.create_lesson_entity(
                 container, name, lesson_type, observations, metadata
             )
             
-            # Handle different return types (future-proof)
-            if isinstance(result, str):
-                return result
-            else:
-                return json.dumps(result)
+            # Return standardized response
+            return self._standardize_response(
+                result_json=result,
+                success_message=f"Lesson '{name}' created successfully",
+                error_code="lesson_creation_error"
+            )
             
         except Exception as e:
             if self.logger:
                 self.logger.error(f"Error creating lesson: {str(e)}")
-            return json.dumps({
-                "status": "error",
-                "error": f"Failed to create lesson: {str(e)}",
-                "code": "lesson_creation_error"
-            })
             
+            error = ErrorDetail(
+                code="lesson_creation_error",
+                message=f"Failed to create lesson: {str(e)}",
+                details={
+                    "name": name,
+                    "type": lesson_type,
+                    "container": container,
+                    "has_observations": observations is not None,
+                    "has_metadata": metadata is not None
+                }
+            )
+            error_response = ErrorResponse(
+                status="error",
+                timestamp=datetime.now(),
+                error=error
+            )
+            return error_response.model_dump_json()
+    
     def _handle_lesson_observation(self, entity_name: str, **kwargs) -> str:
         """
         Handle adding structured observations to a lesson.
@@ -2086,26 +2314,37 @@ class GraphMemoryManager:
             JSON response string with observation results
         """
         try:
+            # Pre-initialize result in case of error
+            result = None
+            
             # Use the entity_name and pass all other kwargs directly
             kwargs["entity_name"] = entity_name
             
-            # Create the structured observations - ensure string return type
+            # Create the structured observations
             result = self.lesson_memory.create_structured_lesson_observations(**kwargs)
             
-            # Handle different return types (future-proof)
-            if isinstance(result, str):
-                return result
-            else:
-                return json.dumps(result)
+            # Use standardized response
+            return self._standardize_response(
+                result_json=result,
+                success_message=f"Successfully added observation to lesson '{entity_name}'",
+                error_code="observation_error"
+            )
             
         except Exception as e:
             if self.logger:
                 self.logger.error(f"Error adding lesson observations: {str(e)}")
-            return json.dumps({
-                "status": "error",
-                "error": f"Failed to add lesson observations: {str(e)}",
-                "code": "observation_error"
-            })
+            
+            error = ErrorDetail(
+                code="observation_error",
+                message=f"Failed to add lesson observations: {str(e)}",
+                details={"entity_name": entity_name}
+            )
+            error_response = ErrorResponse(
+                status="error",
+                timestamp=datetime.now(),
+                error=error
+            )
+            return error_response.model_dump_json()
     
     def _handle_lesson_relationship(self, **kwargs) -> str:
         """
@@ -2123,30 +2362,52 @@ class GraphMemoryManager:
             JSON response string with relationship data
         """
         try:
+            # Pre-initialize result in case of error
+            result = None
+            
             # Validate required parameters
             required_params = ["source_name", "target_name", "relationship_type"]
             for param in required_params:
                 if param not in kwargs:
                     raise ValueError(f"Missing required parameter: {param}")
             
+            source_name = kwargs.get("source_name")
+            target_name = kwargs.get("target_name")
+            relationship_type = kwargs.get("relationship_type")
+            
             # Create the relationship
             result = self.lesson_memory.create_lesson_relationship(kwargs)
             
-            # Handle different return types (future-proof)
-            if isinstance(result, str):
-                return result
-            else:
-                return json.dumps(result)
+            # Use standardized response
+            return self._standardize_response(
+                result_json=result,
+                success_message=f"Successfully created {relationship_type} relationship from '{source_name}' to '{target_name}'",
+                error_code="relationship_error"
+            )
             
         except Exception as e:
             if self.logger:
                 self.logger.error(f"Error creating lesson relationship: {str(e)}")
-            return json.dumps({
-                "status": "error",
-                "error": f"Failed to create lesson relationship: {str(e)}",
-                "code": "relationship_error"
-            })
-        
+            
+            # Extract parameters for error context if available
+            details = {
+                "source_name": kwargs.get("source_name", "unknown"),
+                "target_name": kwargs.get("target_name", "unknown"),
+                "relationship_type": kwargs.get("relationship_type", "unknown")
+            }
+            
+            error = ErrorDetail(
+                code="relationship_error",
+                message=f"Failed to create lesson relationship: {str(e)}",
+                details=details
+            )
+            error_response = ErrorResponse(
+                status="error",
+                timestamp=datetime.now(),
+                error=error
+            )
+            return error_response.model_dump_json()
+    
     def _handle_lesson_search(self, query: Optional[str] = None, **kwargs) -> str:
         """
         Handle searching for lessons.
@@ -2164,6 +2425,10 @@ class GraphMemoryManager:
             JSON response string with search results
         """
         try:
+            # Pre-initialize result in case of error
+            result = None
+            semantic_used = False
+            
             # Set defaults
             kwargs.setdefault("limit", 50)
             kwargs.setdefault("semantic", True)
@@ -2179,49 +2444,67 @@ class GraphMemoryManager:
                     search_term = kwargs.get("search_term", "")
                     if search_term is None:
                         search_term = ""
-                        
+                    
                     result = self.lesson_memory.search_lesson_semantic(
                         query=search_term,
                         limit=kwargs.get("limit", 50),
                         container_name=kwargs.get("container_name")
                     )
+                    semantic_used = True
                     
-                    # Handle different return types (future-proof)
-                    if isinstance(result, str):
-                        return result
-                    else:
-                        return json.dumps(result)
-                        
                 except Exception as semantic_error:
                     # Fall back to standard search if semantic search fails
                     if self.logger:
                         self.logger.warning(f"Semantic search failed, falling back to standard search: {str(semantic_error)}")
+                    semantic_used = False
             
             # Use standard search (either as primary method or fallback)
-            result = self.lesson_memory.search_lesson_entities(
-                container_name=kwargs.get("container_name"),
-                search_term=kwargs.get("search_term"),
-                entity_type=kwargs.get("entity_type"),
-                tags=kwargs.get("tags"),
-                limit=kwargs.get("limit", 50),
-                semantic=False  # We already tried semantic search above if enabled
-            )
+            if not semantic_used or result is None:
+                result = self.lesson_memory.search_lesson_entities(
+                    container_name=kwargs.get("container_name"),
+                    search_term=kwargs.get("search_term"),
+                    entity_type=kwargs.get("entity_type"),
+                    tags=kwargs.get("tags"),
+                    limit=kwargs.get("limit", 50),
+                    semantic=False  # We already tried semantic search above if enabled
+                )
             
-            # Handle different return types (future-proof)
-            if isinstance(result, str):
-                return result
-            else:
-                return json.dumps(result)
+            # Prepare search context for the success message
+            search_context = f"'{query}'" if query else "all lessons"
+            container_context = f" in container '{kwargs.get('container_name')}'" if kwargs.get('container_name') else ""
+            search_type = "semantic" if semantic_used else "standard"
+            
+            # Use standardized response
+            return self._standardize_response(
+                result_json=result,
+                success_message=f"Successfully performed {search_type} search for {search_context}{container_context}",
+                error_code="search_error"
+            )
             
         except Exception as e:
             if self.logger:
                 self.logger.error(f"Error searching lessons: {str(e)}")
-            return json.dumps({
-                "status": "error",
-                "error": f"Failed to search lessons: {str(e)}",
-                "code": "search_error"
-            })
-        
+            
+            # Prepare error details
+            details = {
+                "query": query,
+                "container_name": kwargs.get("container_name", "default"),
+                "limit": kwargs.get("limit", 50),
+                "semantic": kwargs.get("semantic", True)
+            }
+            
+            error = ErrorDetail(
+                code="search_error",
+                message=f"Failed to search lessons: {str(e)}",
+                details=details
+            )
+            error_response = ErrorResponse(
+                status="error",
+                timestamp=datetime.now(),
+                error=error
+            )
+            return error_response.model_dump_json()
+    
     def _handle_lesson_tracking(self, lesson_name: str, context_entity: str, **kwargs) -> str:
         """
         Handle tracking lesson application to context entities.
@@ -2237,6 +2520,9 @@ class GraphMemoryManager:
             JSON response string with tracking results
         """
         try:
+            # Pre-initialize result in case of error
+            result = None
+            
             # Get optional parameters with defaults
             success_score = kwargs.get("success_score", 0.8)
             application_notes = kwargs.get("application_notes")
@@ -2249,21 +2535,37 @@ class GraphMemoryManager:
                 application_notes=application_notes
             )
             
-            # Handle different return types (future-proof)
-            if isinstance(result, str):
-                return result
-            else:
-                return json.dumps(result)
+            # Use standardized response
+            score_text = f" with success score {success_score}" if success_score is not None else ""
+            return self._standardize_response(
+                result_json=result,
+                success_message=f"Successfully tracked application of lesson '{lesson_name}' to '{context_entity}'{score_text}",
+                error_code="tracking_error"
+            )
             
         except Exception as e:
             if self.logger:
                 self.logger.error(f"Error tracking lesson application: {str(e)}")
-            return json.dumps({
-                "status": "error",
-                "error": f"Failed to track lesson application: {str(e)}",
-                "code": "tracking_error"
-            })
-        
+            
+            # Prepare error details
+            details = {
+                "lesson_name": lesson_name,
+                "context_entity": context_entity,
+                "success_score": kwargs.get("success_score", 0.8)
+            }
+            
+            error = ErrorDetail(
+                code="tracking_error",
+                message=f"Failed to track lesson application: {str(e)}",
+                details=details
+            )
+            error_response = ErrorResponse(
+                status="error",
+                timestamp=datetime.now(),
+                error=error
+            )
+            return error_response.model_dump_json()
+    
     def _handle_lesson_consolidation(self, source_lessons: List[str], new_name: str, **kwargs) -> str:
         """
         Handle consolidating multiple lessons into a single consolidated lesson.
@@ -2279,6 +2581,9 @@ class GraphMemoryManager:
             JSON response string with the consolidated lesson
         """
         try:
+            # Pre-initialize result in case of error
+            result = None
+            
             # Get optional parameters with defaults
             merge_strategy = kwargs.get("merge_strategy", "union")
             container_name = kwargs.get("container_name")
@@ -2303,21 +2608,49 @@ class GraphMemoryManager:
                 container_name=container_name
             )
             
-            # Handle different return types (future-proof)
-            if isinstance(result, str):
-                return result
-            else:
-                return json.dumps(result)
+            # Format source lesson names for message
+            source_names = []
+            for lesson in source_lessons:
+                if isinstance(lesson, dict) and "name" in lesson:
+                    source_names.append(lesson.get("name"))
+                elif isinstance(lesson, dict) and "id" in lesson:
+                    source_names.append(lesson.get("id"))
+                else:
+                    source_names.append(str(lesson))
+            
+            source_text = ", ".join(f"'{name}'" for name in source_names)
+            
+            # Use standardized response
+            return self._standardize_response(
+                result_json=result,
+                success_message=f"Successfully consolidated lessons [{source_text}] into new lesson '{new_name}' using {merge_strategy} strategy",
+                error_code="consolidation_error"
+            )
             
         except Exception as e:
             if self.logger:
                 self.logger.error(f"Error consolidating lessons: {str(e)}")
-            return json.dumps({
-                "status": "error",
-                "error": f"Failed to consolidate lessons: {str(e)}",
-                "code": "consolidation_error"
-            })
-        
+            
+            # Prepare error details
+            details = {
+                "source_lessons": [str(lesson) for lesson in source_lessons],
+                "new_name": new_name,
+                "merge_strategy": kwargs.get("merge_strategy", "union"),
+                "container_name": kwargs.get("container_name")
+            }
+            
+            error = ErrorDetail(
+                code="consolidation_error",
+                message=f"Failed to consolidate lessons: {str(e)}",
+                details=details
+            )
+            error_response = ErrorResponse(
+                status="error",
+                timestamp=datetime.now(),
+                error=error
+            )
+            return error_response.model_dump_json()
+    
     def _handle_lesson_evolution(self, old_lesson: str, new_lesson: str, **kwargs) -> str:
         """
         Handle tracking when a new lesson supersedes an older one.
@@ -2332,6 +2665,9 @@ class GraphMemoryManager:
             JSON response string with the created relationship
         """
         try:
+            # Pre-initialize result in case of error
+            result = None
+            
             # Get optional parameters
             reason = kwargs.get("reason")
             
@@ -2342,21 +2678,37 @@ class GraphMemoryManager:
                 reason=reason
             )
             
-            # Handle different return types (future-proof)
-            if isinstance(result, str):
-                return result
-            else:
-                return json.dumps(result)
+            # Use standardized response
+            reason_text = f" (Reason: {reason})" if reason else ""
+            return self._standardize_response(
+                result_json=result,
+                success_message=f"Successfully tracked evolution from '{old_lesson}' to '{new_lesson}'{reason_text}",
+                error_code="evolution_error"
+            )
             
         except Exception as e:
             if self.logger:
                 self.logger.error(f"Error tracking lesson evolution: {str(e)}")
-            return json.dumps({
-                "status": "error",
-                "error": f"Failed to track lesson evolution: {str(e)}",
-                "code": "evolution_error"
-            })
-        
+            
+            # Prepare error details
+            details = {
+                "old_lesson": old_lesson,
+                "new_lesson": new_lesson,
+                "reason": kwargs.get("reason")
+            }
+            
+            error = ErrorDetail(
+                code="evolution_error",
+                message=f"Failed to track lesson evolution: {str(e)}",
+                details=details
+            )
+            error_response = ErrorResponse(
+                status="error",
+                timestamp=datetime.now(),
+                error=error
+            )
+            return error_response.model_dump_json()
+    
     def _handle_lesson_update(self, entity_name: str, updates: Dict[str, Any], **kwargs) -> str:
         """
         Handle updating an existing lesson entity.
@@ -2371,6 +2723,9 @@ class GraphMemoryManager:
             JSON response string with the updated entity
         """
         try:
+            # Pre-initialize result in case of error
+            result = None
+            
             # Get optional parameters
             container_name = kwargs.get("container_name")
             
@@ -2381,20 +2736,42 @@ class GraphMemoryManager:
                 container_name=container_name
             )
             
-            # Handle different return types (future-proof)
-            if isinstance(result, str):
-                return result
-            else:
-                return json.dumps(result)
+            # Format update fields for message
+            update_fields = list(updates.keys())
+            update_text = ", ".join([f"'{field}'" for field in update_fields[:3]])
+            if len(update_fields) > 3:
+                update_text += f" and {len(update_fields) - 3} more fields"
+            
+            # Use standardized response
+            container_text = f" in container '{container_name}'" if container_name else ""
+            return self._standardize_response(
+                result_json=result,
+                success_message=f"Successfully updated lesson '{entity_name}'{container_text} with fields: {update_text}",
+                error_code="update_error"
+            )
             
         except Exception as e:
             if self.logger:
                 self.logger.error(f"Error updating lesson: {str(e)}")
-            return json.dumps({
-                "status": "error",
-                "error": f"Failed to update lesson: {str(e)}",
-                "code": "update_error"
-            })
+            
+            # Prepare error details
+            details = {
+                "entity_name": entity_name,
+                "update_fields": list(updates.keys()),
+                "container_name": kwargs.get("container_name")
+            }
+            
+            error = ErrorDetail(
+                code="update_error",
+                message=f"Failed to update lesson: {str(e)}",
+                details=details
+            )
+            error_response = ErrorResponse(
+                status="error",
+                timestamp=datetime.now(),
+                error=error
+            )
+            return error_response.model_dump_json()
     
     def _handle_get_lesson_container(self, **kwargs) -> str:
         """
@@ -2678,10 +3055,8 @@ class GraphMemoryManager:
         lesson operations with shared project and container context.
         
         Args:
-            context_data: Dictionary containing context information
-                - project_name: Optional. Project name to set as context
-                - container_name: Optional. Container name to use for operations (defaults to "Lessons")
-            client_id: Optional client ID for identifying the connection
+            project_name: Optional. Project name to set as context
+            container_name: Optional. Container name to use for operations (defaults to "Lessons")
                 
         Returns:
             JSON response with context information that includes:
@@ -2743,6 +3118,8 @@ class GraphMemoryManager:
                 context.create(name="Lesson1", lesson_type="BestPractice")
             ```
         """
+        from src.models.response_models import LessonContextModel, LessonContextResponse
+        
         self._ensure_initialized()
         
         # Save current project
@@ -2753,8 +3130,23 @@ class GraphMemoryManager:
             if project_name is not None:
                 self.set_project_name(project_name)
             
+            # Create context model for tracking
+            context_model = LessonContextModel(
+                container_name=container_name,
+                project_name=project_name or self.default_project_name,
+                created_at=datetime.now()
+            )
+            
+            # Log context creation
+            if self.logger:
+                self.logger.debug(f"Created lesson context with project={context_model.project_name}, container={context_model.container_name}")
+            
             # Create and yield context helper
             context = LessonContext(self, container_name)
+            
+            # Attach context model to the context object for reference
+            context._context_model = context_model
+            
             yield context
             
         finally:
@@ -2767,238 +3159,281 @@ class GraphMemoryManager:
     
     def project_operation(self, operation_type: str, **kwargs) -> str:
         """
-        Manage project memory with a unified interface
+        Manage project memory with a unified interface.
         
-        This tool provides a simplified interface to the Project Memory System,
-        allowing AI agents to store and retrieve structured project knowledge.
+        This method provides a simplified interface to the Project Memory System,
+        allowing for structured organization of project knowledge.
         
         Args:
             operation_type: The type of operation to perform
-              - create_project: Create a new project container
+              - create_project: Create a new project
               - create_component: Create a component within a project
-              - create_domain_entity: Create a domain entity
-              - relate_entities: Create relationships between entities
-              - search: Find relevant project entities
-              - get_structure: Retrieve project hierarchy
-              - add_observation: Add observations to entities
-              - update: Update existing entities
-              - delete_entity: Delete a project entity (project, domain, component, or observation)
-              - delete_relationship: Delete a relationship between entities
+              - create_domain: Create a domain within a project
+              - create_domain_entity: Create an entity within a domain
+              - relate: Create relationship between entities
+              - search: Search for project entities
+              - get_structure: Get project structure
+              - add_observation: Add observation to an entity
+              - update: Update entity properties
+              - delete_entity: Delete an entity
+              - delete_relationship: Delete a relationship
             **kwargs: Operation-specific parameters
-                
+        
         Returns:
             JSON response with operation results
-            
-        Required parameters by operation_type:
-            - create_project: name (str)
-            - create_component: name (str), component_type (str), project_id (str)
-            - create_domain_entity: name (str), entity_type (str), project_id (str)
-            - relate_entities: source_name (str), target_name (str), relation_type (str), project_id (str)
-            - search: query (str), project_id (str)
-            - get_structure: project_id (str)
-            - add_observation: entity_name (str), content (str)
-            - update: entity_name (str), updates (dict)
-            - delete_entity: entity_name (str), entity_type (str)
-            - delete_relationship: source_name (str), target_name (str), relationship_type (str)
-            
-        Optional parameters by operation_type:
-            - create_project: description (str), metadata (dict), tags (list)
-            - create_component: domain_name (str), description (str), content (str), metadata (dict)
-            - create_domain_entity: description (str), properties (dict)
-            - relate_entities: domain_name (str), entity_type (str), properties (dict)
-            - search: entity_types (list), limit (int), semantic (bool), domain_name (str)
-            - get_structure: include_components (bool), include_domains (bool), include_relationships (bool), max_depth (int)
-            - add_observation: project_id (str), observation_type (str), entity_type (str), domain_name (str)
-            - update: project_id (str), entity_type (str), domain_name (str)
-            - delete_entity: container_name (str), domain_name (str), delete_contents (bool), observation_id (str)
-            - delete_relationship: container_name (str), domain_name (str), relationship_type (str)
-            
-        Response format:
-            All operations return a JSON string with at minimum:
-            - status: "success" or "error"
-            - message or error: Description of result or error
-
-        Examples:
-            ```
-            # Create a new project
-            project_memory_tool({
-                "operation_type": "create_project",
-                "name": "E-commerce Platform",
-                "description": "Online store with microservices architecture"
-            })
-            
-            # Create a component within the project
-            project_memory_tool({
-                "operation_type": "create_component",
-                "project_id": "E-commerce Platform",
-                "name": "Authentication Service",
-                "component_type": "MICROSERVICE"
-            })
-            
-            # Create a domain entity
-            project_memory_tool({
-                "operation_type": "create_domain_entity",
-                "project_id": "E-commerce Platform",
-                "entity_type": "DECISION",
-                "name": "Use JWT for Auth"
-            })
-            
-            # Create a relationship
-            project_memory_tool({
-                "operation_type": "relate_entities",
-                "source_name": "Authentication Service",
-                "target_name": "User Database",
-                "relationship_type": "DEPENDS_ON",
-                "project_id": "E-commerce Platform"
-            })
-            
-            # Search for entities
-            project_memory_tool({
-                "operation_type": "search",
-                "query": "authentication patterns",
-                "project_id": "E-commerce Platform",
-                "limit": 5
-            })
-            
-            # Delete a component
-            project_memory_tool({
-                "operation_type": "delete_entity",
-                "entity_name": "Payment Gateway",
-                "entity_type": "component",
-                "container_name": "E-commerce Platform",
-                "domain_name": "Payment"
-            })
-            
-            # Delete a relationship
-            project_memory_tool({
-                "operation_type": "delete_relationship",
-                "source_name": "Authentication Service",
-                "target_name": "User Database",
-                "relationship_type": "DEPENDS_ON",
-                "container_name": "E-commerce Platform",
-                "domain_name": "Backend"
-            })
-            
-            # Using with context
-            # First get a context
-            context = @project_memory_context({
-                "project_name": "E-commerce Platform"
-            })
-            
-            # Then use context in operations
-            project_memory_tool({
-                "operation_type": "create_component",
-                "name": "Payment Processor",
-                "component_type": "SERVICE",
-                "context": context["context"]
-            })
-            ```
         """
-        self._ensure_initialized()
+        # Initialize variables that may be used in error handling
+        project_id = kwargs.get("project_id", kwargs.get("container_name", self.default_project_name))
         
-        operations = {
-            "create_project": self._handle_project_creation,
-            "create_component": self._handle_component_creation,
-            "create_domain_entity": self._handle_domain_entity_creation,
-            "relate_entities": self._handle_entity_relationship,
-            "search": self._handle_project_search,
-            "get_structure": self._handle_structure_retrieval,
-            "add_observation": self._handle_add_observation,
-            "update": self._handle_entity_update,
-            "delete_entity": self._handle_entity_deletion,
-            "delete_relationship": self._handle_relationship_deletion,
-        }
-        
-        if operation_type not in operations:
-            error_msg = f"Unknown operation type: {operation_type}"
-            if self.logger:
-                self.logger.error(error_msg)
-            return json.dumps({"status": "error", "error": error_msg, "code": "invalid_operation"})
-            
         try:
-            return operations[operation_type](**kwargs)
+            self._ensure_initialized()
+            
+            # Map operation types to handler methods
+            operation_handlers = {
+                # Container operations
+                "create_project": self._handle_project_creation,
+                
+                # Component operations
+                "create_component": self._handle_component_creation,
+                # Replace _handle_domain_creation with _handle_domain_entity_creation 
+                "create_domain": self._handle_domain_entity_creation,  
+                "create_domain_entity": self._handle_domain_entity_creation,
+                
+                # Relationship operations
+                "relate": self._handle_entity_relationship,
+                
+                # Search operations
+                "search": self._handle_project_search,
+                "get_structure": self._handle_structure_retrieval,
+                
+                # Observation operations
+                "add_observation": self._handle_add_observation,
+                
+                # Update operations
+                "update": self._handle_entity_update,
+                
+                # Delete operations
+                "delete_entity": self._handle_entity_deletion,
+                "delete_relationship": self._handle_relationship_deletion,
+            }
+            
+            # Check if operation type is valid
+            if operation_type not in operation_handlers:
+                error = ErrorDetail(
+                    code="unknown_operation",
+                    message=f"Unknown project operation type: {operation_type}",
+                    details={"available_operations": list(operation_handlers.keys())}
+                )
+                error_response = ErrorResponse(
+                    status="error",
+                    timestamp=datetime.now(),
+                    error=error
+                )
+                return error_response.model_dump_json()
+            
+            # Get the handler for this operation
+            handler = operation_handlers[operation_type]
+            
+            # Special handling for different operation types
+            if operation_type == "create_project":
+                # Validate project name
+                if "name" not in kwargs:
+                    error = ErrorDetail(
+                        code="missing_project_name",
+                        message="Project name is required for create_project operation",
+                        details=None
+                    )
+                    error_response = ErrorResponse(
+                        status="error",
+                        timestamp=datetime.now(),
+                        error=error
+                    )
+                    return error_response.model_dump_json()
+                    
+                # Call the handler with name parameter
+                result = handler(name=kwargs.pop("name"), **kwargs)
+                
+            elif operation_type in ["create_component", "create_domain_entity"]:
+                # Validate required parameters
+                if "name" not in kwargs:
+                    error = ErrorDetail(
+                        code="missing_entity_name",
+                        message=f"Entity name is required for {operation_type} operation",
+                        details=None
+                    )
+                    error_response = ErrorResponse(
+                        status="error",
+                        timestamp=datetime.now(),
+                        error=error
+                    )
+                    return error_response.model_dump_json()
+                    
+                # For component creation, require component_type
+                if operation_type == "create_component" and "component_type" not in kwargs:
+                    error = ErrorDetail(
+                        code="missing_component_type",
+                        message="Component type is required for create_component operation",
+                        details=None
+                    )
+                    error_response = ErrorResponse(
+                        status="error",
+                        timestamp=datetime.now(),
+                        error=error
+                    )
+                    return error_response.model_dump_json()
+                
+                # Add project_id if not provided
+                if "project_id" not in kwargs:
+                    kwargs["project_id"] = project_id
+                    
+                # Call the appropriate handler
+                result = handler(**kwargs)
+                
+            elif operation_type == "relate":
+                # Validate relationship parameters
+                if "source_name" not in kwargs or "target_name" not in kwargs or "relation_type" not in kwargs:
+                    error = ErrorDetail(
+                        code="missing_relationship_parameters",
+                        message="source_name, target_name, and relation_type are required for relate operation",
+                        details={"provided_params": list(kwargs.keys())}
+                    )
+                    error_response = ErrorResponse(
+                        status="error",
+                        timestamp=datetime.now(),
+                        error=error
+                    )
+                    return error_response.model_dump_json()
+                    
+                # Call the relationship handler
+                result = handler(
+                    source_name=kwargs.pop("source_name"),
+                    target_name=kwargs.pop("target_name"),
+                    relation_type=kwargs.pop("relation_type"),
+                    **kwargs
+                )
+                
+            else:
+                # For other operations, just call the handler directly
+                result = handler(**kwargs)
+            
+            # Standardize the response
+            return self._standardize_response(
+                result_json=result,
+                success_message=f"Project operation '{operation_type}' completed successfully",
+                error_code=f"project_{operation_type}_error"
+            )
+            
         except Exception as e:
+            # Log and report the error
             if self.logger:
                 self.logger.error(f"Error in project operation '{operation_type}': {str(e)}")
-            return json.dumps({
-                "status": "error", 
-                "error": f"Operation failed: {str(e)}", 
-                "code": "operation_error"
-            })
+            
+            error = ErrorDetail(
+                code=f"project_{operation_type}_error",
+                message=f"Error in project operation '{operation_type}': {str(e)}",
+                details={
+                    "project_id": project_id,
+                    "operation_args": kwargs
+                }
+            )
+            error_response = ErrorResponse(
+                status="error",
+                timestamp=datetime.now(),
+                error=error
+            )
+            return error_response.model_dump_json()
     
     def _handle_project_creation(self, name: str, **kwargs) -> str:
         """
-        Create a new project container
-        
-        This method creates a top-level project container that serves as a namespace
-        for all project-related components, domains, and entities.
+        Handle project container creation.
         
         Args:
             name: Name of the project to create
             **kwargs: Additional parameters
-                
+                - description: Optional description of the project
+                - metadata: Optional metadata dictionary
+                - tags: Optional list of tags for the project
+        
         Returns:
-            JSON response with operation results
-            
-        Required parameters:
-            - name: Project container name
-            
-        Optional parameters:
-            - description: Description of the project
-            - metadata: Dictionary with additional project attributes
-            - tags: List of tags for categorizing the project
-            
-        Response format:
-            All operations return a JSON string with at minimum:
-            - status: "success" or "error"
-            - message or error: Description of result or error
-            - container: Project container data if successful
-
-        Example:
-            ```
-            # Create a new project
-            result = self._handle_project_creation(
-                name="E-commerce Platform",
-                description="Online store with microservices architecture",
-                tags=["e-commerce", "web", "microservices"]
-            )
-            ```
+            JSON response string with created project data
         """
+        # Initialize variables that may be used in error handling
+        description = kwargs.get("description", None)
+        metadata = kwargs.get("metadata", None)
+        tags = kwargs.get("tags", None)
+        
         try:
-            # Extract optional parameters with defaults
-            description = kwargs.pop("description", None)
-            metadata = kwargs.pop("metadata", None)
-            tags = kwargs.pop("tags", None)
+            # Validate required parameters
+            if not name or not name.strip():
+                error = ErrorDetail(
+                    code="missing_project_name",
+                    message="Project name is required",
+                    details=None
+                )
+                error_response = ErrorResponse(
+                    status="error",
+                    timestamp=datetime.now(),
+                    error=error
+                )
+                return error_response.model_dump_json()
+            
+            # Validate project memory system
+            if not hasattr(self, "project_memory") or not self.project_memory:
+                error = ErrorDetail(
+                    code="project_memory_not_initialized",
+                    message="Project memory system not initialized",
+                    details=None
+                )
+                error_response = ErrorResponse(
+                    status="error",
+                    timestamp=datetime.now(),
+                    error=error
+                )
+                return error_response.model_dump_json()
             
             # Prepare project data
             project_data = {
                 "name": name
             }
             
-            if description:
+            # Add optional parameters if provided
+            if description is not None:
                 project_data["description"] = description
-            if metadata:
+            if metadata is not None:
                 project_data["metadata"] = metadata
-            if tags:
+            if tags is not None:
                 project_data["tags"] = tags
-            
-            # Create the project container
+                
+            # Create the project
             result = self.project_memory.create_project_container(project_data)
             
-            # Handle different return types (future-proof)
-            if isinstance(result, str):
-                return result
-            else:
-                return json.dumps(result)
+            # Return standardized response
+            return self._standardize_response(
+                result_json=result,
+                success_message=f"Project '{name}' created successfully",
+                error_code="project_creation_error"
+            )
             
         except Exception as e:
             if self.logger:
-                self.logger.error(f"Error creating project: {str(e)}")
-            return json.dumps({
-                "status": "error",
-                "error": f"Failed to create project: {str(e)}",
-                "code": "project_creation_error"
-            })
+                self.logger.error(f"Error creating project container: {str(e)}")
+            
+            error = ErrorDetail(
+                code="project_creation_error",
+                message=f"Failed to create project: {str(e)}",
+                details={
+                    "name": name,
+                    "has_description": description is not None,
+                    "has_metadata": metadata is not None,
+                    "has_tags": tags is not None
+                }
+            )
+            error_response = ErrorResponse(
+                status="error",
+                timestamp=datetime.now(),
+                error=error
+            )
+            return error_response.model_dump_json()
     
     def _handle_component_creation(self, name: str, component_type: str, project_id: str, **kwargs) -> str:
         """
@@ -3050,6 +3485,12 @@ class GraphMemoryManager:
             )
             ```
         """
+        # Pre-initialize variables that may be used in error handling
+        domain_name = None
+        description = None
+        content = None
+        metadata = None
+        
         try:
             # Extract optional parameters with defaults
             domain_name = kwargs.pop("domain_name", None)
@@ -3068,20 +3509,42 @@ class GraphMemoryManager:
                 metadata=metadata
             )
             
-            # Handle different return types (future-proof)
-            if isinstance(result, str):
-                return result
-            else:
-                return json.dumps(result)
+            # Prepare context for success message
+            domain_text = f" in domain '{domain_name}'" if domain_name else ""
+            
+            # Use standardized response
+            return self._standardize_response(
+                result_json=result,
+                success_message=f"Successfully created {component_type} component '{name}'{domain_text} in project '{project_id}'",
+                error_code="component_creation_error"
+            )
             
         except Exception as e:
             if self.logger:
                 self.logger.error(f"Error creating component: {str(e)}")
-            return json.dumps({
-                "status": "error",
-                "error": f"Failed to create component: {str(e)}",
-                "code": "component_creation_error"
-            })
+            
+            # Prepare error details
+            details = {
+                "name": name,
+                "component_type": component_type,
+                "project_id": project_id,
+                "domain_name": kwargs.get("domain_name"),
+                "has_description": description is not None,
+                "has_content": content is not None,
+                "has_metadata": metadata is not None
+            }
+            
+            error = ErrorDetail(
+                code="component_creation_error",
+                message=f"Failed to create component: {str(e)}",
+                details=details
+            )
+            error_response = ErrorResponse(
+                status="error",
+                timestamp=datetime.now(),
+                error=error
+            )
+            return error_response.model_dump_json()
     
     def _handle_domain_entity_creation(self, name: str, entity_type: str, project_id: str, **kwargs) -> str:
         """
@@ -3333,6 +3796,13 @@ class GraphMemoryManager:
             )
             ```
         """
+        # Pre-initialize variables that may be used in error handling
+        entity_types = None
+        limit = 10
+        semantic = False
+        domain_name = None
+        result = None
+        
         try:
             # Extract optional parameters with defaults
             entity_types = kwargs.pop("entity_types", None)
@@ -3366,12 +3836,12 @@ class GraphMemoryManager:
                         # Replace entities with filtered list
                         result_data["data"]["entities"] = filtered_entities
                         result_data["data"]["total_count"] = len(filtered_entities)
-                        return json.dumps(result_data)
-                    
-                    return result_json
+                        result = result_data
+                    else:
+                        result = result_data
                 except json.JSONDecodeError:
                     # If parsing fails, return original result
-                    return result_json
+                    result = result_json
                 
             elif domain_name:
                 # Regular search within a specific domain
@@ -3399,12 +3869,12 @@ class GraphMemoryManager:
                         # Replace entities with filtered list
                         result_data["data"]["entities"] = filtered_entities
                         result_data["data"]["total_count"] = len(filtered_entities)
-                        return json.dumps(result_data)
-                    
-                    return result_json
+                        result = result_data
+                    else:
+                        result = result_data
                 except json.JSONDecodeError:
                     # If parsing fails, return original result
-                    return result_json
+                    result = result_json
                 
             elif semantic:
                 # Project-wide semantic search
@@ -3424,20 +3894,49 @@ class GraphMemoryManager:
                     semantic=False
                 )
             
-            # Handle different return types (future-proof)
-            if isinstance(result, str):
-                return result
-            else:
-                return json.dumps(result)
+            # Prepare context for success message
+            entity_types_text = ""
+            if entity_types:
+                if isinstance(entity_types, list):
+                    entity_types_text = f" for {', '.join(entity_types)} entities"
+                else:
+                    entity_types_text = f" for {entity_types} entities"
+                    
+            domain_text = f" in domain '{domain_name}'" if domain_name else ""
+            search_type = "semantic" if semantic else "standard"
+            
+            # Use standardized response
+            return self._standardize_response(
+                result_json=result,
+                success_message=f"Successfully performed {search_type} search for '{query}'{entity_types_text}{domain_text} in project '{project_id}'",
+                error_code="project_search_error"
+            )
             
         except Exception as e:
             if self.logger:
                 self.logger.error(f"Error searching project: {str(e)}")
-            return json.dumps({
-                "status": "error",
-                "error": f"Failed to search project: {str(e)}",
-                "code": "search_error"
-            })
+            
+            # Prepare error details
+            details = {
+                "query": query,
+                "project_id": project_id,
+                "entity_types": entity_types,
+                "limit": limit,
+                "semantic": semantic,
+                "domain_name": domain_name
+            }
+            
+            error = ErrorDetail(
+                code="project_search_error",
+                message=f"Failed to search project: {str(e)}",
+                details=details
+            )
+            error_response = ErrorResponse(
+                status="error",
+                timestamp=datetime.now(),
+                error=error
+            )
+            return error_response.model_dump_json()
     
     def _handle_structure_retrieval(self, project_id: str, **kwargs) -> str:
         """
@@ -3659,7 +4158,7 @@ class GraphMemoryManager:
             observation_data = {
                 "content": content,
                 "type": observation_type,
-                "timestamp": datetime.datetime.now().isoformat()
+                "timestamp": datetime.now().isoformat()
             }
             
             # Use the appropriate method based on entity_type to add the observation
@@ -3861,6 +4360,12 @@ class GraphMemoryManager:
             )
             ```
         """
+        # Pre-initialize variables that may be used in error handling
+        entity_type = "component"
+        domain_name = None
+        project_id = None
+        result = None
+        
         try:
             # Extract optional parameters with defaults
             entity_type = kwargs.pop("entity_type", "component").lower()
@@ -3891,26 +4396,64 @@ class GraphMemoryManager:
                 error_msg = f"Unsupported entity type '{entity_type}' or missing domain_name for component update"
                 if self.logger:
                     self.logger.error(error_msg)
-                return json.dumps({
-                    "status": "error",
-                    "error": error_msg,
-                    "code": "invalid_update_parameters"
-                })
+                
+                error = ErrorDetail(
+                    code="invalid_update_parameters",
+                    message=error_msg,
+                    details={
+                        "entity_type": entity_type,
+                        "has_domain_name": domain_name is not None,
+                        "entity_name": entity_name
+                    }
+                )
+                error_response = ErrorResponse(
+                    status="error",
+                    timestamp=datetime.now(),
+                    error=error
+                )
+                return error_response.model_dump_json()
             
-            # Handle different return types (future-proof)
-            if isinstance(result, str):
-                return result
-            else:
-                return json.dumps(result)
+            # Format update fields for message
+            update_fields = list(updates.keys())
+            update_text = ", ".join([f"'{field}'" for field in update_fields[:3]])
+            if len(update_fields) > 3:
+                update_text += f" and {len(update_fields) - 3} more fields"
+                
+            # Create context for success message
+            project_context = f" in project '{project_id}'" if project_id else ""
+            domain_context = f" in domain '{domain_name}'" if domain_name else ""
+            
+            # Use standardized response
+            return self._standardize_response(
+                result_json=result,
+                success_message=f"Successfully updated {entity_type} '{entity_name}'{project_context}{domain_context} with fields: {update_text}",
+                error_code="entity_update_error"
+            )
             
         except Exception as e:
             if self.logger:
                 self.logger.error(f"Error updating entity: {str(e)}")
-            return json.dumps({
-                "status": "error",
-                "error": f"Failed to update entity: {str(e)}",
-                "code": "entity_update_error"
-            })
+            
+            # Prepare error details
+            details = {
+                "entity_name": entity_name,
+                "entity_type": entity_type,
+                "project_id": project_id,
+                "domain_name": domain_name,
+                "update_fields": list(updates.keys())
+            }
+            
+            error = ErrorDetail(
+                code="entity_update_error",
+                message=f"Failed to update entity: {str(e)}",
+                details=details
+            )
+            error_response = ErrorResponse(
+                status="error",
+                timestamp=datetime.now(),
+                error=error
+            )
+            return error_response.model_dump_json()
     
     def _handle_entity_deletion(self, entity_name: str, entity_type: str, **kwargs) -> str:
         """
@@ -4149,7 +4692,6 @@ class GraphMemoryManager:
                 "code": "relationship_deletion_error"
             })
 
-    @contextmanager
     def project_context(self, project_name: Optional[str] = None):
         """
         Create a context for batch project memory operations.
@@ -4158,10 +4700,8 @@ class GraphMemoryManager:
         project operations with shared project context.
         
         Args:
-            context_data: Dictionary containing context information
-                - project_name: Project name to set as context
-            client_id: Optional client ID for identifying the connection
-            
+            project_name: Optional. Project name to set as context
+                
         Returns:
             JSON response with context information that includes:
             - status: "success" or "error"
@@ -4177,26 +4717,46 @@ class GraphMemoryManager:
                 "context": {
                     "project_name": "ProjectName",
                     "created_at": "2023-07-15T10:30:45.123456",
-                    "operations_available": ["create_component", "create_domain_entity", "relate_entities", "search", "get_structure", "add_observation", "update", "delete_entity", "delete_relationship"],
+                    "operations_available": ["create_component", "create_domain_entity", "relate", "search", "get_structure", "add_observation", "update", "delete_entity", "delete_relationship"],
                     "usage": "Use this context information with any project memory operation by including it in the operation's context parameter"
                 }
             }
             ```
-        
+             
+        The returned context object has these methods:
+            - create_project(): Create a new project
+            - create_component(): Create a component within a project
+            - create_domain(): Create a domain within a project
+            - create_domain_entity(): Create an entity within a domain
+            - relate(): Create relationship between entities 
+            - search(): Search for project entities
+            - get_structure(): Get project structure
+            - add_observation(): Add observation to an entity
+            - update(): Update entity properties
+            - delete_entity(): Delete an entity
+            - delete_relationship(): Delete a relationship
+            
         Example:
             ```
-            # Create a context for a specific project
-            context = project_memory_context({
-                "project_name": "E-commerce Platform"
-            })
+            # Use as a context manager for a specific project
+            with project_context("E-commerce Platform") as context:
+                # Perform operations using the context
+                component = context.create_component({
+                    "name": "Authentication Service",
+                    "component_type": "microservice"
+                })
+                
+                # All operations use the same project context
+                entity = context.create_domain_entity({
+                    "name": "User",
+                    "entity_type": "DATA_MODEL"
+                })
             
-            # Use the context with another tool
-            result = project_memory_tool({
-                "operation_type": "search",
-                "query": "authentication patterns",
-                "context": context["context"]  # Pass the context object from the response
-            })
+            # Original project context is automatically restored here
+            ```
         """
+        from src.models.response_models import ProjectContextModel, ProjectContextResponse
+        
         self._ensure_initialized()
         
         # Save current project
@@ -4206,12 +4766,27 @@ class GraphMemoryManager:
             # Set project context if provided
             if project_name:
                 self.set_project_name(project_name)
+            
+            # Create context model for tracking
+            context_model = ProjectContextModel(
+                project_name=project_name or self.default_project_name,
+                created_at=datetime.now()
+            )
+            
+            # Log context creation
+            if self.logger:
+                self.logger.debug(f"Created project context with project={context_model.project_name}")
                 
             # Create and yield context helper
             context = ProjectContext(self.project_memory, project_name)
+            
+            # Attach context model to the context object for reference
+            context._context_model = context_model
+            
             yield context
             
         finally:
             # Restore original project context
             self.set_project_name(original_project)
+    
     
