@@ -2044,17 +2044,17 @@ class GraphMemoryManager:
         """
         Manage lesson memory with a unified interface
         
-        This tool provides a simplified interface to the Lesson Memory System,
+        This method provides a simplified interface to the Lesson Memory System,
         allowing AI agents to store and retrieve experiential knowledge in a
         structured way.
         
         Args:
             operation_type: The type of operation to perform
-              - create: Create a new lesson
               - create_container: Create a lesson container
               - get_container: Get the lesson container
               - list_containers: List all lesson containers
               - container_exists: Check if a container exists
+              - create: Create a new lesson
               - observe: Add structured observations to a lesson
               - relate: Create relationships between lessons
               - search: Find relevant lessons
@@ -2066,6 +2066,72 @@ class GraphMemoryManager:
                 
         Returns:
             JSON response with operation results
+            
+        Required parameters by operation_type:
+            - create_container: description (str, optional), metadata (dict, optional)
+            - get_container: container_name (str, optional)
+            - list_containers: limit (int, optional), sort_by (str, optional)
+            - container_exists: container_name (str, optional)
+            - create: name (str), lesson_type (str), container_name (str, optional)
+            - observe: entity_name (str), what_was_learned (str), why_it_matters (str), how_to_apply (str), container_name (str, optional), confidence (float, optional)
+            - relate: source_name (str), target_name (str), relationship_type (str), container_name (str, optional)
+            - search: query (str), limit (int, optional), container_name (str, optional)
+            - track: lesson_name (str), context_entity (str), success_score (float), application_notes (str)
+            - update: entity_name (str), updates (dict), container_name (str, optional)
+            - consolidate: source_lessons (list), new_name (str), container_name (str, optional)
+            - evolve: old_lesson (str), new_lesson (str), container_name (str, optional)
+            
+        Response format:
+            All operations return a JSON string with at minimum:
+            - status: "success" or "error"
+            - message or error: Description of result or error
+
+        Examples:
+            ```
+            # Create a new lesson container
+            lesson_operation(
+                operation_type="create_container",
+                description="Container for React-related lessons",
+                metadata={"category": "frontend", "framework": "react"}
+            )
+            
+            # Check if a container exists
+            lesson_operation(
+                operation_type="container_exists",
+                container_name="Lessons"
+            )
+            
+            # Create a new lesson
+            lesson_operation(
+                operation_type="create",
+                name="ReactHookRules",
+                lesson_type="BestPractice"
+            )
+            
+            # Add observations to the lesson
+            lesson_operation(
+                operation_type="observe",
+                entity_name="ReactHookRules",
+                what_was_learned="React hooks must be called at the top level of components",
+                why_it_matters="Hook call order must be consistent between renders",
+                how_to_apply="Extract conditional logic into the hook implementation instead"
+            )
+            
+            # Create a relationship
+            lesson_operation(
+                operation_type="relate",
+                source_name="ReactHookRules",
+                target_name="ReactPerformance",
+                relationship_type="RELATED_TO"
+            )
+            
+            # Search for lessons
+            lesson_operation(
+                operation_type="search",
+                query="best practices for state management in React",
+                limit=3
+            )
+            ```
         """
         try:
             self._ensure_initialized()
@@ -3159,28 +3225,99 @@ class GraphMemoryManager:
     
     def project_operation(self, operation_type: str, **kwargs) -> str:
         """
-        Manage project memory with a unified interface.
+        Manage project memory with a unified interface
         
         This method provides a simplified interface to the Project Memory System,
-        allowing for structured organization of project knowledge.
+        allowing AI agents to store and retrieve structured project knowledge.
         
         Args:
             operation_type: The type of operation to perform
-              - create_project: Create a new project
+              - create_project: Create a new project container
               - create_component: Create a component within a project
-              - create_domain: Create a domain within a project
-              - create_domain_entity: Create an entity within a domain
-              - relate: Create relationship between entities
-              - search: Search for project entities
-              - get_structure: Get project structure
-              - add_observation: Add observation to an entity
-              - update: Update entity properties
-              - delete_entity: Delete an entity
-              - delete_relationship: Delete a relationship
+              - create_domain_entity: Create a domain entity
+              - relate_entities: Create relationships between entities
+              - search: Find relevant project entities
+              - get_structure: Retrieve project hierarchy
+              - add_observation: Add observations to entities
+              - update: Update existing entities
+              - delete_entity: Delete a project entity (project, domain, component, or observation)
+              - delete_relationship: Delete a relationship between entities
             **kwargs: Operation-specific parameters
-        
+                
         Returns:
             JSON response with operation results
+            
+        Required parameters by operation_type:
+            - create_project: name (str)
+            - create_component: name (str), component_type (str), project_id (str)
+            - create_domain_entity: name (str), entity_type (str), project_id (str)
+            - relate_entities: source_name (str), target_name (str), relationship_type (str), project_id (str)
+            - search: query (str), project_id (str)
+            - get_structure: project_id (str)
+            - add_observation: entity_name (str), content (str)
+            - update: entity_name (str), updates (dict)
+            - delete_entity: entity_name (str), entity_type (str)
+            - delete_relationship: source_name (str), target_name (str), relationship_type (str)
+            
+        Optional parameters by operation_type:
+            - create_project: description (str), metadata (dict), tags (list)
+            - create_component: domain_name (str), description (str), content (str), metadata (dict)
+            - create_domain_entity: description (str), properties (dict)
+            - relate_entities: domain_name (str), entity_type (str), properties (dict)
+            - search: entity_types (list), limit (int), semantic (bool), domain_name (str)
+            - get_structure: include_components (bool), include_domains (bool), include_relationships (bool), max_depth (int)
+            - add_observation: project_id (str), observation_type (str), entity_type (str), domain_name (str)
+            - update: project_id (str), entity_type (str), domain_name (str)
+            - delete_entity: project_id (str), domain_name (str), delete_contents (bool), observation_id (str)
+            - delete_relationship: project_id (str), domain_name (str)
+            
+        Response format:
+            All operations return a JSON string with at minimum:
+            - status: "success" or "error"
+            - message or error: Description of result or error
+
+        Examples:
+            ```
+            # Create a new project
+            project_operation(
+                operation_type="create_project",
+                name="E-commerce Platform",
+                description="Online store with microservices architecture"
+            )
+            
+            # Create a component within the project
+            project_operation(
+                operation_type="create_component",
+                project_id="E-commerce Platform",
+                name="Authentication Service",
+                component_type="MICROSERVICE"
+            )
+            
+            # Create a domain entity
+            project_operation(
+                operation_type="create_domain_entity",
+                project_id="E-commerce Platform",
+                entity_type="DECISION",
+                name="Use JWT for Auth"
+            )
+            
+            # Create a relationship
+            project_operation(
+                operation_type="relate_entities",
+                source_name="Authentication Service",
+                target_name="User Database",
+                relationship_type="DEPENDS_ON",
+                project_id="E-commerce Platform"
+            )
+            
+            # Search for entities
+            project_operation(
+                operation_type="search",
+                query="authentication patterns",
+                project_id="E-commerce Platform",
+                limit=5
+            )
+            ```
         """
         # Initialize variables that may be used in error handling
         project_id = kwargs.get("project_id", kwargs.get("container_name", self.default_project_name))
