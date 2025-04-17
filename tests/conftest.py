@@ -1,377 +1,342 @@
+"""
+Common test fixtures and utilities for testing the Neo4j Graph Memory System.
+"""
+
+import os
+import asyncio
 import pytest
 from unittest.mock import MagicMock, patch
 import json
-import os
-import sys
-from pathlib import Path
+from typing import Dict, List, Any, Optional
+from dotenv import load_dotenv
+from contextlib import contextmanager
 
-# Add the project root to the Python path
-project_root = Path(__file__).resolve().parent.parent
-if str(project_root) not in sys.path:
-    sys.path.insert(0, str(project_root))
+# Load environment variables
+load_dotenv()
 
-# Configure pytest-asyncio
-pytest_plugins = ["pytest_asyncio"]
-
-# Configure asyncio settings
-def pytest_configure(config):
-    """Configure pytest with custom markers."""
-    config.addinivalue_line(
-        "markers", 
-        "integration: mark test as integration test"
-    )
-    
-    # Use the correct configuration for asyncio
-    config.option.asyncio_mode = "strict"
-    
-    # This is the recommended way to set the default fixture loop scope
-    if not hasattr(config.option, "asyncio_default_fixture_loop_scope"):
-        config.option.asyncio_default_fixture_loop_scope = "function"
-    
-    # Configure event loop policy if needed
-    if hasattr(config.option, "asyncio_default_test_loop_scope"):
-        config.option.asyncio_default_test_loop_scope = "function"
-
-from src.graph_memory.base_manager import BaseManager
+# Import necessary components
 from src.graph_memory import GraphMemoryManager
-from src.graph_memory.entity_manager import EntityManager
-from src.graph_memory.relation_manager import RelationManager
-from src.graph_memory.observation_manager import ObservationManager
-from src.graph_memory.search_manager import SearchManager
-from src.graph_memory.embedding_adapter import EmbeddingAdapter
-from src.lesson_memory import LessonMemoryManager
-from src.project_memory import ProjectMemoryManager
+from src.logger import get_logger, LogLevel
+from src.session_manager import SessionManager
 
-
+# Initialize logger for tests
 @pytest.fixture
-def mock_logger():
-    """Mock logger for testing."""
-    return MagicMock()
+def logger():
+    """Get a configured logger instance."""
+    logger = get_logger()
+    logger.set_level(LogLevel.DEBUG)
+    return logger
 
-
+# Mock Neo4j session and driver
 @pytest.fixture
 def mock_neo4j_driver():
-    """Mock Neo4j driver that returns a mock session."""
-    mock_driver = MagicMock()
+    """Create a mock Neo4j driver."""
+    driver = MagicMock()
+    session = MagicMock()
+    transaction = MagicMock()
+    result = MagicMock()
     
-    # Mock session
-    mock_session = MagicMock()
-    mock_driver.session.return_value = mock_session
+    # Configure mocks
+    driver.session.return_value = session
+    session.begin_transaction.return_value = transaction
+    transaction.run.return_value = result
     
-    # Mock transaction function that executes the provided function with a mock transaction
-    def run_tx_func(tx_func, *args, **kwargs):
-        mock_tx = MagicMock()
-        # Mock run method that returns a result with a mock data method
-        mock_result = MagicMock()
-        
-        # Create mock records with proper data method
-        mock_record = MagicMock()
-        mock_record.data = lambda: {"n": {"id": "entity-1", "name": "Entity 1"}}
-        mock_records = [mock_record]
-        
-        mock_result.__iter__.return_value = mock_records
-        mock_tx.run.return_value = mock_result
-        
-        # Execute the transaction function with our mock transaction
-        return tx_func(mock_tx, *args, **kwargs)
+    # Mock the result configuration
+    result.data.return_value = []
     
-    mock_session.execute_read.side_effect = run_tx_func
-    mock_session.execute_write.side_effect = run_tx_func
-    
-    return mock_driver
+    with patch('neo4j.GraphDatabase.driver', return_value=driver):
+        yield driver
 
-
+# Mock GraphMemoryManager
 @pytest.fixture
-def mock_base_manager(mock_neo4j_driver, mock_logger):
-    """Mock base manager with a Neo4j driver."""
-    with patch('neo4j.GraphDatabase') as mock_graph_db:
-        mock_graph_db.driver.return_value = mock_neo4j_driver
-        
-        base_manager = MagicMock()
-        base_manager.driver = mock_neo4j_driver
-        base_manager.execute_read.side_effect = lambda query, **params: json.dumps([{"id": "entity-1"}])
-        base_manager.execute_write.side_effect = lambda query, **params: json.dumps({"id": "entity-1"})
-        
-        return base_manager
-
-
-@pytest.fixture
-def mock_entity_manager(mock_base_manager, mock_logger):
-    """Mock entity manager."""
-    entity_manager = MagicMock()
-    entity_manager.create_entity.return_value = json.dumps({"id": "entity-1", "name": "Test Entity"})
-    entity_manager.get_entity.return_value = json.dumps({"id": "entity-1", "name": "Test Entity", "type": "TestEntity"})
-    entity_manager.create_entities.return_value = json.dumps({"status": "success", "created": 2, "entity_ids": ["entity-1", "entity-2"]})
+def mock_graph_memory_manager(logger, mock_neo4j_driver):
+    """Create a mock GraphMemoryManager with stubbed Neo4j interactions."""
+    # Create a mock GraphMemoryManager
+    mock_manager = MagicMock(spec=GraphMemoryManager)
     
-    return entity_manager
-
-
-@pytest.fixture
-def mock_relation_manager(mock_base_manager, mock_entity_manager, mock_logger):
-    """Mock relation manager."""
-    relation_manager = MagicMock()
-    relation_manager.create_relationship.return_value = json.dumps({"status": "success"})
-    relation_manager.get_relationships.return_value = json.dumps([{"type": "CONNECTS_TO"}])
-    relation_manager.update_relation.return_value = json.dumps({"status": "success"})
-    relation_manager.delete_relation.return_value = json.dumps({"status": "success"})
+    # Set up required attributes and methods for core functionality
+    mock_manager.initialize.return_value = None
+    mock_manager.driver = mock_neo4j_driver
+    mock_manager.logger = logger
     
-    return relation_manager
-
-
-@pytest.fixture
-def mock_observation_manager(mock_base_manager, mock_entity_manager, mock_logger):
-    """Mock observation manager."""
-    observation_manager = MagicMock()
-    observation_manager.add_observation.return_value = json.dumps({"status": "success", "observation_id": "obs-1"})
-    observation_manager.get_observations.return_value = json.dumps([
-        {"id": "obs-1", "content": "Test observation", "created_at": "2023-01-01T00:00:00Z"}
-    ])
-    observation_manager.add_observations_batch.return_value = json.dumps({"status": "success", "added": 2, "observation_ids": ["obs-1", "obs-2"]})
+    # Make close method call driver.close()
+    def close_method():
+        mock_neo4j_driver.close()
+        return "Connection closed successfully"
+    mock_manager.close.side_effect = close_method
     
-    return observation_manager
-
-
-@pytest.fixture
-def mock_embedding_adapter(mock_logger):
-    """Mock embedding adapter."""
-    embedding_adapter = MagicMock()
-    embedding_adapter.is_available.return_value = True
-    embedding_adapter.get_embedding.return_value = [0.1] * 1536  # OpenAI embedding dimension
-    embedding_adapter.embedding_dimension = 1536
+    # Mock entity_manager and methods
+    mock_manager.entity_manager = MagicMock()
+    mock_manager.entity_manager.validate_entity_data.side_effect = lambda data: None if all(k in data for k in ['name', 'entity_type']) else ValueError("Invalid entity data")
+    mock_manager.entity_manager.create_entity.return_value = json.dumps({"status": "success", "message": "Entity created successfully", "data": {}})
+    mock_manager.entity_manager.delete_entity.return_value = json.dumps({"status": "success", "message": "Entity deleted successfully", "data": {}})
     
-    return embedding_adapter
-
-
-@pytest.fixture
-def mock_search_manager(mock_base_manager, mock_embedding_adapter, mock_logger):
-    """Mock search manager."""
-    search_manager = MagicMock()
-    search_manager.search_nodes.return_value = json.dumps([
-        {"id": "entity-1", "name": "Search Result 1", "score": 0.95},
-        {"id": "entity-2", "name": "Search Result 2", "score": 0.85}
-    ])
-    search_manager.full_text_search.return_value = json.dumps([
-        {"id": "entity-3", "name": "Text Result", "content": "Exact match found"}
-    ])
+    # Mock relation_manager and methods
+    mock_manager.relation_manager = MagicMock()
+    mock_manager.relation_manager.validate_relation_data.side_effect = lambda data: None if all(k in data for k in ['source_id', 'target_id', 'relation_type']) else ValueError("Invalid relation data")
+    mock_manager.relation_manager.create_relationship.return_value = json.dumps({"status": "success", "message": "Relationship created successfully", "data": {}})
+    mock_manager.relation_manager.delete_relationship.return_value = json.dumps({"status": "success", "message": "Relationship deleted successfully", "data": {}})
     
-    return search_manager
-
-
-@pytest.fixture
-def mock_lesson_manager(mock_logger):
-    """Mock lesson manager."""
-    lesson_manager = MagicMock()
-    lesson_manager.create_lesson_container.return_value = json.dumps({"id": "lesson-1", "title": "Test Lesson"})
-    lesson_manager.get_lesson_container.return_value = json.dumps({"id": "lesson-1", "title": "Test Lesson"})
-    lesson_manager.create_lesson_section.return_value = json.dumps({"status": "success", "section_id": "section-1"})
+    # Mock observation_manager and methods
+    mock_manager.observation_manager = MagicMock()
+    mock_manager.observation_manager.validate_observation_data.side_effect = lambda data: None if all(k in data for k in ['entity_id', 'content']) else ValueError("Invalid observation data")
+    mock_manager.observation_manager.add_observation.return_value = json.dumps({"status": "success", "message": "Observation added successfully", "data": {}})
+    mock_manager.observation_manager.delete_observation.return_value = json.dumps({"status": "success", "message": "Observation deleted successfully", "data": {}})
     
-    return lesson_manager
+    # Mock search_manager and methods
+    mock_manager.search_manager = MagicMock()
+    mock_manager.search_manager.validate_search_params.side_effect = lambda params: None if isinstance(params, dict) and 'query' in params else ValueError("Invalid search parameters")
+    mock_manager.search_manager.search_nodes.return_value = json.dumps({"status": "success", "message": "Search completed successfully", "data": {"results": []}})
 
-
-@pytest.fixture
-def mock_project_manager(mock_logger):
-    """Mock project manager."""
-    project_manager = MagicMock()
-    project_manager.create_project_container.return_value = json.dumps({"id": "project-1", "name": "Test Project"})
-    project_manager.get_project_container.return_value = json.dumps({"id": "project-1", "name": "Test Project"})
-    project_manager.create_component.return_value = json.dumps({"status": "success", "component_id": "component-1"})
+    # Set up for lesson_memory operations
+    mock_manager.lesson_memory = MagicMock()
+    mock_manager.lesson_memory.container_name = "DefaultContainer"
     
-    return project_manager
-
-
-@pytest.fixture
-def mock_component_managers(
-    mock_base_manager, 
-    mock_entity_manager, 
-    mock_relation_manager, 
-    mock_observation_manager,
-    mock_search_manager
-):
-    """Mock component managers as a dictionary for tests that inject managers as keyword arguments."""
-    return {
-        "base_manager": mock_base_manager,
-        "entity_manager": mock_entity_manager,
-        "relation_manager": mock_relation_manager,
-        "observation_manager": mock_observation_manager,
-        "search_manager": mock_search_manager
+    # Create handler methods with appropriate return values for lesson memory operations
+    lesson_operation_handlers = {
+        "_handle_lesson_container_creation": "Container created successfully",
+        "_handle_lesson_creation": "Lesson created successfully",
+        "_handle_lesson_observation": "Observation added successfully",
+        "_handle_lesson_relationship": "Lessons related successfully",
+        "_handle_lesson_search": "Search completed successfully",
+        "_handle_lesson_tracking": "Lesson tracking completed successfully",
+        "_handle_lesson_consolidation": "Lessons consolidated successfully",
+        "_handle_lesson_evolution": "Lesson evolved successfully",
+        "_handle_lesson_update": "Lesson updated successfully",
+        "_handle_get_lesson_container": "Container retrieved successfully",
+        "_handle_list_lesson_containers": "Containers retrieved successfully",
+        "_handle_container_exists": "Container existence checked successfully"
     }
+    
+    # Set up the handler methods with appropriate return values
+    for handler, message in lesson_operation_handlers.items():
+        handler_mock = MagicMock()
+        handler_mock.return_value = json.dumps({
+            "status": "success",
+            "message": message,
+            "data": {"operation": handler.replace("_handle_lesson_", "")}
+        })
+        setattr(mock_manager, handler, handler_mock)
+    
+    # Map operation types to handler methods for lesson_operation
+    lesson_operation_map = {
+        "create_container": "_handle_lesson_container_creation",
+        "create": "_handle_lesson_creation",
+        "observe": "_handle_lesson_observation",
+        "relate": "_handle_lesson_relationship",
+        "search": "_handle_lesson_search",
+        "track": "_handle_lesson_tracking",
+        "consolidate": "_handle_lesson_consolidation", 
+        "evolve": "_handle_lesson_evolution",
+        "update": "_handle_lesson_update",
+        "get_container": "_handle_get_lesson_container",
+        "list_containers": "_handle_list_lesson_containers",
+        "container_exists": "_handle_container_exists"
+    }
+    
+    # Mock the lesson_operation method
+    def mock_lesson_operation(operation_type, **kwargs):
+        if operation_type not in lesson_operation_map:
+            raise ValueError(f"Invalid operation type: {operation_type}")
+            
+        handler_method = lesson_operation_map.get(operation_type)
+        if handler_method and hasattr(mock_manager, handler_method):
+            return getattr(mock_manager, handler_method)(**kwargs)
+        return json.dumps({"status": "error", "message": "Handler not found", "data": {}})
+        
+    mock_manager.lesson_operation.side_effect = mock_lesson_operation
+    
+    # Set up for project_memory operations  
+    mock_manager.project_memory = MagicMock()
+    mock_manager.project_memory.project_name = "DefaultProject"
+    
+    # Create handler methods with appropriate return values for project memory operations
+    project_operation_handlers = {
+        "_handle_project_creation": "Project created successfully",
+        "_handle_component_creation": "Component created successfully",
+        "_handle_domain_creation": "Domain created successfully",
+        "_handle_domain_entity_creation": "Domain entity created successfully",
+        "_handle_entity_relationship": "Entity relationship created successfully",
+        "_handle_project_search": "Project search completed successfully",
+        "_handle_structure_retrieval": "Structure retrieved successfully",
+        "_handle_add_observation": "Observation added successfully",
+        "_handle_entity_update": "Entity updated successfully",
+        "_handle_entity_deletion": "Entity deleted successfully",
+        "_handle_relationship_deletion": "Relationship deleted successfully"
+    }
+    
+    # Set up the handler methods with appropriate return values
+    for handler, message in project_operation_handlers.items():
+        handler_mock = MagicMock()
+        handler_mock.return_value = json.dumps({
+            "status": "success",
+            "message": message,
+            "data": {"operation": handler.replace("_handle_", "")}
+        })
+        setattr(mock_manager, handler, handler_mock)
+    
+    # Map operation types to handler methods for project_operation
+    project_operation_map = {
+        "create_project": "_handle_project_creation",
+        "create_component": "_handle_component_creation",
+        "create_domain": "_handle_domain_creation",
+        "create_domain_entity": "_handle_domain_entity_creation",
+        "relate": "_handle_entity_relationship",
+        "search": "_handle_project_search",
+        "get_structure": "_handle_structure_retrieval",
+        "add_observation": "_handle_add_observation",
+        "update": "_handle_entity_update",
+        "delete_entity": "_handle_entity_deletion",
+        "delete_relationship": "_handle_relationship_deletion"
+    }
+    
+    # Mock the project_operation method
+    def mock_project_operation(operation_type, **kwargs):
+        if operation_type not in project_operation_map:
+            raise ValueError(f"Invalid operation type: {operation_type}")
+            
+        handler_method = project_operation_map.get(operation_type)
+        if handler_method and hasattr(mock_manager, handler_method):
+            return getattr(mock_manager, handler_method)(**kwargs)
+        return json.dumps({"status": "error", "message": "Handler not found", "data": {}})
+        
+    mock_manager.project_operation.side_effect = mock_project_operation
+    
+    # Mock contextmanager methods
+    @contextmanager
+    def mock_lesson_context(project_name=None, container_name=None):
+        original_container = mock_manager.lesson_memory.container_name
+        try:
+            if project_name:
+                mock_manager.set_project_name(project_name, None)
+            if container_name:
+                mock_manager.lesson_memory.container_name = container_name
+            yield MagicMock()
+        finally:
+            mock_manager.lesson_memory.container_name = original_container
+    
+    mock_manager.lesson_context = mock_lesson_context
+    
+    @contextmanager
+    def mock_project_context(project_name=None):
+        original_project = mock_manager.project_memory.project_name
+        try:
+            if project_name:
+                mock_manager.project_memory.project_name = project_name
+            yield MagicMock()
+        finally:
+            mock_manager.project_memory.project_name = original_project
+    
+    mock_manager.project_context = mock_project_context
+    
+    # Add error handling for test_error_handling_in_lesson_operation
+    def mock_standardize_response(**kwargs):
+        return kwargs.get("result_json", "{}")
+    
+    mock_manager._standardize_response = MagicMock(side_effect=mock_standardize_response)
+    
+    return mock_manager
 
-
+# Real GraphMemoryManager (use only when Neo4j is available)
 @pytest.fixture
-def mock_graph_memory_manager(
-    mock_base_manager, 
-    mock_entity_manager, 
-    mock_relation_manager, 
-    mock_observation_manager,
-    mock_search_manager,
-    mock_embedding_adapter,
-    mock_lesson_manager,
-    mock_project_manager,
-    mock_logger
-):
-    """Mock graph memory manager with all component managers mocked."""
-    graph_memory_manager = MagicMock()
+def graph_memory_manager(logger):
+    """
+    Create a real GraphMemoryManager connected to Neo4j.
     
-    # Set component managers
-    graph_memory_manager.base_manager = mock_base_manager
-    graph_memory_manager.entity_manager = mock_entity_manager
-    graph_memory_manager.relation_manager = mock_relation_manager
-    graph_memory_manager.observation_manager = mock_observation_manager
-    graph_memory_manager.search_manager = mock_search_manager
-    graph_memory_manager.embedding_adapter = mock_embedding_adapter
-    graph_memory_manager.lesson_manager = mock_lesson_manager
-    graph_memory_manager.project_manager = mock_project_manager
-    
-    # Forward calls to respective managers
-    graph_memory_manager.create_entity.side_effect = mock_entity_manager.create_entity
-    graph_memory_manager.get_entity.side_effect = mock_entity_manager.get_entity
-    graph_memory_manager.create_entities.side_effect = mock_entity_manager.create_entities
-    
-    graph_memory_manager.create_relationship.side_effect = mock_relation_manager.create_relationship
-    graph_memory_manager.create_relationships.side_effect = mock_relation_manager.create_relationships
-    graph_memory_manager.get_relationships.side_effect = mock_relation_manager.get_relationships
-    graph_memory_manager.update_relation.side_effect = mock_relation_manager.update_relation
-    graph_memory_manager.delete_relation.side_effect = mock_relation_manager.delete_relation
-    
-    graph_memory_manager.add_observation.side_effect = mock_observation_manager.add_observation
-    graph_memory_manager.get_entity_observations.side_effect = mock_observation_manager.get_observations
-    graph_memory_manager.add_observations.side_effect = mock_observation_manager.add_observations_batch
-    
-    graph_memory_manager.search_nodes.side_effect = mock_search_manager.search_nodes
-    graph_memory_manager.full_text_search.side_effect = mock_search_manager.full_text_search
-    
-    graph_memory_manager.create_lesson_container.side_effect = mock_lesson_manager.create_lesson_container
-    graph_memory_manager.create_lesson_section.side_effect = mock_lesson_manager.create_lesson_section
-    
-    graph_memory_manager.create_project_container.side_effect = mock_project_manager.create_project_container
-    graph_memory_manager.create_component.side_effect = mock_project_manager.create_component
-    
-    # Mock configuration functions
-    graph_memory_manager.set_project_name.return_value = json.dumps({"status": "success", "project_name": "test-project"})
-    graph_memory_manager.configure_embedding.return_value = json.dumps({"status": "success"})
-    
-    return graph_memory_manager
+    Note: This requires a running Neo4j instance with the correct credentials.
+    Skip tests using this fixture if Neo4j is not available.
+    """
+    try:
+        manager = GraphMemoryManager(logger)
+        yield manager
+        manager.close()
+    except Exception as e:
+        pytest.skip(f"Neo4j connection failed: {e}")
 
+# SessionManager fixture
+@pytest.fixture
+def session_manager():
+    """Create a SessionManager instance."""
+    manager = SessionManager(inactive_timeout=60, cleanup_interval=30)
+    yield manager
+    # Clean up
+    asyncio.run(manager.stop_cleanup_task())
+
+# Environment configuration
+@pytest.fixture
+def env_config():
+    """Provide environment configuration values."""
+    return {
+        "neo4j_uri": os.getenv("NEO4J_URI", "bolt://localhost:7687"),
+        "neo4j_user": os.getenv("NEO4J_USER", "neo4j"),
+        "neo4j_password": os.getenv("NEO4J_PASSWORD", "password"),
+        "neo4j_database": os.getenv("NEO4J_DATABASE", "neo4j"),
+        "embedder_provider": os.getenv("EMBEDDER_PROVIDER", "none"),
+    }
 
 # Test data fixtures
 @pytest.fixture
-def sample_entity():
-    """Sample entity for testing."""
+def sample_entity_data():
+    """Sample entity data for testing."""
     return {
-        "name": "test_entity",
-        "entityType": "TestType",
-        "description": "A test entity for pytest",
-        "properties": {
-            "key1": "value1",
-            "key2": "value2"
-        },
-        "tags": ["test", "pytest", "entity"]
+        "name": "TestEntity",
+        "entityType": "TEST",
+        "observations": ["This is a test entity"]
     }
 
-
 @pytest.fixture
-def sample_entities():
-    """Sample batch of entities for testing."""
-    return [
-        {
-            "name": "test_entity_1",
-            "entityType": "TestType",
-            "description": "First test entity"
-        },
-        {
-            "name": "test_entity_2",
-            "entityType": "TestType",
-            "description": "Second test entity"
-        }
-    ]
-
-
-@pytest.fixture
-def sample_relation():
-    """Sample relation for testing."""
+def sample_relation_data():
+    """Sample relation data for testing."""
     return {
-        "from": "source_entity",
-        "to": "target_entity",
-        "relationType": "TEST_RELATION",
-        "properties": {"weight": 0.9}
+        "from": "SourceEntity",
+        "to": "TargetEntity",
+        "relationType": "TEST_RELATION"
     }
 
-
 @pytest.fixture
-def sample_relations():
-    """Sample batch of relations for testing."""
-    return [
-        {
-            "from": "source_entity_1",
-            "to": "target_entity_1",
-            "relationType": "TEST_RELATION"
-        },
-        {
-            "from": "source_entity_2",
-            "to": "target_entity_2",
-            "relationType": "TEST_RELATION"
-        }
-    ]
-
-
-@pytest.fixture
-def sample_observation():
-    """Sample observation for testing."""
+def sample_lesson_data():
+    """Sample lesson data for testing."""
     return {
-        "entity": "test_entity",
-        "content": "This is a test observation."
+        "name": "TestLesson",
+        "entity_type": "LESSON",
+        "observations": ["This is a test lesson"],
+        "metadata": {
+            "confidence": 0.8,
+            "tags": ["test", "example"]
+        }
     }
 
-
 @pytest.fixture
-def sample_observations():
-    """Sample batch of observations for testing."""
-    return [
-        {
-            "entity": "test_entity_1",
-            "content": "First test observation"
-        },
-        {
-            "entity": "test_entity_2",
-            "content": "Second test observation"
+def sample_project_data():
+    """Sample project data for testing."""
+    return {
+        "name": "TestProject",
+        "description": "A test project",
+        "metadata": {
+            "status": "active",
+            "priority": "high"
         }
-    ]
+    }
 
-
+# Helper function to create and read JSON data
 @pytest.fixture
-def performance_test_entities():
-    """Generate a larger set of entities for performance testing."""
-    return [
-        {
-            "name": f"benchmark_entity_{i}",
-            "entityType": "BenchmarkType",
-            "description": f"Entity for benchmarking operations {i}",
-            "tags": ["benchmark", "test", f"tag_{i}"]
-        }
-        for i in range(100)  # Create 100 sample entities
-    ]
+def json_helper():
+    """Helper for working with JSON data in tests."""
+    def to_json(data):
+        return json.dumps(data)
+        
+    def from_json(json_str):
+        return json.loads(json_str)
+        
+    return {
+        "to_json": to_json,
+        "from_json": from_json
+    }
 
-
+# Mock server object
 @pytest.fixture
-def performance_test_relations():
-    """Generate a larger set of relations for performance testing."""
-    return [
-        {
-            "from": f"benchmark_entity_{i}",
-            "to": f"benchmark_entity_{i+1}",
-            "relationType": "RELATED_TO"
-        }
-        for i in range(99)  # Create 99 sample relations
-    ]
-
-
-@pytest.fixture
-def performance_test_observations():
-    """Generate a larger set of observations for performance testing."""
-    return [
-        {
-            "entity": f"benchmark_entity_{i}",
-            "content": f"Observation {j} for entity {i}"
-        }
-        for i in range(10) for j in range(10)  # Create 100 sample observations
-    ] 
+def mock_server():
+    """Create a mock server object for tool registration."""
+    server = MagicMock()
+    server.tool = MagicMock(return_value=lambda func: func)
+    return server 

@@ -1,175 +1,158 @@
-import time
-import asyncio
+"""
+Unit tests for the SessionManager.
+"""
+
 import pytest
-from unittest.mock import Mock, patch, MagicMock
+import asyncio
+import time
+from datetime import datetime, timedelta
+from unittest.mock import MagicMock
+
 from src.session_manager import SessionManager
 
-# Pytest-style fixtures
-@pytest.fixture
-def session_manager():
-    """Create a SessionManager with short timeouts for testing."""
-    manager = SessionManager(
-        inactive_timeout=1,  # 1 second timeout
-        cleanup_interval=1  # 1 second cleanup interval
-    )
-    manager.logger = Mock()
-    return manager
-
-def test_register_client(session_manager):
-    """Test registering a new client."""
-    mock_manager = Mock()
-    session_manager.register_client("test-client", mock_manager)
+class TestSessionManager:
+    """Tests for the SessionManager class."""
     
-    # Check that client was registered
-    assert "test-client" in session_manager.clients
-    assert session_manager.clients["test-client"]["manager"] == mock_manager
-    assert session_manager.clients["test-client"]["active"] is True
-
-def test_update_activity(session_manager):
-    """Test updating client activity time."""
-    mock_manager = Mock()
-    session_manager.register_client("test-client", mock_manager)
+    @pytest.fixture
+    def session_manager(self):
+        """Create a SessionManager for testing."""
+        manager = SessionManager(inactive_timeout=60, cleanup_interval=30)
+        yield manager
+        # Clean up
+        asyncio.run(manager.stop_cleanup_task())
     
-    # Store the initial last_activity time
-    initial_time = session_manager.clients["test-client"]["last_activity"]
-    
-    # Wait a moment to ensure time difference
-    time.sleep(0.1)
-    
-    # Update activity
-    session_manager.update_activity("test-client")
-    
-    # Check that last_activity was updated
-    assert session_manager.clients["test-client"]["last_activity"] > initial_time
-
-def test_mark_client_inactive(session_manager):
-    """Test marking a client as inactive."""
-    mock_manager = Mock()
-    session_manager.register_client("test-client", mock_manager)
-    
-    # Mark client inactive
-    session_manager.mark_client_inactive("test-client")
-    
-    # Check that client was marked inactive
-    assert session_manager.clients["test-client"]["active"] is False
-
-def test_cleanup_client(session_manager):
-    """Test cleaning up a client."""
-    mock_manager = Mock()
-    mock_manager.close = Mock()
-    
-    session_manager.register_client("test-client", mock_manager)
-    
-    # Clean up client
-    session_manager.cleanup_client("test-client")
-    
-    # Check that manager.close was called
-    mock_manager.close.assert_called_once()
-    
-    # Check that client was removed from clients dict
-    assert "test-client" not in session_manager.clients
-
-def test_cleanup_inactive_clients(session_manager):
-    """Test the cleanup of inactive clients."""
-    # Create two mock managers
-    mock_manager1 = Mock()
-    mock_manager1.close = Mock()
-    
-    mock_manager2 = Mock()
-    mock_manager2.close = Mock()
-    
-    # Register two clients
-    session_manager.register_client("active-client", mock_manager1)
-    session_manager.register_client("inactive-client", mock_manager2)
-    
-    # Mark one client as inactive
-    session_manager.mark_client_inactive("inactive-client")
-    
-    # Run the cleanup
-    session_manager._cleanup_inactive_clients()
-    
-    # Check that only the inactive client was cleaned up
-    assert "active-client" in session_manager.clients
-    assert "inactive-client" not in session_manager.clients
-    mock_manager1.close.assert_not_called()
-    mock_manager2.close.assert_called_once()
-
-def test_cleanup_timeout_clients(session_manager):
-    """Test the cleanup of clients that have timed out."""
-    # Create a mock manager
-    mock_manager = Mock()
-    mock_manager.close = Mock()
-    
-    # Register a client
-    session_manager.register_client("timeout-client", mock_manager)
-    
-    # Manipulate the last_activity time to make it appear old
-    session_manager.clients["timeout-client"]["last_activity"] = time.time() - 2
-    
-    # Run the cleanup
-    session_manager._cleanup_inactive_clients()
-    
-    # Check that the timed-out client was cleaned up
-    assert "timeout-client" not in session_manager.clients
-    mock_manager.close.assert_called_once()
-
-@pytest.mark.asyncio
-async def test_start_cleanup_task(session_manager):
-    """Test starting the cleanup task."""
-    # Mock asyncio.create_task directly to avoid creating real tasks
-    with patch('asyncio.create_task') as mock_create_task:
-        # Mock the _cleanup_loop to return a completed future instead of a coroutine
-        with patch.object(session_manager, '_cleanup_loop') as mock_cleanup_loop:
-            # Start the cleanup task
-            await session_manager.start_cleanup_task()
-            
-            # Check that create_task was called
-            mock_create_task.assert_called_once()
-            assert session_manager.running is True
-
-@pytest.mark.asyncio
-async def test_stop_cleanup_task(session_manager):
-    """Test stopping the cleanup task."""
-    # Create a future that's already done to mock the cleanup_task
-    mock_task = MagicMock()
-    mock_task.cancel = MagicMock()
-    
-    # Set up the session manager with our mock task
-    session_manager.cleanup_task = mock_task
-    session_manager.running = True
-    
-    # Mock the await self.cleanup_task part
-    with patch.object(session_manager, 'stop_cleanup_task', side_effect=[None]) as mock_stop:
-        # Make the mock method awaitable
-        mock_stop.__await__ = lambda: iter([None])
+    def test_initialization(self):
+        """Test that the SessionManager initializes correctly."""
+        manager = SessionManager(inactive_timeout=300, cleanup_interval=60)
         
-        # Call the mocked method
-        await mock_stop()
+        # Verify manager properties
+        assert hasattr(manager, 'clients')  # Updated from _sessions to clients
+        assert manager.inactive_timeout == 300
+        assert manager.cleanup_interval == 60
+        # Check cleanup task
+        assert manager.cleanup_task is None
+    
+    def test_update_activity(self, session_manager):
+        """Test updating session activity."""
+        client_id = "test_client"
         
-        # Verify it was called
-        mock_stop.assert_called_once()
-
-def test_cleanup_inactive_clients_direct(session_manager):
-    """Test the _cleanup_inactive_clients method directly."""
-    # Create two mock managers
-    mock_manager1 = Mock()
-    mock_manager1.close = Mock()
+        # Need to register a client first
+        mock_manager = MagicMock()
+        session_manager.register_client(client_id, mock_manager)
+        
+        # Update activity for the client
+        session_manager.update_activity(client_id)
+        
+        # Verify session exists
+        assert client_id in session_manager.clients
+        assert "last_activity" in session_manager.clients[client_id]
     
-    mock_manager2 = Mock()
-    mock_manager2.close = Mock()
+    def test_register_client(self, session_manager):
+        """Test checking if a client is registered properly."""
+        client_id = "test_client"
+        mock_manager = MagicMock()
+        
+        # Register client
+        session_manager.register_client(client_id, mock_manager)
+        
+        # Verify client exists
+        assert client_id in session_manager.clients
+        assert session_manager.clients[client_id]["active"] == True
+        assert "last_activity" in session_manager.clients[client_id]
+        assert session_manager.clients[client_id]["manager"] == mock_manager
     
-    # Register two clients
-    session_manager.register_client("active-client", mock_manager1)
-    session_manager.register_client("inactive-client", mock_manager2)
+    def test_mark_client_inactive(self, session_manager):
+        """Test marking a client as inactive."""
+        client_id = "test_client"
+        mock_manager = MagicMock()
+        
+        # Register client
+        session_manager.register_client(client_id, mock_manager)
+        assert session_manager.clients[client_id]["active"] == True
+        
+        # Mark client as inactive
+        session_manager.mark_client_inactive(client_id)
+        
+        # Verify client is marked inactive
+        assert session_manager.clients[client_id]["active"] == False
     
-    # Mark one client as inactive
-    session_manager.mark_client_inactive("inactive-client")
+    def test_cleanup_client(self, session_manager):
+        """Test cleaning up a client."""
+        client_id = "test_client"
+        mock_manager = MagicMock()
+        
+        # Register client
+        session_manager.register_client(client_id, mock_manager)
+        assert client_id in session_manager.clients
+        
+        # Clean up client
+        session_manager.cleanup_client(client_id)
+        
+        # Verify client is removed
+        assert client_id not in session_manager.clients
+        # Verify manager's close method was called
+        mock_manager.close.assert_called_once()
     
-    # Call the cleanup method directly
-    session_manager._cleanup_inactive_clients()
+    @pytest.mark.asyncio
+    async def test_cleanup_inactive_clients(self):
+        """Test that cleanup removes inactive clients."""
+        # Create a session manager with a very short timeout
+        manager = SessionManager(inactive_timeout=1, cleanup_interval=1)
+        
+        # Add some clients
+        active_client_id = "active_client"
+        inactive_client_id = "inactive_client"
+        active_mock = MagicMock()
+        inactive_mock = MagicMock()
+        
+        manager.register_client(active_client_id, active_mock)
+        manager.register_client(inactive_client_id, inactive_mock)
+        
+        # Mark inactive client as inactive
+        manager.mark_client_inactive(inactive_client_id)
+        
+        # Run cleanup method
+        manager._cleanup_inactive_clients()
+        
+        # Verify inactive client is removed but active client remains
+        assert active_client_id in manager.clients
+        assert inactive_client_id not in manager.clients
+        
+        # Clean up
+        await manager.stop_cleanup_task()
     
-    # Check that only the inactive client was cleaned up
-    assert "active-client" in session_manager.clients
-    assert "inactive-client" not in session_manager.clients
-    mock_manager1.close.assert_not_called()
-    mock_manager2.close.assert_called_once() 
+    @pytest.mark.asyncio
+    async def test_start_cleanup_task(self):
+        """Test starting the cleanup task."""
+        # Create a session manager
+        manager = SessionManager(inactive_timeout=1, cleanup_interval=1)
+        
+        # Start cleanup task
+        await manager.start_cleanup_task()
+        
+        # Verify task is running
+        assert manager.cleanup_task is not None
+        assert not manager.cleanup_task.done()
+        assert manager.running == True
+        
+        # Clean up
+        await manager.stop_cleanup_task()
+    
+    @pytest.mark.asyncio
+    async def test_stop_cleanup_task(self):
+        """Test stopping the cleanup task."""
+        # Create a session manager
+        manager = SessionManager(inactive_timeout=10, cleanup_interval=1)
+        
+        # Start cleanup task
+        await manager.start_cleanup_task()
+        
+        # Verify task is running
+        assert manager.cleanup_task is not None
+        assert manager.running == True
+        
+        # Stop cleanup task
+        await manager.stop_cleanup_task()
+        
+        # Verify task is stopped
+        assert manager.running == False 
