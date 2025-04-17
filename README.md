@@ -1,3 +1,5 @@
+*** Currently under development ***
+
 # MCP Neo4j Graph Memory System
 
 A powerful, modular graph-based memory system for MCP (Managed Cognitive Processing) architecture using Neo4j for knowledge representation and retrieval.
@@ -8,7 +10,7 @@ The MCP Graph Memory System provides a comprehensive solution for storing, retri
 
 ## Features
 
-- **Modular Architecture**: 18 specialized components with clear interfaces and responsibilities
+- **Modular Architecture**: Specialized components with clear interfaces and responsibilities
 - **Comprehensive API**: 120+ methods for graph operations across multiple domains
 - **Specialized Memory Systems**:
   - **Core Graph Memory**: For general entity and relationship management
@@ -22,7 +24,7 @@ The MCP Graph Memory System provides a comprehensive solution for storing, retri
 - **Knowledge Evolution**: Track how knowledge evolves over time
 - **Memory Consolidation**: Identify and merge similar entities
 - **Knowledge Transfer**: Apply lessons and patterns across projects
-- **Performance Optimized**: 31.8% faster than the original implementation
+- **Standardized Response System**: Consistent Pydantic-based API responses
 
 ## Installation
 
@@ -76,30 +78,27 @@ entity = memory_manager.create_entity({
 })
 
 # Create a relationship
-relationship = memory_manager.create_relationship(
-    "example_concept",
-    "related_concept",
-    "RELATED_TO",
-    {"strength": 0.8}
-)
+relationship = memory_manager.create_relationship({
+    "from_entity": "example_concept",
+    "to_entity": "related_concept",
+    "relation_type": "RELATED_TO",
+    "properties": {"strength": 0.8}
+})
 
 # Add an observation
-observation = memory_manager.add_observation(
-    "example_concept",
-    "DESCRIPTION",
-    "A more detailed description of the example concept",
-    {"confidence": 0.9, "source": "manual_entry"}
-)
+observation = memory_manager.add_observation({
+    "entity_name": "example_concept",
+    "observation_type": "DESCRIPTION",
+    "content": "A more detailed description of the example concept",
+    "properties": {"confidence": 0.9, "source": "manual_entry"}
+})
 
 # Search for entities
-results = memory_manager.search_entities(
-    entity_type="Concept",
-    search_term="example"
-)
-
-# Perform semantic search
-similar_entities = memory_manager.semantic_search(
-    "concepts related to examples and demonstrations"
+results = memory_manager.search_nodes(
+    "example concept",
+    entity_types=["Concept"],
+    semantic=True,
+    limit=10
 )
 
 # Close connection when done
@@ -110,9 +109,9 @@ memory_manager.close()
 
 For detailed documentation, see:
 
-- [API Reference](docs/api_reference.md): Complete API documentation
-- [Integration Guide](docs/integration_guide.md): Guide for migrating from the original implementation
-- [Refactoring Plan](docs/refactoring_plan.md): Details of the refactoring process and progress
+- [API Reference](docs/api/api_reference.md): Complete API documentation
+- [Integration Guide](docs/integration_guide.md): Guide for integrating with your application
+- [Refactoring Plan](docs/refactoring_plan.md): Architecture and implementation details
 
 ## Architecture
 
@@ -140,9 +139,8 @@ The system is organized into three main layers:
      - `ProjectContainer`: Project organization
      - `DomainManager`: Domain handling
      - `ComponentManager`: Component operations
-     - `FeatureManager`: Feature management
-     - `DecisionManager`: Decision tracking
-     - `KnowledgeTransfer`: Cross-project knowledge
+     - `DependencyManager`: Dependency tracking
+     - `VersionManager`: Version management
      - `ProjectMemoryManager`: Unified facade
 
 3. **API Facade**
@@ -153,120 +151,164 @@ The system is organized into three main layers:
 ### Creating and Using a Lesson Memory System
 
 ```python
-from src.lesson_memory import LessonMemoryManager
+from src.graph_memory import GraphMemoryManager
 from src.logger import get_logger
 
-# Initialize lesson memory
-logger = get_logger("lesson_memory")
-lesson_memory = LessonMemoryManager(logger)
-lesson_memory.initialize()
+# Initialize memory system
+logger = get_logger("memory_system")
+memory_manager = GraphMemoryManager(logger)
+memory_manager.initialize()
 
-# Create a lesson container
-container = lesson_memory.create_lesson_container({
-    "name": "Programming Skills",
-    "description": "Essential programming skills and knowledge",
-    "owner": "system"
-})
+# Create a lesson container with a context manager
+with memory_manager.lesson_context() as lesson_ctx:
+    # Create a lesson with observations
+    lesson = lesson_ctx.create(
+        name="Function Composition",
+        lesson_type="Programming",
+        observations={
+            "what_was_learned": "How to compose functions for cleaner code",
+            "why_it_matters": "Improves code reusability and clarity",
+            "how_to_apply": "Use the output of one function as input to another"
+        },
+        metadata={
+            "confidence": 0.9, 
+            "language": "Python"
+        }
+    )
+    
+    # Add more structured observations
+    lesson_ctx.observe(
+        entity_name="Function Composition",
+        what_was_learned="Function composition can reduce intermediate variables",
+        how_to_apply="Use the pipe operator in languages that support it"
+    )
+    
+    # Create relationships
+    lesson_ctx.relate(
+        source_name="Function Composition",
+        target_name="Functional Programming",
+        relationship_type="PART_OF",
+        properties={"strength": 0.8}
+    )
+    
+    # Track knowledge evolution
+    lesson_ctx.track(
+        lesson_name="Function Composition",
+        context_entity="Code Refactoring Project"
+    )
 
-# Create a lesson with structured observations
-lesson = lesson_memory.create_lesson(
-    {
-        "name": "Function Composition",
-        "description": "Understanding how to compose functions",
-        "difficulty": "intermediate"
-    },
-    "Programming Skills",
-    {
-        "PREREQUISITES": "Basic function knowledge, return values",
-        "APPLICATION_CONTEXT": "Most useful in functional programming",
-        "EFFECTIVENESS": "Improves code reusability and clarity"
-    }
-)
-
-# Track knowledge evolution
-evolution = lesson_memory.track_knowledge_evolution("Function Composition")
-
-# Find similar lessons
-similar = lesson_memory.find_similar_lessons("Function Composition")
-
-# Close when done
-lesson_memory.close()
+# Close memory system when done
+memory_manager.close()
 ```
 
 ### Managing Project Memory
 
 ```python
-from src.project_memory import ProjectMemoryManager
+from src.graph_memory import GraphMemoryManager
 from src.logger import get_logger
 
-# Initialize project memory
-logger = get_logger("project_memory")
-project_memory = ProjectMemoryManager(logger)
-project_memory.initialize()
+# Initialize memory system
+logger = get_logger("memory_system")
+memory_manager = GraphMemoryManager(logger)
+memory_manager.initialize()
 
-# Create a project with domains and components
-project = project_memory.create_project(
-    {
-        "name": "Web Dashboard",
-        "description": "Interactive web dashboard for analytics",
-        "status": "active"
-    },
-    # Domains
-    [
-        {"name": "Frontend", "description": "UI components"},
-        {"name": "Backend", "description": "Data processing"}
-    ],
-    # Components
-    [
-        {"name": "ChartComponent", "domain": "Frontend"},
-        {"name": "DataService", "domain": "Backend"}
-    ]
-)
+# Create a project with domains and components using a context manager
+with memory_manager.project_context(project_name="Web Dashboard") as project_ctx:
+    # Create the project
+    project = project_ctx.create_project(
+        name="Web Dashboard",
+        description="Interactive web dashboard for analytics",
+        status="active"
+    )
+    
+    # Create domains
+    project_ctx.create_domain(
+        name="Frontend",
+        description="UI components and user interaction"
+    )
+    
+    project_ctx.create_domain(
+        name="Backend",
+        description="Data processing and API services"
+    )
+    
+    # Create components
+    project_ctx.create_component(
+        name="ChartComponent",
+        component_type="UI",
+        domain_name="Frontend",
+        description="Interactive data visualization component"
+    )
+    
+    project_ctx.create_component(
+        name="DataService",
+        component_type="API",
+        domain_name="Backend",
+        description="REST API for chart data retrieval"
+    )
+    
+    # Create relationships between components
+    project_ctx.relate(
+        source_name="ChartComponent",
+        target_name="DataService",
+        relation_type="DEPENDS_ON",
+        properties={"data_format": "JSON"}
+    )
+    
+    # Add observations
+    project_ctx.add_observation(
+        entity_name="ChartComponent",
+        content="Initial implementation should support bar and line charts",
+        observation_type="REQUIREMENT"
+    )
+    
+    # Get project structure
+    structure = project_ctx.get_structure()
 
-# Record a design decision
-decision = project_memory.record_decision(
-    {
-        "title": "Chart Library Selection",
-        "description": "Will use D3.js for interactive charts",
-        "rationale": "Best balance of flexibility and performance",
-        "alternatives_considered": "ChartJS, Highcharts",
-        "decision_maker": "Tech Lead"
-    },
-    "Web Dashboard",
-    ["ChartComponent"]
-)
-
-# Get project knowledge graph
-knowledge_graph = project_memory.get_project_knowledge_graph("Web Dashboard")
-
-# Close when done
-project_memory.close()
+# Close memory system when done
+memory_manager.close()
 ```
+
+## Standardized Response System
+
+The system uses a comprehensive standardized response system that ensures consistent API responses:
+
+1. **Pydantic-Based Response Models**
+   - All responses use Pydantic models for validation and serialization
+   - Consistent structure for both success and error responses
+
+2. **Standardized Response Format**
+   - Success responses follow this structure:
+     ```json
+     {
+       "status": "success",
+       "message": "Operation completed successfully",
+       "timestamp": "2023-06-01T12:34:56.789Z",
+       "data": { ... }
+     }
+     ```
+   - Error responses provide structured information:
+     ```json
+     {
+       "status": "error",
+       "timestamp": "2023-06-01T12:34:56.789Z",
+       "error": {
+         "code": "entity_not_found",
+         "message": "Entity 'example' not found",
+         "details": { ... }
+       }
+     }
+     ```
 
 ## Performance Considerations
 
-For optimal performance, consider the following:
+For optimal performance:
 
-1. **Use Batch Operations**: Prefer batch creation methods for multiple entities
+1. **Use Context Managers**: Prefer context managers for batch operations
 2. **Connection Management**: Initialize managers once and reuse
 3. **Query Filtering**: Use specific filters to reduce result set size
 4. **Embedding Caching**: Cache embeddings for frequently used text
 5. **Pagination**: Use paginated search for large result sets
-6. **Strategic Indexing**: Create appropriate indexes for frequently queried properties
-
-## Testing
-
-The system includes extensive testing:
-
-```bash
-# Run all tests
-python -m unittest discover tests
-
-# Run specific test categories
-python -m unittest discover tests/graph_memory
-python -m unittest discover tests/integration
-python -m unittest discover tests/benchmark
-```
 
 ## License
 
@@ -279,3 +321,100 @@ MIT License - See LICENSE file for details.
 3. Commit your changes (`git commit -m 'Add some amazing feature'`)
 4. Push to the branch (`git push origin feature/amazing-feature`)
 5. Open a Pull Request
+
+# GraphMemoryManager Modernization
+
+## Standardized Response System
+
+The GraphMemoryManager has been modernized with a comprehensive standardized response system that ensures consistent API responses across all operations. This modernization provides several key benefits:
+
+### Key Improvements
+
+1. **Pydantic-Based Response Models**
+   - All responses now use Pydantic models for validation and serialization
+   - Consistent structure for both success and error responses
+   - Proper datetime handling and JSON serialization
+
+2. **Standardized Error Handling**
+   - Detailed error information with error codes, messages, and additional context
+   - Improved error detection and classification
+   - Context-aware error details for debugging
+
+3. **Consistent Response Format**
+   - All API responses follow the same structure:
+     ```json
+     {
+       "status": "success",
+       "message": "Operation completed successfully",
+       "timestamp": "2023-06-01T12:34:56.789Z",
+       "data": { ... }
+     }
+     ```
+   - Error responses provide structured error information:
+     ```json
+     {
+       "status": "error",
+       "timestamp": "2023-06-01T12:34:56.789Z",
+       "error": {
+         "code": "entity_not_found",
+         "message": "Entity 'example' not found",
+         "details": { ... }
+       }
+     }
+     ```
+
+4. **Centralized Response Processing**
+   - The `_standardize_response` method handles response normalization across all operations
+   - Improved JSON parsing with proper error handling
+   - Support for both string and dictionary inputs
+
+## Specialized Operation Handlers
+
+We've modernized the specialized operation handlers for better input validation, error handling, and standardized responses:
+
+1. **Lesson Memory Operations**
+   - Enhanced `lesson_operation` method with proper error handling and validation
+   - Updated lesson container creation with pre-condition checks
+   - Added detailed validation for lesson creation operations
+   - Improved error context for debugging operational issues
+
+2. **Project Memory Operations**
+   - Modernized `project_operation` method with operation-specific validation
+   - Enhanced project creation flow with proper error categorization
+   - Added input validation for all operation types
+   - Standardized handler method signatures and return formats
+
+3. **Error Prevention and Safety**
+   - Added validation checks before operations to prevent runtime errors
+   - Included detailed context in error responses for easier debugging
+   - Pre-initialized variables used in error handling for robustness
+   - Added type hints and improved parameter handling
+
+### Usage Example
+
+```python
+from src.graph_memory import GraphMemoryManager
+
+manager = GraphMemoryManager()
+manager.initialize()
+
+# Creating an entity with standardized response
+response = manager.create_entity({
+    "name": "Authentication Service",
+    "type": "Service",
+    "description": "Handles user authentication"
+})
+
+# Response will be formatted consistently
+```
+
+### Response Models
+
+The system uses these core response models:
+
+- `BaseResponse`: Base model with status and timestamp
+- `SuccessResponse`: For successful operations, includes data and message
+- `ErrorDetail`: Detailed error information with code, message, and details
+- `ErrorResponse`: For error responses, includes error details
+
+These models ensure consistent API response structure across all operations of the GraphMemoryManager.

@@ -1,0 +1,143 @@
+---
+description: Use when managing knowledge evolution in the memory system to ensure continuous improvement and refinement of stored knowledge
+globs: 
+alwaysApply: false
+---
+
+# Memory System Maintenance
+
+## Context
+
+- When evaluating confidence in stored knowledge
+- When similar or overlapping lessons need consolidation
+- When lessons become outdated or superseded by new understanding
+- When tracking the evolution of knowledge over time
+- When determining which memories to prioritize or archive
+
+## Critical Rules
+
+- Assign confidence scores based on evidence strength and validation history
+- Use 0.5-0.7 for initial observations with limited validation
+- Use 0.7-0.9 for well-tested knowledge with multiple validations
+- Reserve 0.9+ for principles with extensive evidence and consistent application
+- Consolidate similar lessons using the SUPERSEDES relationship rather than duplicating
+- When new understanding contradicts old lessons, explicitly create CONTRADICTS relationships
+- Version lessons using the BUILDS_ON relationship when understanding deepens
+- Periodically review low-confidence lessons for validation or archiving
+- Track confidence evolution over time as knowledge matures
+- Add metadata about knowledge age and relevance timeframes when time-sensitive
+- When consolidating lessons, preserve the valuable unique insights from each source
+- Archive rather than delete outdated knowledge, maintaining historical context
+
+## Examples
+
+<example>
+// Assigning appropriate confidence scores
+User: "I've noticed that using React.memo for frequently-rendered components with stable props improves performance."
+
+AI: [INTERNAL THOUGHT: This is a valid observation but with limited evidence so far]
+
+lesson_memory_tool({
+  "operation_type": "create",
+  "name": "ReactMemoPerformance",
+  "lesson_type": "Observation",
+  "metadata": {
+    "confidence": 0.65,  // Initial observation with limited evidence
+    "tags": ["react", "performance", "memoization"]
+  }
+})
+
+// Later, after validation in multiple contexts
+User: "We've implemented React.memo across our application and verified 30% performance improvement in three different projects."
+
+AI: [INTERNAL THOUGHT: This validates and strengthens our previous observation]
+
+lesson_memory_tool({
+  "operation_type": "update",
+  "entity_name": "ReactMemoPerformance",
+  "updates": {
+    "metadata": {
+      "confidence": 0.85,  // Increased due to multiple validations
+      "validation_count": 3,
+      "last_validated": new Date().toISOString()
+    }
+  }
+})
+
+// Tracking superseded knowledge
+User: "I've discovered that the Context API is more efficient than Redux for most medium-sized applications."
+
+// Find existing related lessons
+const existingLessons = JSON.parse(lesson_memory_tool({
+  "operation_type": "search",
+  "query": "React state management Redux vs Context",
+  "limit": 5
+}));
+
+if (existingLessons.data?.lessons?.find(l => l.name === "ReduxForAllStateManagement")) {
+  // Create new lesson with updated understanding
+  lesson_memory_tool({
+    "operation_type": "create",
+    "name": "ContextAPIEfficiency",
+    "lesson_type": "Principle",
+    "metadata": {
+      "confidence": 0.75,
+      "tags": ["react", "state-management", "context-api", "redux"]
+    }
+  });
+  
+  // Mark the relationship to show evolution of knowledge
+  lesson_memory_tool({
+    "operation_type": "relate",
+    "source_name": "ContextAPIEfficiency",
+    "target_name": "ReduxForAllStateManagement",
+    "relationship_type": "SUPERSEDES",
+    "properties": {
+      "reason": "More nuanced understanding based on application size",
+      "date": new Date().toISOString()
+    }
+  });
+}
+</example>
+
+<example type="invalid">
+// Assigning arbitrarily high confidence without evidence
+User: "I think functional components are better than class components."
+
+AI: [INTERNAL THOUGHT: This is just a preference with limited reasoning]
+
+lesson_memory_tool({
+  "operation_type": "create",
+  "name": "FunctionalComponentSuperiority",
+  "lesson_type": "Principle",
+  "metadata": {
+    "confidence": 0.98  // Incorrectly high confidence for a subjective observation
+  }
+})
+// Should use more moderate confidence (0.6-0.7) for initial subjective observations
+
+// Creating duplicate lessons instead of consolidating
+// First lesson
+lesson_memory_tool({
+  "operation_type": "create",
+  "name": "ReactHooksPerformance",
+  "lesson_type": "Observation",
+  "what_was_learned": "Hooks can lead to performance issues if not memoized"
+})
+
+// Later, similar lesson without connecting to existing knowledge
+lesson_memory_tool({
+  "operation_type": "create",
+  "name": "HooksAndPerformance",
+  "lesson_type": "Observation",
+  "what_was_learned": "React hooks need useMemo and useCallback for performance"
+})
+// Should have related or consolidated these lessons
+
+// Deleting outdated knowledge
+lesson_memory_tool({
+  "operation_type": "delete",
+  "entity_name": "OldReactPatterns"
+})
+// Should have marked as superseded instead of deleting
+</example> 

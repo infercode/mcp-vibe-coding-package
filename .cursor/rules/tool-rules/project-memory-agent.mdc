@@ -1,0 +1,185 @@
+---
+description: Use when working with the project memory system to ensure proper organization, relationships, and retrieval of structured project knowledge
+globs: 
+alwaysApply: false
+---
+
+# Project Memory System Usage Guidelines
+
+## Context
+
+- When managing structured project knowledge using the project memory tools
+- When organizing hierarchical information about project components and domains
+- When establishing relationships between project entities
+- When searching or retrieving project structures
+- When tracking design decisions and technical implementations
+- When connecting project knowledge with lesson memory insights
+
+## Critical Rules
+
+- Begin by exploring or creating a project container before adding components or entities
+- Organize knowledge hierarchically: projects contain components, components belong to domains
+- Create explicit relationships between dependent components using appropriate relationship types
+- Document design decisions with rationales to preserve context for future reference
+- Assign meaningful metadata and tags to all project entities for improved searchability
+- Track component implementation status and version information
+- Create domain entities to represent decisions, requirements, and architectural patterns
+- Use observations to document changes, issues, and implementation notes
+- Link project entities to relevant lessons to apply experiential knowledge
+- Verify operation success and handle errors with appropriate recovery strategies
+- Use project_memory_context for batch operations within the same project
+- Search for existing entities before creating potentially duplicate components
+- Use specific, descriptive names for components and entities that reflect their purpose
+- Maintain consistent naming conventions across related project entities
+- Document dependencies between components to understand system architecture
+
+## Examples
+
+<example>
+// Start with project creation or retrieval
+project_memory_tool({
+  "operation_type": "create_project",
+  "name": "E-commerce Platform",
+  "description": "Online shopping platform with microservices architecture",
+  "metadata": {
+    "version": "1.0",
+    "status": "planning",
+    "tags": ["microservices", "e-commerce", "web"]
+  }
+})
+
+// Create a project context for batch operations
+const context = project_memory_context({
+  "project_name": "E-commerce Platform"
+})
+
+// Create components within domains
+project_memory_tool({
+  "operation_type": "create_component",
+  "name": "Authentication Service",
+  "component_type": "MICROSERVICE",
+  "project_id": "E-commerce Platform",
+  "domain_name": "Security",
+  "description": "Handles user authentication and authorization",
+  "metadata": {
+    "status": "planned",
+    "priority": "high",
+    "technologies": ["nodejs", "jwt", "oauth2"]
+  }
+})
+
+project_memory_tool({
+  "operation_type": "create_component",
+  "name": "Product Catalog",
+  "component_type": "MICROSERVICE",
+  "project_id": "E-commerce Platform",
+  "domain_name": "Core",
+  "description": "Manages product information and categories"
+})
+
+// Create domain entities for design decisions
+project_memory_tool({
+  "operation_type": "create_domain_entity",
+  "name": "JWT Authentication Decision",
+  "entity_type": "DECISION",
+  "project_id": "E-commerce Platform",
+  "domain_name": "Security",
+  "description": "Decision to use JWT tokens for authentication",
+  "properties": {
+    "alternatives_considered": ["session cookies", "api keys"],
+    "decision_factors": ["statelessness", "scalability", "security"],
+    "decided_by": "Architecture Team",
+    "date": "2023-06-15"
+  }
+})
+
+// Establish relationships between components
+project_memory_tool({
+  "operation_type": "relate_entities",
+  "source_name": "Authentication Service",
+  "target_name": "User Database",
+  "relationship_type": "DEPENDS_ON",
+  "project_id": "E-commerce Platform",
+  "properties": {
+    "interaction_type": "reads/writes",
+    "criticality": "high"
+  }
+})
+
+// Add observations to components
+project_memory_tool({
+  "operation_type": "add_observation",
+  "entity_name": "Authentication Service",
+  "content": "Initial proof of concept revealed potential rate limiting issues that need to be addressed",
+  "project_id": "E-commerce Platform",
+  "observation_type": "ISSUE"
+})
+
+// Handle errors properly
+const result = project_memory_tool({
+  "operation_type": "create_component",
+  "name": "Payment Gateway",
+  "component_type": "INTEGRATION",
+  "project_id": "E-commerce Platform"
+})
+
+// Parse and check result
+const resultObj = JSON.parse(result);
+if (resultObj.status === "error") {
+  // Handle error appropriately
+  console.log(`Error: ${resultObj.error}`);
+  
+  // Try searching for existing component
+  project_memory_tool({
+    "operation_type": "search",
+    "query": "Payment Gateway",
+    "project_id": "E-commerce Platform",
+    "entity_types": ["component"]
+  })
+}
+
+// Retrieve project structure for understanding
+project_memory_tool({
+  "operation_type": "get_structure",
+  "project_id": "E-commerce Platform",
+  "include_components": true,
+  "include_domains": true,
+  "include_relationships": true
+})
+</example>
+
+<example type="invalid">
+// Creating components without a project container
+project_memory_tool({
+  "operation_type": "create_component",
+  "name": "UserService",
+  "component_type": "SERVICE"
+  // Missing project_id
+})
+
+// Using inconsistent naming conventions
+project_memory_tool({
+  "operation_type": "create_component",
+  "name": "auth-svc", // Inconsistent with other components like "Product Catalog"
+  "component_type": "service",
+  "project_id": "E-commerce Platform"
+})
+
+// Creating duplicate components without checking
+// Should search before creating potentially duplicate entities
+
+// Creating entities without proper hierarchical structure
+// Missing domain organization
+
+// Not documenting relationships between dependent components
+// Should use relate_entities operation to establish dependencies
+
+// Creating vague components without clear purpose description
+project_memory_tool({
+  "operation_type": "create_component",
+  "name": "Utils",
+  "component_type": "LIBRARY",
+  "project_id": "E-commerce Platform",
+  "description": "Various utilities" // Too vague, not descriptive enough
+})
+</example> 

@@ -21,7 +21,10 @@ class LessonContainer:
     """
     Container for lesson entities and relationships.
     Manages the lifecycle and organization of lesson knowledge.
+    There should only be one lesson container in the system, always named 'Lessons'.
     """
+    
+    CONTAINER_NAME = "Lessons"  # Constant for the single container name
     
     def __init__(self, base_manager: BaseManager):
         """
@@ -33,13 +36,13 @@ class LessonContainer:
         self.base_manager = base_manager
         self.logger = logging.getLogger(__name__)
     
-    def create_container(self, name: str, description: Optional[str] = None,
+    def create_container(self, description: Optional[str] = None,
                       metadata: Optional[Dict[str, Any]] = None) -> str:
         """
-        Create a new lesson container in the knowledge graph.
+        Create the lesson container in the knowledge graph if it doesn't exist.
+        Only one lesson container named 'Lessons' should exist in the system.
         
         Args:
-            name: Unique name for the container
             description: Optional description
             metadata: Optional metadata dictionary
         
@@ -49,9 +52,24 @@ class LessonContainer:
         try:
             self.base_manager.ensure_initialized()
             
+            # Check if a container already exists
+            check_query = """
+            MATCH (c:LessonContainer)
+            RETURN count(c) as container_count
+            """
+            
+            count_records = self.base_manager.safe_execute_read_query(check_query, {})
+            
+            if count_records and len(count_records) > 0:
+                container_count = count_records[0].get("container_count", 0)
+                if container_count > 0:
+                    error_msg = f"A lesson container already exists. Only one lesson container named '{self.CONTAINER_NAME}' is allowed in the system."
+                    self.logger.error(error_msg)
+                    return dict_to_json({"error": error_msg})
+            
             # Build container properties
             container_props = {
-                "name": name,
+                "name": self.CONTAINER_NAME,
                 "description": description or ""
             }
             
@@ -81,10 +99,10 @@ class LessonContainer:
                     
                     # Convert Neo4j DateTime objects to ISO format strings
                     for key, value in container_dict.items():
-                        if hasattr(value, 'iso_format'):  # Check if it's a datetime-like object
+                        if hasattr(value, 'iso_format'):
                             container_dict[key] = value.iso_format()
                     
-                    self.logger.info(f"Created lesson container: {name}")
+                    self.logger.info(f"Created lesson container: {self.CONTAINER_NAME}")
                     return dict_to_json({
                         "container": container_dict
                     })
@@ -103,50 +121,92 @@ class LessonContainer:
             self.logger.error(error_msg)
             return dict_to_json({"error": error_msg})
     
-    def get_container(self, container_name: str) -> str:
+    def get_container(self) -> str:
         """
-        Get a lesson container by name.
+        Get the lesson container. There should only be one lesson container
+        in the Neo4j instance named 'Lessons'.
         
-        Args:
-            container_name: Name of the container
-            
         Returns:
             JSON string with the container data
         """
         try:
+            self.logger.info("Starting get_container method")
             self.base_manager.ensure_initialized()
+            
+            # First check if there are multiple containers
+            check_query = """
+            MATCH (c:LessonContainer)
+            RETURN count(c) as container_count
+            """
+            
+            self.logger.info("Executing container count query")
+            count_records = self.base_manager.safe_execute_read_query(check_query, {})
+            
+            self.logger.info(f"Container count query results: {count_records}")
+            
+            if count_records and len(count_records) > 0:
+                container_count = count_records[0].get("container_count", 0)
+                self.logger.info(f"Found {container_count} lesson containers")
+                
+                if container_count > 1:
+                    error_msg = "Multiple lesson containers found. There should only be one lesson container in the system."
+                    self.logger.error(error_msg)
+                    return dict_to_json({"error": error_msg})
+                elif container_count == 0:
+                    self.logger.info("No lesson containers found in the database")
+                    return dict_to_json({
+                        "status": "error",
+                        "error": f"Lesson container '{self.CONTAINER_NAME}' not found",
+                        "code": "container_not_found"
+                    })
             
             # Query to get container
             query = """
-            MATCH (c:LessonContainer)
-            WHERE c.name = $name OR c.id = $name
+            MATCH (c:LessonContainer {name: $name})
             RETURN c
             """
             
+            self.logger.info(f"Executing container retrieval query for '{self.CONTAINER_NAME}'")
             # Execute query
             records = self.base_manager.safe_execute_read_query(
                 query, 
-                {"name": container_name}
+                {"name": self.CONTAINER_NAME}
             )
+            
+            self.logger.info(f"Container retrieval results: {records}")
             
             if records and len(records) > 0:
                 container_node = records[0].get("c")
                 if container_node:
+                    self.logger.info(f"Found container node: {container_node}")
                     # Convert node to dictionary
                     container_dict = dict(container_node.items())
                     
                     # Convert Neo4j DateTime objects to ISO format strings
                     for key, value in container_dict.items():
-                        if hasattr(value, 'iso_format'):  # Check if it's a datetime-like object
+                        if hasattr(value, 'iso_format'):
                             container_dict[key] = value.iso_format()
                     
-                    return dict_to_json({
+                    self.logger.info(f"Processed container data: {container_dict}")
+                    
+                    # Create a success response with container data
+                    response = {
+                        "status": "success",
+                        "message": f"Found container '{self.CONTAINER_NAME}'",
                         "container": container_dict
-                    })
+                    }
+                    return dict_to_json(response)
+                else:
+                    self.logger.warning(f"Record returned but no 'c' field: {records}")
+            else:
+                self.logger.warning(f"No records returned for container query")
             
             # Container not found
+            self.logger.warning(f"Container '{self.CONTAINER_NAME}' not found")
             return dict_to_json({
-                "error": f"Lesson container '{container_name}' not found"
+                "status": "error",
+                "error": f"Lesson container '{self.CONTAINER_NAME}' not found",
+                "code": "container_not_found"
             })
             
         except Exception as e:
@@ -154,12 +214,11 @@ class LessonContainer:
             self.logger.error(error_msg)
             return dict_to_json({"error": error_msg})
     
-    def update_container(self, container_name: str, updates: Dict[str, Any]) -> str:
+    def update_container(self, updates: Dict[str, Any]) -> str:
         """
-        Update a lesson container.
+        Update the lesson container.
         
         Args:
-            container_name: Name of the container to update
             updates: Dictionary of property updates
             
         Returns:
@@ -187,17 +246,17 @@ class LessonContainer:
                 return model_to_json(error_response)
             
             # Check if container exists
-            container = self._get_container_by_name(container_name)
+            container = self._get_container()
             if not container:
                 error_response = create_lesson_error_response(
-                    message=f"Lesson container '{container_name}' not found",
+                    message=f"Lesson container '{self.CONTAINER_NAME}' not found",
                     code="container_not_found"
                 )
                 return model_to_json(error_response)
             
             # Build update query
             set_parts = []
-            params = {"name": container_name}
+            params = {"name": self.CONTAINER_NAME}
             
             for key, value in valid_updates.items():
                 # Skip core properties that shouldn't be updated
@@ -221,7 +280,7 @@ class LessonContainer:
                 # No valid updates to apply
                 response = create_container_response(
                     container_data=container,
-                    message=f"No updates provided for container '{container_name}'"
+                    message=f"No updates provided for container '{self.CONTAINER_NAME}'"
                 )
                 return model_to_json(response)
             
@@ -242,16 +301,16 @@ class LessonContainer:
                 updated_container = update_records[0].get("c")
                 if updated_container:
                     container_dict = dict(updated_container.items())
-                    self.logger.info(f"Updated lesson container: {container_name}")
+                    self.logger.info(f"Updated lesson container: {self.CONTAINER_NAME}")
                     
                     response = create_container_response(
                         container_data=container_dict,
-                        message=f"Lesson container '{container_name}' updated successfully"
+                        message=f"Lesson container '{self.CONTAINER_NAME}' updated successfully"
                     )
                     return model_to_json(response)
             
             error_response = create_lesson_error_response(
-                message=f"Failed to update lesson container '{container_name}'",
+                message=f"Failed to update lesson container '{self.CONTAINER_NAME}'",
                 code="container_update_error"
             )
             return model_to_json(error_response)
@@ -265,12 +324,11 @@ class LessonContainer:
             )
             return model_to_json(error_response)
     
-    def delete_container(self, container_name: str, delete_entities: bool = False) -> str:
+    def delete_container(self, delete_entities: bool = False) -> str:
         """
-        Delete a lesson container.
+        Delete the lesson container.
         
         Args:
-            container_name: Name of the container to delete
             delete_entities: Whether to delete entities in the container
             
         Returns:
@@ -280,10 +338,10 @@ class LessonContainer:
             self.base_manager.ensure_initialized()
             
             # Check if container exists
-            container = self._get_container_by_name(container_name)
+            container = self._get_container()
             if not container:
                 error_response = create_lesson_error_response(
-                    message=f"Lesson container '{container_name}' not found",
+                    message=f"Lesson container '{self.CONTAINER_NAME}' not found",
                     code="container_not_found"
                 )
                 return model_to_json(error_response)
@@ -297,7 +355,7 @@ class LessonContainer:
             # Use safe_execute_read_query for validation (read-only operation)
             count_records = self.base_manager.safe_execute_read_query(
                 entity_count_query,
-                {"name": container_name}
+                {"name": self.CONTAINER_NAME}
             )
             
             entity_count = 0
@@ -307,7 +365,7 @@ class LessonContainer:
             # If container has entities and delete_entities is False, prevent deletion
             if entity_count > 0 and not delete_entities:
                 error_response = create_lesson_error_response(
-                    message=f"Cannot delete container '{container_name}' with {entity_count} entities. Set delete_entities=True to force deletion.",
+                    message=f"Cannot delete container '{self.CONTAINER_NAME}' with {entity_count} entities. Set delete_entities=True to force deletion.",
                     code="container_not_empty",
                     details={"entity_count": entity_count}
                 )
@@ -324,7 +382,7 @@ class LessonContainer:
                 # Use safe_execute_write_query for validation (write operation)
                 self.base_manager.safe_execute_write_query(
                     delete_observations_query,
-                    {"name": container_name}
+                    {"name": self.CONTAINER_NAME}
                 )
                 
                 # Delete all relationships between entities in the container
@@ -338,7 +396,7 @@ class LessonContainer:
                 # Use safe_execute_write_query for validation (write operation)
                 self.base_manager.safe_execute_write_query(
                     delete_relationships_query,
-                    {"name": container_name}
+                    {"name": self.CONTAINER_NAME}
                 )
                 
                 # Delete all container-entity relationships
@@ -350,7 +408,7 @@ class LessonContainer:
                 # Use safe_execute_write_query for validation (write operation)
                 self.base_manager.safe_execute_write_query(
                     delete_container_relations_query,
-                    {"name": container_name}
+                    {"name": self.CONTAINER_NAME}
                 )
                 
                 # Delete all entities
@@ -362,7 +420,7 @@ class LessonContainer:
                 # Use safe_execute_write_query for validation (write operation)
                 self.base_manager.safe_execute_write_query(
                     delete_entities_query,
-                    {"name": container_name}
+                    {"name": self.CONTAINER_NAME}
                 )
             
             # Delete the container
@@ -374,13 +432,13 @@ class LessonContainer:
             # Use safe_execute_write_query for validation (write operation)
             self.base_manager.safe_execute_write_query(
                 delete_container_query,
-                {"name": container_name}
+                {"name": self.CONTAINER_NAME}
             )
             
-            self.logger.info(f"Deleted lesson container: {container_name}")
+            self.logger.info(f"Deleted lesson container: {self.CONTAINER_NAME}")
             
             success_response = create_success_response(
-                message=f"Lesson container '{container_name}' deleted successfully",
+                message=f"Lesson container '{self.CONTAINER_NAME}' deleted successfully",
                 data={"deleted_entities": entity_count if delete_entities else 0}
             )
             return model_to_json(success_response)
@@ -486,13 +544,10 @@ class LessonContainer:
             )
             return model_to_json(error_response)
     
-    def _get_container_by_name(self, container_name: str) -> Optional[Dict[str, Any]]:
+    def _get_container(self) -> Optional[Dict[str, Any]]:
         """
-        Internal method to get a container by name.
+        Internal method to get the lesson container.
         
-        Args:
-            container_name: Name of the container
-            
         Returns:
             Container dict or None if not found
         """
@@ -505,7 +560,7 @@ class LessonContainer:
             # Use safe_execute_read_query for validation (read-only operation)
             records = self.base_manager.safe_execute_read_query(
                 query,
-                {"name": container_name}
+                {"name": self.CONTAINER_NAME}
             )
             
             if records and len(records) > 0:
@@ -526,5 +581,5 @@ class LessonContainer:
             return None
             
         except Exception as e:
-            self.logger.error(f"Error in _get_container_by_name: {str(e)}")
+            self.logger.error(f"Error in _get_container: {str(e)}")
             return None 

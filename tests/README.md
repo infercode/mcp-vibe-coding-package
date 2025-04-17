@@ -1,86 +1,97 @@
-# Graph Memory Tests
+# Testing the Neo4j Graph Memory System
 
-This directory contains tests for the Graph Memory system. The tests are organized by module and functionality.
+This directory contains tests for the Neo4j Graph Memory System. The tests are organized into unit tests and integration tests.
+
+## Prerequisites
+
+- Python 3.11+
+- pytest
+- pytest-asyncio
+- Running Neo4j database (for integration tests)
 
 ## Test Structure
 
-- `conftest.py` - Contains common fixtures used across tests
-- `/graph_memory/` - Tests for core graph memory components
-- `/lesson_memory/` - Tests for lesson management functionality
-- `/project_memory/` - Tests for project management functionality  
-- `/integration/` - Integration tests covering multiple components
+- `conftest.py`: Contains shared fixtures and utilities for tests
+- `unit/`: Contains unit tests for individual components
+  - `graph_memory/`: Tests for the graph memory system
+  - `lesson_memory/`: Tests for the lesson memory system
+  - `project_memory/`: Tests for the project memory system
+  - `api/`: Tests for the API endpoints
+  - `models/`: Tests for the data models
+  - `registry/`: Tests for the function registry
+  - `tools/`: Tests for the MCP tools
+  - `utils/`: Tests for utility functions
+- `integration/`: Contains integration tests for end-to-end functionality
+- `test_session_manager.py`: Tests for the session manager
+- `test_embedding_manager.py`: Tests for the embedding manager
 
 ## Running Tests
 
-To run all tests:
+### Using uv (Recommended)
+
+With uv installed, you can run the tests with:
 
 ```bash
-pytest
+uv run python -m pytest tests/
 ```
 
-To run a specific test file:
+To run specific test files:
 
 ```bash
-pytest tests/graph_memory/test_entity_manager.py
+uv run python -m pytest tests/unit/graph_memory/
+uv run python -m pytest tests/test_session_manager.py
 ```
 
-To run a specific test function:
+To run tests with detailed output:
 
 ```bash
-pytest tests/graph_memory/test_entity_manager.py::test_create_entity
+uv run python -m pytest tests/ -v
 ```
+
+### Configuration
+
+Tests use the settings in `.env` by default. You can create a test-specific `.env.test` file to use different settings for testing.
+
+### Skipping Integration Tests
+
+Integration tests require a running Neo4j database. If you don't have Neo4j running, you can skip these tests:
+
+```bash
+uv run python -m pytest tests/ -k "not integration"
+```
+
+### Test Coverage
 
 To run tests with coverage:
 
 ```bash
-pytest --cov=src
+uv run python -m pytest --cov=src tests/
 ```
 
-## Fixtures
+To generate a coverage report:
 
-Common fixtures are defined in `conftest.py` and are available to all test modules:
+```bash
+uv run python -m pytest --cov=src --cov-report=html tests/
+```
 
-- `mock_logger` - Mock logger for testing
-- `mock_neo4j_driver` - Mock Neo4j driver that returns a mock session
-- `mock_base_manager` - Mock base manager with Neo4j driver
-- `mock_entity_manager` - Mock entity manager
-- `mock_relation_manager` - Mock relation manager
-- `mock_observation_manager` - Mock observation manager
-- `mock_embedding_adapter` - Mock embedding adapter
-- `mock_search_manager` - Mock search manager
-- `mock_lesson_manager` - Mock lesson manager
-- `mock_project_manager` - Mock project manager
-- `mock_graph_memory_manager` - Mock graph memory manager with all component managers
+This will create an HTML report in the `htmlcov` directory.
 
-## Test Organization
+## Writing Tests
 
-The tests are organized by component, with each component having its own test file:
+### Unit Tests
 
-- `test_base_manager.py` - Tests for the BaseManager class
-- `test_entity_manager.py` - Tests for the EntityManager class
-- `test_relation_manager.py` - Tests for the RelationManager class
-- `test_observation_manager.py` - Tests for the ObservationManager class
-- `test_search_manager.py` - Tests for the SearchManager class
-- `test_embedding_adapter.py` - Tests for the EmbeddingAdapter class
-- `test_graph_memory_manager.py` - Tests for the GraphMemoryManager class
-- `test_lesson_memory_manager.py` - Tests for the LessonMemoryManager class
-- `test_project_memory_manager.py` - Tests for the ProjectMemoryManager class
+- Focus on testing a single unit of functionality
+- Use fixtures from `conftest.py` where possible
+- Use mocks to avoid external dependencies
+- Follow the pattern of other unit tests
 
-Integration tests are located in `tests/integration/test_integration.py` and cover end-to-end functionality of multiple components working together.
+### Integration Tests
 
-## Mocking Approach
+- Test interactions between components
+- Requires a running Neo4j database
+- Focus on end-to-end functionality
+- Use proper cleanup to maintain test isolation
 
-The tests use the `unittest.mock` library to mock external dependencies and isolate the components being tested. Each component is tested in isolation with its dependencies mocked.
+## Test Environment
 
-For integration tests, the components are mocked but the interactions between them are tested to ensure they work together correctly.
-
-## Adding New Tests
-
-When adding new tests:
-
-1. Identify the component to test
-2. Create a new test file if necessary
-3. Use the appropriate fixtures from `conftest.py`
-4. Write test functions that test specific functionality
-5. Mock any external dependencies
-6. Use assertions to verify expected behavior 
+Tests will use the Neo4j connection information from the `.env` file. For testing purposes, consider using a dedicated test database to avoid affecting your development data. 

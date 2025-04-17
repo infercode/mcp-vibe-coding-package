@@ -1,0 +1,96 @@
+---
+description: Use when handling errors or rejections in the memory system to ensure graceful degradation and appropriate user communication
+globs: 
+alwaysApply: false
+---
+
+# Memory System Error Handling
+
+## Context
+
+- When memory system operations fail or return errors
+- When users decline to create memory containers or entities
+- When network or connection issues disrupt memory operations
+- When validation or permission errors occur
+- When attempting to recover from memory system failures
+
+## Critical Rules
+
+- Provide clear error explanations without technical details when operations fail
+- Offer alternatives when memory features are unavailable or rejected
+- Continue providing value even when memory features are declined
+- Log detailed error information internally for debugging purposes
+- Verify operations completed successfully before proceeding with dependent steps
+- When a container creation is rejected, remember the rejection and don't ask again in the same session
+- Catch and handle errors at each step of multi-step memory operations
+- When a search returns no results, suggest broader or alternative search terms
+- If relationship creation fails, still preserve the individual entities
+- Fall back to working memory when persistent memory is unavailable
+
+## Examples
+
+<example>
+// Handling rejection of container creation
+User: "Can you help me with React performance?"
+
+AI: [INTERNAL THOUGHT: Let me check if a Lessons container exists first]
+
+const containerCheck = search_nodes("container:Lessons");
+if (containerCheck.entities.length === 0) {
+  // Container doesn't exist, ask user permission
+  AI: "I'd like to search my lesson memory for React optimization tips, but I don't have a Lessons container set up yet. Would you like me to create one so I can store and retrieve knowledge more effectively?"
+  
+  User: "No, I'd rather not use that feature."
+  
+  // Gracefully continue without memory features
+  AI: "No problem. I'll help you with React performance optimization without using the memory system. Based on current best practices, here are some key strategies for improving React component performance..."
+  
+  // Internally flag not to ask again in this session
+  session.declinedMemoryFeatures = true;
+}
+
+// Handling failed search operation
+try {
+  const searchResult = lesson_memory_tool({
+    "operation_type": "search",
+    "query": "React performance optimization"
+  });
+  
+  const result = JSON.parse(searchResult);
+  if (result.status === "error") {
+    // Handle search error gracefully
+    AI: "I tried to find relevant lessons on React performance, but encountered an issue with the search. Let me help you based on general best practices instead. The key areas to focus on for React optimization are typically..."
+  } else if (result.data?.lessons?.length === 0) {
+    // Handle empty results
+    AI: "I don't have any specific lessons about React performance in my memory yet. Let me share general best practices instead, and I can store what we learn today for future reference."
+  }
+} catch (error) {
+  // Handle exception
+  AI: "I'm having trouble accessing my knowledge base at the moment. Let me help you with React performance based on established best practices..."
+}
+</example>
+
+<example type="invalid">
+// Exposing technical error details to user
+User: "Can you find lessons about database optimization?"
+
+AI: "Error: Failed to connect to Neo4j database at localhost:7687 - Connection refused. Please check your database configuration."
+// Should provide user-friendly explanation instead
+
+// Not providing alternatives when memory features are unavailable
+User: "No, I don't want to create a memory container."
+
+AI: "I can't help you without creating a memory container."
+// Should continue helping with available knowledge
+
+// Abandoning the entire interaction when one memory operation fails
+try {
+  const result = lesson_memory_tool({
+    "operation_type": "search",
+    "query": "React hooks"
+  });
+} catch (error) {
+  AI: "Sorry, I can't continue because the memory system failed."
+}
+// Should gracefully handle the error and continue
+</example> 

@@ -6,16 +6,28 @@ This module provides Pydantic models for Neo4j query parameters and results,
 enabling type-safe query execution and result handling.
 """
 
-from typing import Dict, List, Optional, Any, Union, Set, Literal, ClassVar
+from typing import Dict, List, Optional, Any, Union, Set, Literal, ClassVar, Annotated
 from datetime import datetime
-from pydantic import BaseModel, Field, field_validator, model_validator, root_validator
+from pydantic import (
+    BaseModel, 
+    Field, 
+    field_validator, 
+    model_validator, 
+    ConfigDict,
+    computed_field,
+    model_serializer
+)
 import re
 
 # --- Neo4j Parameter Types ---
 
 class CypherString(BaseModel):
     """Model for Cypher string parameters with validation."""
-    value: str = Field(..., description="String value for the Cypher query")
+    value: Annotated[str, Field(description="String value for the Cypher query")]
+    
+    model_config = ConfigDict(
+        validate_assignment=True
+    )
     
     @field_validator('value')
     @classmethod
@@ -26,16 +38,22 @@ class CypherString(BaseModel):
             raise ValueError("String contains null bytes, which is not allowed")
         return v
     
-    def to_cypher_param(self) -> str:
+    @model_serializer
+    def serialize_model(self) -> str:
         """Convert to a form suitable for Neo4j parameters."""
         return self.value
 
 
 class CypherNumber(BaseModel):
     """Model for numeric parameters in Cypher queries."""
-    value: Union[int, float] = Field(..., description="Numeric value for the Cypher query")
+    value: Annotated[Union[int, float], Field(description="Numeric value for the Cypher query")]
     
-    def to_cypher_param(self) -> Union[int, str]:
+    model_config = ConfigDict(
+        validate_assignment=True
+    )
+    
+    @model_serializer
+    def serialize_model(self) -> Union[int, str]:
         """Convert to a form suitable for Neo4j parameters."""
         # For float types, convert to string to avoid Neo4j driver issues
         if isinstance(self.value, float):
@@ -45,16 +63,25 @@ class CypherNumber(BaseModel):
 
 class CypherBoolean(BaseModel):
     """Model for boolean parameters in Cypher queries."""
-    value: bool = Field(..., description="Boolean value for the Cypher query")
+    value: Annotated[bool, Field(description="Boolean value for the Cypher query")]
     
-    def to_cypher_param(self) -> bool:
+    model_config = ConfigDict(
+        validate_assignment=True
+    )
+    
+    @model_serializer
+    def serialize_model(self) -> bool:
         """Convert to a form suitable for Neo4j parameters."""
         return self.value
 
 
 class CypherList(BaseModel):
     """Model for list parameters in Cypher queries."""
-    values: List[Any] = Field(..., description="List of values for the Cypher query")
+    values: Annotated[List[Any], Field(description="List of values for the Cypher query")]
+    
+    model_config = ConfigDict(
+        validate_assignment=True
+    )
     
     @field_validator('values')
     @classmethod
@@ -65,14 +92,19 @@ class CypherList(BaseModel):
                 raise ValueError(f"Unsupported type in list: {type(item)}")
         return v
     
-    def to_cypher_param(self) -> List[Any]:
+    @model_serializer
+    def serialize_model(self) -> List[Any]:
         """Convert to a form suitable for Neo4j parameters."""
         return self.values
 
 
 class CypherDict(BaseModel):
     """Model for dictionary parameters in Cypher queries."""
-    values: Dict[str, Any] = Field(..., description="Dictionary of values for the Cypher query")
+    values: Annotated[Dict[str, Any], Field(description="Dictionary of values for the Cypher query")]
+    
+    model_config = ConfigDict(
+        validate_assignment=True
+    )
     
     @field_validator('values')
     @classmethod
@@ -85,7 +117,8 @@ class CypherDict(BaseModel):
                 raise ValueError(f"Unsupported type in dictionary: {type(value)}")
         return v
     
-    def to_cypher_param(self) -> Dict[str, Any]:
+    @model_serializer
+    def serialize_model(self) -> Dict[str, Any]:
         """Convert to a form suitable for Neo4j parameters."""
         return self.values
 
@@ -100,6 +133,10 @@ class NodeProperties(BaseModel):
     updated_at: Optional[datetime] = Field(None, description="Last update timestamp")
     tags: Optional[List[str]] = Field(None, description="List of tags")
     additional_properties: Optional[Dict[str, Any]] = Field(None, description="Additional properties")
+    
+    model_config = ConfigDict(
+        validate_assignment=True
+    )
     
     def to_cypher_dict(self) -> Dict[str, Any]:
         """Convert to a dictionary suitable for Cypher queries."""
@@ -116,10 +153,14 @@ class NodeProperties(BaseModel):
 class RelationshipProperties(BaseModel):
     """Model for relationship properties in Cypher queries."""
     type: Optional[str] = Field(None, description="Relationship type")
-    weight: Optional[float] = Field(None, ge=0.0, le=1.0, description="Relationship weight")
+    weight: Annotated[Optional[float], Field(None, ge=0.0, le=1.0, description="Relationship weight")]
     created_at: Optional[datetime] = Field(None, description="Creation timestamp")
-    confidence: Optional[float] = Field(None, ge=0.0, le=1.0, description="Confidence score")
+    confidence: Annotated[Optional[float], Field(None, ge=0.0, le=1.0, description="Confidence score")]
     additional_properties: Optional[Dict[str, Any]] = Field(None, description="Additional properties")
+    
+    model_config = ConfigDict(
+        validate_assignment=True
+    )
     
     def to_cypher_dict(self) -> Dict[str, Any]:
         """Convert to a dictionary suitable for Cypher queries."""
@@ -135,7 +176,11 @@ class RelationshipProperties(BaseModel):
 
 class QueryLimit(BaseModel):
     """Model for query limits with validation."""
-    value: int = Field(..., ge=1, le=1000, description="Maximum number of results to return")
+    value: Annotated[int, Field(ge=1, le=1000, description="Maximum number of results to return")]
+    
+    model_config = ConfigDict(
+        validate_assignment=True
+    )
     
     def __int__(self) -> int:
         """Allow direct conversion to int."""
@@ -144,7 +189,11 @@ class QueryLimit(BaseModel):
 
 class QuerySkip(BaseModel):
     """Model for query skip with validation."""
-    value: int = Field(..., ge=0, description="Number of results to skip")
+    value: Annotated[int, Field(ge=0, description="Number of results to skip")]
+    
+    model_config = ConfigDict(
+        validate_assignment=True
+    )
     
     def __int__(self) -> int:
         """Allow direct conversion to int."""
@@ -155,7 +204,11 @@ class QuerySkip(BaseModel):
 
 class CypherParameters(BaseModel):
     """Model for Cypher query parameters with validation."""
-    parameters: Dict[str, Any] = Field(default_factory=dict, description="Parameters for the Cypher query")
+    parameters: Annotated[Dict[str, Any], Field(default_factory=dict, description="Parameters for the Cypher query")]
+    
+    model_config = ConfigDict(
+        validate_assignment=True
+    )
     
     @field_validator('parameters')
     @classmethod
@@ -195,10 +248,14 @@ class CypherParameters(BaseModel):
 
 class CypherQuery(BaseModel):
     """Model for Cypher queries with validation and sanitization."""
-    query: str = Field(..., description="Cypher query string")
+    query: Annotated[str, Field(description="Cypher query string")]
     parameters: Optional[CypherParameters] = Field(None, description="Query parameters")
     database: Optional[str] = Field(None, description="Database to execute the query against")
-    read_only: bool = Field(True, description="Whether the query is read-only (non-destructive)")
+    read_only: Annotated[bool, Field(default=True, description="Whether the query is read-only (non-destructive)")]
+    
+    model_config = ConfigDict(
+        validate_assignment=True
+    )
     
     # Define destructive operations as class variables instead of private attributes
     destructive_operations: ClassVar[Set[str]] = {
@@ -214,6 +271,7 @@ class CypherQuery(BaseModel):
     }
     
     @model_validator(mode='after')
+    @classmethod
     def validate_query(cls, values):
         """Validate the query string for security and correctness."""
         query = values.query
@@ -260,17 +318,24 @@ class CypherQuery(BaseModel):
         
         # Set default parameters if none provided
         if values.parameters is None:
-            values.parameters = CypherParameters()
+            values.parameters = CypherParameters(parameters={})
             
         return values
     
-    def to_executable(self) -> Dict[str, Any]:
+    @computed_field
+    def query_type(self) -> str:
+        """Determine if this is a read or write query."""
+        return "read" if self.read_only else "write"
+    
+    @model_serializer
+    def serialize_model(self) -> Dict[str, Any]:
         """Convert to a form that can be executed by the Neo4j driver."""
         params = self.parameters.to_neo4j_parameters() if self.parameters else {}
         
         result = {
             "query": self.query,
-            "parameters": params
+            "parameters": params,
+            "query_type": self.query_type
         }
         
         # Only include database if it's specified
@@ -285,8 +350,12 @@ class CypherQuery(BaseModel):
 class NodeResult(BaseModel):
     """Model for a Neo4j node result."""
     id: Optional[str] = Field(None, description="Node ID")
-    labels: List[str] = Field(default_factory=list, description="Node labels")
-    properties: Dict[str, Any] = Field(default_factory=dict, description="Node properties")
+    labels: Annotated[List[str], Field(default_factory=list, description="Node labels")]
+    properties: Annotated[Dict[str, Any], Field(default_factory=dict, description="Node properties")]
+    
+    model_config = ConfigDict(
+        validate_assignment=True
+    )
     
     @classmethod
     def from_neo4j_node(cls, node) -> 'NodeResult':
@@ -313,15 +382,24 @@ class NodeResult(BaseModel):
             labels=labels,
             properties=properties
         )
+    
+    @computed_field
+    def primary_label(self) -> Optional[str]:
+        """Get the primary label of the node."""
+        return self.labels[0] if self.labels else None
 
 
 class RelationshipResult(BaseModel):
     """Model for a Neo4j relationship result."""
     id: Optional[str] = Field(None, description="Relationship ID")
-    type: str = Field(..., description="Relationship type")
-    properties: Dict[str, Any] = Field(default_factory=dict, description="Relationship properties")
-    start_node_id: str = Field(..., description="ID of the start node")
-    end_node_id: str = Field(..., description="ID of the end node")
+    type: Annotated[str, Field(description="Relationship type")]
+    properties: Annotated[Dict[str, Any], Field(default_factory=dict, description="Relationship properties")]
+    start_node_id: Annotated[str, Field(description="ID of the start node")]
+    end_node_id: Annotated[str, Field(description="ID of the end node")]
+    
+    model_config = ConfigDict(
+        validate_assignment=True
+    )
     
     @classmethod
     def from_neo4j_relationship(cls, rel) -> 'RelationshipResult':
@@ -387,12 +465,21 @@ class RelationshipResult(BaseModel):
             start_node_id=start_node_id,
             end_node_id=end_node_id
         )
+    
+    @computed_field
+    def relationship_label(self) -> str:
+        """Generate a human-readable label for this relationship."""
+        return f"{self.start_node_id} --[{self.type}]--> {self.end_node_id}"
 
 
 class PathResult(BaseModel):
     """Model for a Neo4j path result."""
-    nodes: List[NodeResult] = Field(default_factory=list, description="Nodes in the path")
-    relationships: List[RelationshipResult] = Field(default_factory=list, description="Relationships in the path")
+    nodes: Annotated[List[NodeResult], Field(default_factory=list, description="Nodes in the path")]
+    relationships: Annotated[List[RelationshipResult], Field(default_factory=list, description="Relationships in the path")]
+    
+    model_config = ConfigDict(
+        validate_assignment=True
+    )
     
     @classmethod
     def from_neo4j_path(cls, path) -> 'PathResult':
@@ -410,12 +497,21 @@ class PathResult(BaseModel):
             nodes=nodes,
             relationships=relationships
         )
+    
+    @computed_field
+    def path_length(self) -> int:
+        """Get the length of the path (number of relationships)."""
+        return len(self.relationships)
 
 
 class QueryResult(BaseModel):
     """Model for a Neo4j query result."""
-    records: List[Dict[str, Any]] = Field(default_factory=list, description="Query result records")
-    summary: Dict[str, Any] = Field(default_factory=dict, description="Query result summary")
+    records: Annotated[List[Dict[str, Any]], Field(default_factory=list, description="Query result records")]
+    summary: Annotated[Dict[str, Any], Field(default_factory=dict, description="Query result summary")]
+    
+    model_config = ConfigDict(
+        validate_assignment=True
+    )
     
     @classmethod
     def from_neo4j_result(cls, records: List[Dict[str, Any]], summary: Dict[str, Any]) -> 'QueryResult':
@@ -440,14 +536,23 @@ class QueryResult(BaseModel):
             records=processed_records,
             summary=summary
         )
+    
+    @computed_field
+    def record_count(self) -> int:
+        """Get the number of records in the result."""
+        return len(self.records)
 
 
 # --- Query Builder Models ---
 
 class QueryOrder(BaseModel):
     """Model for ordering clauses in Cypher queries."""
-    field: str = Field(..., description="Field to order by")
-    direction: Literal["ASC", "DESC"] = Field("ASC", description="Order direction")
+    field: Annotated[str, Field(description="Field to order by")]
+    direction: Annotated[Literal["ASC", "DESC"], Field(default="ASC", description="Order direction")]
+    
+    model_config = ConfigDict(
+        validate_assignment=True
+    )
     
     def to_cypher(self) -> str:
         """Convert to Cypher ORDER BY clause."""
@@ -456,9 +561,13 @@ class QueryOrder(BaseModel):
 
 class NodePattern(BaseModel):
     """Model for node patterns in Cypher queries."""
-    variable: str = Field(..., description="Variable name for the node")
+    variable: Annotated[str, Field(description="Variable name for the node")]
     labels: Optional[List[str]] = Field(None, description="Node labels")
     properties: Optional[Dict[str, Any]] = Field(None, description="Node properties")
+    
+    model_config = ConfigDict(
+        validate_assignment=True
+    )
     
     @field_validator('variable')
     @classmethod
@@ -496,7 +605,11 @@ class RelationshipPattern(BaseModel):
     variable: Optional[str] = Field(None, description="Variable name for the relationship")
     type: Optional[str] = Field(None, description="Relationship type")
     properties: Optional[Dict[str, Any]] = Field(None, description="Relationship properties")
-    direction: Literal["OUTGOING", "INCOMING", "BOTH"] = Field("OUTGOING", description="Relationship direction")
+    direction: Annotated[Literal["OUTGOING", "INCOMING", "BOTH"], Field(default="OUTGOING", description="Relationship direction")]
+    
+    model_config = ConfigDict(
+        validate_assignment=True
+    )
     
     @field_validator('variable')
     @classmethod
@@ -542,10 +655,15 @@ class RelationshipPattern(BaseModel):
 
 class PathPattern(BaseModel):
     """Model for path patterns in Cypher queries."""
-    nodes: List[NodePattern] = Field(..., description="Nodes in the path")
-    relationships: List[RelationshipPattern] = Field(..., description="Relationships in the path")
+    nodes: Annotated[List[NodePattern], Field(description="Nodes in the path")]
+    relationships: Annotated[List[RelationshipPattern], Field(description="Relationships in the path")]
+    
+    model_config = ConfigDict(
+        validate_assignment=True
+    )
     
     @model_validator(mode='after')
+    @classmethod
     def validate_pattern(cls, values):
         """Validate the path pattern structure."""
         nodes = values.nodes
@@ -570,17 +688,38 @@ class PathPattern(BaseModel):
                 parts.append(self.relationships[i].to_cypher())
         
         return "".join(parts)
+    
+    @computed_field
+    def path_length(self) -> int:
+        """Get the length of the path (number of relationships)."""
+        return len(self.relationships)
 
 
 class QueryBuilder(BaseModel):
     """Model for building Cypher queries."""
-    match_patterns: List[Union[NodePattern, PathPattern]] = Field(default_factory=list, description="Match patterns")
-    where_clauses: List[str] = Field(default_factory=list, description="Where clauses")
-    return_fields: List[str] = Field(default_factory=list, description="Return fields")
+    match_patterns: Annotated[List[Union[NodePattern, PathPattern]], Field(default_factory=list, description="Match patterns")]
+    where_clauses: Annotated[List[str], Field(default_factory=list, description="Where clauses")]
+    return_fields: Annotated[List[str], Field(default_factory=list, description="Return fields")]
     order_by: Optional[List[QueryOrder]] = Field(None, description="Order by clauses")
-    limit: Optional[int] = Field(None, ge=1, le=1000, description="Limit")
-    skip: Optional[int] = Field(None, ge=0, description="Skip")
-    parameters: Dict[str, Any] = Field(default_factory=dict, description="Query parameters")
+    limit: Annotated[Optional[int], Field(default=None, ge=1, le=1000, description="Limit")]
+    skip: Annotated[Optional[int], Field(default=None, ge=0, description="Skip")]
+    parameters: Annotated[Dict[str, Any], Field(default_factory=dict, description="Query parameters")]
+    
+    model_config = ConfigDict(
+        validate_assignment=True
+    )
+    
+    @computed_field
+    def has_filters(self) -> bool:
+        """Check if the query has any filtering clauses."""
+        return len(self.where_clauses) > 0
+    
+    @model_serializer
+    def serialize_model(self) -> Dict[str, Any]:
+        """Convert to a dictionary representation with query info."""
+        result = self.model_dump()
+        result["has_filters"] = self.has_filters
+        return result
     
     def to_cypher_query(self) -> CypherQuery:
         """Convert to a CypherQuery object."""

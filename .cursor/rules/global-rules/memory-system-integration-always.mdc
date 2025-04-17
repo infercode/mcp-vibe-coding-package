@@ -1,0 +1,165 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+
+# Integrated Memory System Usage
+
+## Context
+
+- When starting any conversation or interaction with users
+- When solving problems that may benefit from past experiences
+- When working on projects that build upon existing knowledge
+- When encountering similar scenarios to previous interactions
+- When opportunity exists to capture new knowledge for future use
+
+## Critical Rules
+
+- Begin responses with "Remembering..." when retrieving relevant memories
+- Check if a Lessons container exists before using the lesson memory system
+- If no Lessons container exists, notify the user and ask permission to create it
+- Only proceed with lesson memory operations after confirming container existence
+- Search lesson memory before starting new tasks to apply past learnings
+- Link project components to relevant lessons to apply experiential knowledge
+- Document new insights as structured lesson observations during conversations
+- Create relationships between related pieces of knowledge across both systems
+- Track applications of lessons with success scores and detailed notes
+- Update confidence scores when knowledge is validated through application
+- Create or update project memory structures when designing solutions
+- Document design decisions with clear rationales and alternatives considered
+- Ask the user for guidance when unsure about memory system usage
+- Use specific search queries that include context and domain
+- Record mistakes and their solutions as high-priority lessons
+- Structure all observations with what_was_learned, why_it_matters, and how_to_apply, root_cause, and evidence
+- Mention the specific lesson or project memory being applied in responses
+- Consolidate related knowledge rather than creating isolated fragments
+
+## Examples
+
+<example>
+// Checking for Lessons container before using lesson memory
+User: "Can you provide some tips on optimizing React components?"
+
+AI: [INTERNAL THOUGHT: I should check if the Lessons container exists first]
+
+// Using a tool to check container existence
+const containerCheck = search_nodes("container:Lessons");
+if (containerCheck.entities.length === 0) {
+  // Container doesn't exist, ask user permission
+  AI: "I'd like to search my lesson memory for React optimization tips, but I don't have a Lessons container set up yet. Would you like me to create one so I can store and retrieve knowledge more effectively?"
+  
+  User: "Yes, please create it."
+  
+  // Create the container with user permission
+  lesson_memory_tool({
+    "operation_type": "create_container",
+    "description": "Container for storing experiential knowledge and lessons learned"
+  })
+  
+  AI: "I've created a Lessons container. Now I can properly store and retrieve knowledge about React optimization."
+}
+
+// Now proceed with normal memory operations
+// Starting a conversation by retrieving relevant memories
+User: "Can you help me optimize my database queries?"
+
+AI: "Remembering... I found a relevant lesson on 'DatabaseQueryOptimization' with a confidence score of 0.85. This lesson suggests using indexed fields for frequent search operations and avoiding SELECT * when only specific fields are needed.
+
+Based on this lesson, I can help optimize your queries. Could you share your current query structure?"
+
+// Recording a new lesson during conversation
+User: "I discovered that using prepared statements with parameterized queries improved performance by 30%."
+
+AI: [INTERNAL THOUGHT: This is valuable information to store in lesson memory]
+
+// Creating a lesson and observation
+lesson_memory_tool({
+  "operation_type": "create",
+  "name": "PreparedStatementPerformance",
+  "lesson_type": "Technique",
+  "container_name": "Lessons",
+  "metadata": {
+    "tags": ["database", "performance", "prepared-statements"],
+    "confidence": 0.8
+  }
+})
+
+lesson_memory_tool({
+  "operation_type": "observe",
+  "entity_name": "PreparedStatementPerformance",
+  "what_was_learned": "Prepared statements with parameterized queries can improve performance by ~30%",
+  "why_it_matters": "Significant performance gains with minimal code changes",
+  "how_to_apply": "Convert direct SQL queries to prepared statements with parameters",
+  "evidence": "User reported 30% improvement in their application"
+})
+
+// Relating to project component
+project_memory_tool({
+  "operation_type": "create_component",
+  "name": "Database Access Layer",
+  "component_type": "SERVICE",
+  "project_id": "UserApplication",
+  "description": "Handles database interactions for the application"
+})
+
+project_memory_tool({
+  "operation_type": "add_observation",
+  "entity_name": "Database Access Layer",
+  "content": "Implemented prepared statements based on PreparedStatementPerformance lesson",
+  "observation_type": "IMPLEMENTATION"
+})
+
+// Creating relationship between lesson and project
+lesson_memory_tool({
+  "operation_type": "relate",
+  "source_name": "PreparedStatementPerformance",
+  "target_name": "Database Access Layer",
+  "relationship_type": "APPLIED_TO",
+  "properties": {
+    "success_score": 0.9,
+    "application_date": new Date().toISOString()
+  }
+})
+
+// AI response continues
+"That's excellent information! I've recorded this insight about prepared statements improving performance by 30% in my memory system. This will help me provide better recommendations in the future. Would you like me to show you how to implement this technique in your specific database technology?"
+</example>
+
+<example type="invalid">
+// Not checking if Lessons container exists before using lesson memory
+User: "What have you learned about React performance?"
+
+AI: [INTERNAL THOUGHT: Let me search lesson memory]
+// Incorrect: Attempting to use lesson memory without checking container existence
+lesson_memory_tool({
+  "operation_type": "search",
+  "query": "React performance optimization"
+})
+// Should first check if container exists and create one if needed with user permission
+
+// Not starting with "Remembering..." when retrieving memories
+User: "What's the best way to handle authentication in a microservice architecture?"
+
+AI: "Based on past projects, JWT tokens with short expiry times and refresh token rotation is recommended."
+// Should begin with "Remembering..." when applying previous lessons
+
+// Not structuring observations properly
+lesson_memory_tool({
+  "operation_type": "observe",
+  "entity_name": "AuthenticationPatterns",
+  "content": "JWT is good for microservices"
+  // Missing structured fields like what_was_learned, why_it_matters, how_to_apply
+})
+
+// Not asking for guidance when unsure
+User: "How should I implement CQRS in my application?"
+
+AI: [INTERNAL THOUGHT: I'm not certain about the best CQRS implementation in this context]
+"You should separate your read and write models."
+// Should ask for more information or guidance when uncertain
+
+// Not connecting lesson and project memories
+// Creating isolated knowledge without establishing relationships
+// Not tracking application of lessons with success scores
+</example> 

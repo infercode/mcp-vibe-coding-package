@@ -1,0 +1,162 @@
+---
+description: Use when implementing workflows with the lesson memory system to ensure effective knowledge capture and application across projects
+globs: 
+alwaysApply: false
+---
+
+# Lesson Memory Workflow Patterns
+
+## Context
+
+- When implementing workflows that utilize the lesson memory system
+- When starting new projects that should leverage past learnings
+- When consolidating or evolving knowledge across projects
+- When ensuring consistent knowledge application patterns
+- When establishing regular knowledge review processes
+- When planning error recovery for workflow failures
+
+## Critical Rules
+
+- Implement the Project Startup pattern at the beginning of each new project
+- Use the Problem-Solving pattern when addressing technical challenges
+- Implement the Knowledge Consolidation pattern for fragmented lessons
+- Apply the Cross-Project Learning pattern when working across multiple projects
+- Structure all interactions with lesson memory in proper sequential workflows
+- Always close knowledge loops by tracking application results
+- Maintain knowledge evolution chains with proper versioning relationships
+- Document the reasoning behind knowledge application decisions
+- Follow incremental knowledge building rather than creating isolated lessons
+- Create an explicit knowledge trail showing how lessons influenced decisions
+- Conduct Regular Knowledge Review workflows to maintain quality over time
+- Use Team Knowledge Sharing workflows to distribute insights across agent instances
+- Implement Error Recovery workflows when operation steps fail
+- Add Workflow Verification checks at key transition points
+- Use Cross-Container workflows when organizing knowledge across domains
+- Apply prioritization criteria when multiple workflow patterns could apply
+- Ensure consistent metadata propagation across related lessons
+- Document workflow execution history for audit and improvement
+
+## Examples
+
+<example>
+// Project Startup Pattern
+// 1. Search for relevant lessons from previous projects
+const previous_knowledge = lesson_memory_tool({
+  "operation_type": "search",
+  "query": "similar project technologies and architecture patterns"
+})
+
+// 2. Set up a context for the new project
+const context = lesson_memory_context({
+  "project_name": "CurrentProject",
+  "container_name": "ProjectLessons"
+})
+
+// 3. Apply relevant knowledge
+lesson_memory_tool({
+  "operation_type": "track",
+  "lesson_name": "MicroserviceArchitecture",
+  "project_name": "CurrentProject",
+  "success_score": 0.9,
+  "application_notes": "Applied service boundary patterns to new project"
+})
+
+// Regular Knowledge Review Workflow
+// 1. Identify lessons due for review (older than 3 months)
+const lessons_to_review = lesson_memory_tool({
+  "operation_type": "search",
+  "query": "created_before:90days",
+  "container_name": "ProjectLessons"
+})
+
+// 2. Assess and update confidence based on recent applications
+lessons_to_review.forEach(lesson => {
+  const applications = lesson_memory_tool({
+    "operation_type": "search",
+    "query": `applications of ${lesson.name}`
+  })
+  
+  // 3. Update confidence or flag for evolution based on results
+  if (applications.average_success_score > 0.8) {
+    lesson_memory_tool({
+      "operation_type": "update",
+      "name": lesson.name,
+      "properties": { "confidence": Math.min(lesson.confidence + 0.05, 1.0) }
+    })
+  }
+})
+
+// Cross-Container Workflow with Verification
+// 1. Find relevant lessons across multiple containers
+const security_lessons = lesson_memory_tool({
+  "operation_type": "search",
+  "query": "authentication best practices",
+  "container_name": "SecurityLessons"
+})
+
+const project_lessons = lesson_memory_tool({
+  "operation_type": "search",
+  "query": "authentication best practices",
+  "container_name": "ProjectLessons" 
+})
+
+// 2. Create relationships between lessons in different containers
+const relation_result = lesson_memory_tool({
+  "operation_type": "relate",
+  "source_name": security_lessons[0].name,
+  "target_name": project_lessons[0].name,
+  "relationship_type": "APPLIED_IN",
+  "properties": { "cross_container": true }
+})
+
+// 3. Verify workflow step success
+const relationObj = JSON.parse(relation_result)
+if (relationObj.status !== "success") {
+  // 4. Error recovery workflow
+  console.log(`Relationship creation failed: ${relationObj.error}`)
+  // Try alternative approach
+  lesson_memory_tool({
+    "operation_type": "observe",
+    "entity_name": project_lessons[0].name,
+    "what_was_learned": `Applied concepts from ${security_lessons[0].name}`,
+    "why_it_matters": "Cross-container knowledge application",
+    "how_to_apply": "See security container for details"
+  })
+}
+
+// Document workflow execution
+lesson_memory_tool({
+  "operation_type": "create",
+  "name": "WorkflowExecution_" + new Date().toISOString().slice(0,10),
+  "lesson_type": "Process",
+  "metadata": {
+    "workflow_type": "Cross-Container Knowledge Application",
+    "source_container": "SecurityLessons",
+    "target_container": "ProjectLessons",
+    "status": relationObj.status === "success" ? "completed" : "recovered",
+    "execution_date": new Date().toISOString()
+  }
+})
+</example>
+
+<example type="invalid">
+// Not following proper workflow pattern
+// Creating lessons without context or connection to projects
+lesson_memory_tool({
+  "operation_type": "create",
+  "name": "RandomInsight",
+  "lesson_type": "Insight"
+})
+
+// Applying knowledge without tracking or feedback loop
+// Should implement the full Problem-Solving pattern
+
+// Isolated lessons without relationships or evolution chains
+// Should use relationships to build connected knowledge
+
+// Missing workflow verification steps
+// Should verify success of each operation and implement recovery paths
+
+// No workflow documentation or history
+// Should document workflow execution for audit purposes
+</example> 

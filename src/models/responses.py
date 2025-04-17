@@ -5,10 +5,10 @@ This module provides standardized response formatting using Pydantic models.
 """
 
 import json
-from typing import Any, Dict, Optional, TypeVar, Generic, Type
+from typing import Any, Dict, Optional, TypeVar, Generic, Type, Annotated
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, ConfigDict
 
 from src.models.project_memory import ErrorDetail, ErrorResponse, SuccessResponse, BaseResponse
 

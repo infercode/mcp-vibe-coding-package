@@ -4,17 +4,18 @@ Lesson Memory Response Utilities
 This module provides standardized response handling for the lesson memory system.
 """
 
-from typing import Dict, List, Optional, Any, Union, Callable
+from typing import Dict, List, Optional, Any, Union, Callable, Annotated, Type, TypeVar
 from datetime import datetime
 import json
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, ConfigDict
 
 from src.models.lesson_memory import (
     EntityResponse, ObservationResponse, ContainerResponse,
     RelationshipResponse, SearchResponse, ErrorResponse, ErrorDetail
 )
-from src.models.responses import model_to_json
+
+T = TypeVar('T', bound=BaseModel)
 
 
 def create_entity_response(
@@ -190,6 +191,50 @@ def parse_legacy_result(result: Union[str, Dict[str, Any]]) -> Dict[str, Any]:
         return result
     except Exception as e:
         return {"error": f"Error parsing result: {str(e)}"}
+
+
+def model_to_json(model: BaseModel) -> str:
+    """
+    Convert a Pydantic model to a JSON string.
+    
+    Args:
+        model: Pydantic model instance
+        
+    Returns:
+        JSON string representation
+    """
+    return model.model_dump_json()
+
+
+def model_to_dict(model: BaseModel) -> Dict[str, Any]:
+    """
+    Convert a Pydantic model to a dictionary.
+    
+    Args:
+        model: Pydantic model instance
+        
+    Returns:
+        Dictionary representation
+    """
+    return model.model_dump()
+
+
+def parse_json_to_model(json_str: str, model_class: Type[T]) -> T:
+    """
+    Parse a JSON string into a Pydantic model.
+    
+    Args:
+        json_str: JSON string
+        model_class: Pydantic model class
+        
+    Returns:
+        Pydantic model instance
+    """
+    try:
+        data = json.loads(json_str) if isinstance(json_str, str) else json_str
+        return model_class.model_validate(data)
+    except Exception as e:
+        raise ValueError(f"Failed to parse JSON to {model_class.__name__}: {str(e)}")
 
 
 def handle_lesson_response(
